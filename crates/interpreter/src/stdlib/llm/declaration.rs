@@ -1,9 +1,8 @@
 //! Type surface of `submilli:llm`.
 //!
 //! Two forms, one per meaning. `text` and `texts` return the completion text:
-//! they are plain functions, and a `schema` they take is the program's own,
-//! sent to the provider as written and never used to parse or check the
-//! answer. `call<T>` and `batch<T>` return a checked `T`: they are declared
+//! they are plain functions and send no schema; a program that wants
+//! structured output calls `call<T>`. `call<T>` and `batch<T>` return a checked `T`: they are declared
 //! **generic** and **runtime-generic**, so like every generic function a call
 //! passes one `$TypeDescriptor` per type parameter in a trailing `$types`
 //! environment — the type's structural predicate, its name, its JSON Schema,
@@ -74,11 +73,6 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("model", Type::String),
             Param::new("prompt", Type::String),
-            Param::with_default(
-                "schema",
-                Type::Union(vec![Type::String, Type::Undefined]),
-                crate::DefaultValue::Undefined,
-            ),
             files_param(),
         ],
         completion_type(Type::String),
@@ -86,11 +80,9 @@ pub fn package_declaration() -> PackageDeclaration {
             "/**\n * Send one prompt to `model` and return its completion text as a \
          `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. \
          Check `ok` before reading `value`; the compiler will not let you read it \
-         otherwise.\n *\n * `schema`, when given, is a JSON Schema sent to the provider \
-         as written, to constrain the output. It must be a JSON object, else a catchable `TypeError`, and it is held to the same \
-         byte bound as a prompt. The answer is not parsed or checked against it: \
-         `value` is the text, and a program that wants a checked value calls \
-         `call<T>` instead, whose schema the compiler emits from `T`.\n *\n * \
+         otherwise.\n *\n * `value` is the text. A program that wants structured output calls \
+         `call<T>` instead, whose schema the compiler emits from `T` and whose \
+         answer is checked against it.\n *\n * \
          `ok: false` means the model did not produce a clean completion; branch on \
          `reason`, which is a closed set, not on `message`. A completion cut off at \
          the output cap is `reason: \"truncated\"` and still carries the partial \
@@ -100,8 +92,7 @@ pub fn package_declaration() -> PackageDeclaration {
          error naming the model when no provider is configured.\n * @param model \
          Model name. Call `models()` for the ones this runtime serves; an undeclared \
          name throws.\n * @param prompt The prompt text. Bounded in bytes \
-         independently of the token ceiling.\n * @param schema A JSON Schema for the \
-         provider, sent unchanged; the result stays text.{FILES}\n * @capability llm.call \
+         independently of the token ceiling.{FILES}\n * @capability llm.call \
          { model: $model, prompt_count: 1 }\n */",
             "the prompt",
         ),
@@ -112,11 +103,6 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("model", Type::String),
             Param::new("prompts", Type::Array(Box::new(Type::String))),
-            Param::with_default(
-                "schema",
-                Type::Union(vec![Type::String, Type::Undefined]),
-                crate::DefaultValue::Undefined,
-            ),
             files_param(),
         ],
         Type::Array(Box::new(completion_type(Type::String))),
@@ -126,17 +112,13 @@ pub fn package_declaration() -> PackageDeclaration {
          that element failed. An empty `prompts` returns `[]`.\n *\n * Fan-out \
          happens host-side at a bounded concurrency, so this is not sugar for a loop. \
          One failing element never discards the ones that succeeded: each element \
-         carries its own `ok`, `reason` and token counts. `schema`, when given, goes \
-         to the provider with every prompt and never checks an answer; it must be a \
-         JSON object, and it is held to the per-prompt byte \
-         bound. For checked values call `batch<T>`.\n *\n * The whole slice is \
+         carries its own `ok`, `reason` and token counts. For checked values call \
+         `batch<T>`.\n *\n * The whole slice is \
          checked against the \
          prompt-count and prompt-size bounds, and its tokens reserved, before any \
          bytes leave the process.\n * @param model Model name. Call `models()` for \
          the ones this runtime serves.\n * @param prompts The prompts, in the order \
-         the results come back. Bounded in count, and each in bytes.\n * @param \
-         schema A JSON Schema for the provider, sent unchanged; the results stay \
-         text.{FILES}\n * @capability llm.call { model: $model, prompt_count: \
+         the results come back. Bounded in count, and each in bytes.{FILES}\n * @capability llm.call { model: $model, prompt_count: \
          $prompts.length }\n */",
             "every prompt",
         ),

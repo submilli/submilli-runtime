@@ -20070,11 +20070,11 @@ function main(): void { if (result < 10) { } }
     }
 
     /// `texts` returns `Completion<string>[]`, so a per-element `ok` is
-    /// readable, and its optional `schema` is the program's own argument.
+    /// readable.
     #[test]
-    fn llm_texts_returns_completion_array_and_takes_a_written_schema() {
+    fn llm_texts_returns_completion_array() {
         let src = "import llm from \"submilli:llm\"; \
-                   function main(): void { const r = llm.texts(\"m\", [\"p\"], \"{}\"); \
+                   function main(): void { const r = llm.texts(\"m\", [\"p\"]); \
                                            const ok = r[0].ok; }";
         let (_, diags) = run_with_llm(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");

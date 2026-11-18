@@ -8,11 +8,11 @@ function main(): void {
   fs.writeText("/a.txt", "0123456789");
   fs.writeText("/b.txt", "abcdefghij");
 
-  assert(llm.text("claude-haiku-4-5", "One.", undefined, ["/a.txt"]).ok, "10 bytes fit");
+  assert(llm.text("claude-haiku-4-5", "One.", ["/a.txt"]).ok, "10 bytes fit");
 
   let caught = "";
   try {
-    llm.text("claude-haiku-4-5", "Both.", undefined, ["/a.txt", "/b.txt"]);
+    llm.text("claude-haiku-4-5", "Both.", ["/a.txt", "/b.txt"]);
   } catch (e: RangeError) {
     caught = e.message;
   }

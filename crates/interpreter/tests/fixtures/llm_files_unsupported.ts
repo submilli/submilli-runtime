@@ -7,7 +7,7 @@ function main(): void {
   fs.writeText("/notes.md", "# Notes");
   let message = "";
   try {
-    llm.text("claude-haiku-4-5", "Summarize.", undefined, ["/notes.md"]);
+    llm.text("claude-haiku-4-5", "Summarize.", ["/notes.md"]);
   } catch (e) {
     message = (e as Error).message;
   }

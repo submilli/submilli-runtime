@@ -8,7 +8,7 @@ function main(): void {
   fs.writeText("/secret.txt", "do not send");
   let capability = "";
   try {
-    llm.text("claude-haiku-4-5", "Summarize.", undefined, ["/secret.txt"]);
+    llm.text("claude-haiku-4-5", "Summarize.", ["/secret.txt"]);
     assert(false, "a file the program may not read is not sent");
   } catch (e: PermissionDeniedError) {
     capability = e.capability;
@@ -18,7 +18,7 @@ function main(): void {
   // An empty batch sends nothing, but its files are still gated.
   let gated = false;
   try {
-    llm.texts("claude-haiku-4-5", [], undefined, ["/secret.txt"]);
+    llm.texts("claude-haiku-4-5", [], ["/secret.txt"]);
   } catch (e: PermissionDeniedError) {
     gated = true;
   }

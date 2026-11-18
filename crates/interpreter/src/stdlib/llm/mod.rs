@@ -49,7 +49,6 @@ use crate::runtime::llm::{
 use crate::runtime::model_calls::add_part;
 use crate::stdlib::abi;
 use crate::stdlib::fs::{WholeFile, read_whole};
-use crate::stdlib::json_schema;
 use crate::stdlib::shared::{
     audit_quota_denial, check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
     preflight_models, sanitize_description,
@@ -93,20 +92,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteArray(intr.object_fields.clone()),
     ));
 
-    // `text` and `texts` take what a program writes, the optional `schema`
-    // arriving as `string | undefined`.
+    // `text` and `texts` take only what a program writes.
     register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "text"),
         FuncType::new(
             &engine,
-            [
-                string.clone(),
-                string.clone(),
-                nullable_object.clone(),
-                nullable_object.clone(),
-            ],
+            [string.clone(), string.clone(), nullable_object.clone()],
             [nullable_object.clone()],
         ),
         |caller, params| {
@@ -114,10 +107,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.text (model)")?;
                 let prompt =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.text (prompt)")?;
-                let schema =
-                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.text")?;
-                let paths = read_file_paths(caller, abi_arg(params, 3)?, "llm.text (files)")?;
-                text(caller, model, prompt, schema, paths).await
+                let paths = read_file_paths(caller, abi_arg(params, 2)?, "llm.text (files)")?;
+                text(caller, model, prompt, paths).await
             })
         },
     )?;
@@ -127,12 +118,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         crate::mangle::package_symbol(MODULE_NAME, "texts"),
         FuncType::new(
             &engine,
-            [
-                string.clone(),
-                array.clone(),
-                nullable_object.clone(),
-                nullable_object.clone(),
-            ],
+            [string.clone(), array.clone(), nullable_object.clone()],
             [array.clone()],
         ),
         |caller, params| {
@@ -140,10 +126,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.texts (model)")?;
                 let prompts = read_strings(caller, abi_arg(params, 1)?, "llm.texts (prompts)")?;
-                let schema =
-                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.texts")?;
-                let paths = read_file_paths(caller, abi_arg(params, 3)?, "llm.texts (files)")?;
-                texts(caller, model, prompts, schema, paths).await
+                let paths = read_file_paths(caller, abi_arg(params, 2)?, "llm.texts (files)")?;
+                texts(caller, model, prompts, paths).await
             })
         },
     )?;
@@ -1114,10 +1098,9 @@ async fn text(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: String,
     prompt: String,
-    schema: Option<String>,
     paths: Vec<String>,
 ) -> wasmtime::Result<Val> {
-    let outcomes = dispatch(caller, Api::Text, &model, vec![prompt], schema, paths).await?;
+    let outcomes = dispatch(caller, Api::Text, &model, vec![prompt], None, paths).await?;
     let outcome = first_outcome(Api::Text, &model, outcomes)?;
     text_envelope(caller, outcome)
 }
@@ -1127,10 +1110,9 @@ async fn texts(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: String,
     prompts: Vec<String>,
-    schema: Option<String>,
     paths: Vec<String>,
 ) -> wasmtime::Result<Val> {
-    let outcomes = dispatch(caller, Api::Texts, &model, prompts, schema, paths).await?;
+    let outcomes = dispatch(caller, Api::Texts, &model, prompts, None, paths).await?;
     let mut built = Vec::with_capacity(outcomes.len());
     for outcome in outcomes {
         built.push(text_envelope(caller, outcome)?);
@@ -2388,85 +2370,6 @@ mod tests {
         );
     }
 
-    /// `text` without a schema sends none, and with one sends it unchanged:
-    /// the program's own schema constrains the provider and never checks the
-    /// answer, so prose comes back as the text, not as an `invalid-output`.
-    #[tokio::test]
-    async fn text_sends_a_written_schema_unchanged_and_returns_the_text() {
-        let (provider, recorder) = MockProvider::new(
-            vec![LlmOutcome::success("not json".to_string())],
-            Vec::new(),
-        );
-        let out = Harness::new()
-            .provider(provider)
-            .run(
-                r#"import llm from "submilli:llm";
-                   function main(): string {
-                     const a = llm.text("m", "p");
-                     const b = llm.text("m", "p", "{\"type\":\"object\"}");
-                     return (a.ok ? a.value : a.reason) + "|" + (b.ok ? b.value : b.reason);
-                   }"#,
-            )
-            .await
-            .expect("program completes");
-        assert_eq!(out, "not json|not json");
-        let schemas: Vec<Option<String>> = recorder
-            .dispatches()
-            .iter()
-            .map(|dispatch| dispatch.schema.clone())
-            .collect();
-        assert_eq!(
-            schemas,
-            vec![None, Some("{\"type\":\"object\"}".to_string())]
-        );
-    }
-
-    /// A written schema must be a JSON document, or it would be dropped on the
-    /// way to the provider: a catchable `TypeError` names the function. It is
-    /// also held to the prompt byte bound, since it travels with every prompt.
-    #[tokio::test]
-    async fn a_written_schema_must_be_json_and_within_the_prompt_bound() {
-        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
-        let out = Harness::new()
-            .provider(provider)
-            .run(
-                r#"import llm from "submilli:llm";
-                   function main(): string {
-                     try { llm.text("m", "p", "true"); return "sent a boolean schema"; }
-                     catch (e) { if (!(e instanceof TypeError)) { return "boolean: " + e.message; } }
-                     try { llm.texts("m", ["p"], "{not json"); return "sent"; }
-                     catch (e) { return (e instanceof TypeError ? "TypeError:" : "other:") + e.message; }
-                   }"#,
-            )
-            .await
-            .expect("program completes");
-        assert_eq!(
-            out,
-            "TypeError:llm.texts: `schema` is not a JSON Schema: write a JSON object"
-        );
-        assert!(recorder.dispatches().is_empty(), "nothing was sent");
-
-        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
-        let out = Harness::new()
-            .provider(provider)
-            .run(
-                r#"import llm from "submilli:llm";
-                   function main(): string {
-                     const schema = "{\"description\":\"" + "x".repeat(300000) + "\"}";
-                     try { llm.text("m", "p", schema); return "sent"; }
-                     catch (e) { return (e instanceof RangeError ? "RangeError:" : "other:") + e.message; }
-                   }"#,
-            )
-            .await
-            .expect("program completes");
-        assert!(
-            out.starts_with("RangeError:llm.text: model \"m\": prompt bound exceeded")
-                && out.contains("bytes in the schema"),
-            "{out}"
-        );
-        assert!(recorder.dispatches().is_empty(), "nothing was sent");
-    }
-
     /// SUB-2084: an `invalid-output` entry names the type, never a key the
     /// model wrote, so model text does not reach the message.
     #[tokio::test]
@@ -3228,7 +3131,7 @@ mod tests {
             import fs from "submilli:fs";
             function main(): string {
               fs.writeText("/notes.txt", "meeting notes");
-              const done = llm.text("haiku", "Summarize.", undefined, ["/notes.txt"]);
+              const done = llm.text("haiku", "Summarize.", ["/notes.txt"]);
               return done.ok ? done.value : done.message;
             }"#;
         let first = Harness::new()

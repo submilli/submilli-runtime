@@ -19,18 +19,18 @@ function main(): void {
   fs.writeText("/notes.md", "# Notes");
   fs.write("/chart.bin", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]));
 
-  const one = llm.text("claude-haiku-4-5", "Summarize.", undefined, ["/report.pdf", "/notes.md"]);
+  const one = llm.text("claude-haiku-4-5", "Summarize.", ["/report.pdf", "/notes.md"]);
   assert(
     value(one) === "answer 0: report.pdf application/pdf 25, notes.md text/plain 7",
     "each file arrives with its name, its kind and its size: " + value(one),
   );
 
   // The kind comes from the bytes: a PNG signature is an image whatever the name.
-  const image = llm.text("claude-haiku-4-5", "Describe.", undefined, ["/chart.bin"]);
+  const image = llm.text("claude-haiku-4-5", "Describe.", ["/chart.bin"]);
   assert(value(image) === "answer 0: chart.bin image/png 9", "a PNG is an image: " + value(image));
 
   // `texts` sends the same files with every prompt.
-  const many = llm.texts("claude-haiku-4-5", ["a", "b"], undefined, ["/notes.md"]);
+  const many = llm.texts("claude-haiku-4-5", ["a", "b"], ["/notes.md"]);
   assert(many.length === 2, "one answer per prompt");
   assert(value(many[1]) === "answer 1: notes.md text/plain 7", "every prompt carries the files");
 
@@ -41,7 +41,7 @@ function main(): void {
   assert(typedBatch.length === 1, "batch takes files too");
 
   // An empty batch sends nothing, so it reads none of its files.
-  assert(llm.texts("claude-haiku-4-5", [], undefined, ["/absent.pdf"]).length === 0, "empty batch");
+  assert(llm.texts("claude-haiku-4-5", [], ["/absent.pdf"]).length === 0, "empty batch");
 
   // Without `files`, a call is what it was before.
   assert(value(llm.text("claude-haiku-4-5", "hi")).indexOf("answer 0 for 2 bytes") === 0, "no files");
@@ -50,7 +50,7 @@ function main(): void {
   fs.write("/blob", new Uint8Array([1, 0, 2]));
   let kind = "";
   try {
-    llm.text("claude-haiku-4-5", "Read this.", undefined, ["/blob"]);
+    llm.text("claude-haiku-4-5", "Read this.", ["/blob"]);
   } catch (e: TypeError) {
     kind = e.message;
   }
@@ -60,7 +60,7 @@ function main(): void {
   fs.writeText("/empty.txt", "");
   let empty = "";
   try {
-    llm.text("claude-haiku-4-5", "Read this.", undefined, ["/empty.txt"]);
+    llm.text("claude-haiku-4-5", "Read this.", ["/empty.txt"]);
   } catch (e: TypeError) {
     empty = e.message;
   }
@@ -69,7 +69,7 @@ function main(): void {
   // A missing file fails as `fs.read` fails.
   let missing = false;
   try {
-    llm.text("claude-haiku-4-5", "Read this.", undefined, ["/absent.pdf"]);
+    llm.text("claude-haiku-4-5", "Read this.", ["/absent.pdf"]);
   } catch (e) {
     missing = true;
   }

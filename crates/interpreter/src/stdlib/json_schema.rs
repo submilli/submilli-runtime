@@ -4,9 +4,10 @@
 //! `agents.run<T>`) sends the schema codegen emits from `T`, carried in the
 //! type descriptor (`abi::read_type_argument`), and checks the answer against
 //! `T`; [`checked_call`](super::checked_call::checked_call) is the table the
-//! typechecker gates those calls by. A **text form** (`llm.text`,
-//! `llm.texts`, `agents.runText`) may send a schema the program wrote
-//! ([`read_written_schema`]), as written, and never checks the answer.
+//! typechecker gates those calls by. `agents.runText` may send a schema the
+//! program wrote ([`read_written_schema`]), as written, and never checks the
+//! answer. `llm.text` and `llm.texts` take none: a program that wants
+//! structured output calls `llm.call<T>`.
 
 use wasmtime::{Caller, Val};
 
@@ -20,9 +21,8 @@ use crate::runtime::fuel;
 use crate::runtime::host::{read_string_arg, type_error};
 use crate::runtime::prelude::undefined;
 
-/// The optional `schema?: string` a text form (`llm.text`, `agents.runText`)
-/// takes from the program: `None` when omitted, otherwise the text, which
-/// must be a JSON Schema object. The host sends it as written and never
+/// The optional `schema?: string` `agents.runText` takes from the program:
+/// `None` when omitted, otherwise the text, which must be a JSON Schema object. The host sends it as written and never
 /// checks an answer against it, but anything else (a scalar, an array, or
 /// the boolean schemas structured-output endpoints do not take) would be
 /// dropped or refused on the way to the provider, so it is refused here with

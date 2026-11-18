@@ -10,10 +10,9 @@
 // a `T` by the descriptor the compiler built and trusts its predicate to be
 // the structural test of `T`; a hand-written schema or check would let raw
 // parsed JSON reach the guest wearing the declared type. The text forms take
-// a program's own schema instead, and never treat the answer as typed.
+// no schema either: they return text, and structured output is `call<T>`.
 // expect-error: expected 2-3 argument(s), got 4
 // expect-error: expected 2-3 argument(s), got 5
-// expect-error: expected 2-4 argument(s), got 5
 import llm from "submilli:llm";
 
 interface Severity {
@@ -31,8 +30,8 @@ function main(): void {
   // A hand-written check is refused for the same reason.
   const checked = llm.call<Severity>("m", "classify this", [], "{}", (v: unknown): unknown => v);
 
-  // The text form takes a schema and files, and nothing beyond them.
-  const text = llm.text("m", "classify this", "{}", [], (v: unknown): unknown => v);
+  // The text form takes files and nothing beyond them: no schema.
+  const text = llm.text("m", "classify this", [], "{}");
 
   assert(typed.ok, "unreachable — the calls above do not compile");
   assert(batched.length === 1, "unreachable");

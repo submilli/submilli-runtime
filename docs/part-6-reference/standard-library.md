@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f295bfd19737ef06b5eec303e9dd096b741ff8d770f98a1d74f7f09fd88a9b92"
+  contentHash: "f7b418fc492a71d967b5dac965b6d0606082eb1e0641c3a4a86407a809600eab"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -134,8 +134,8 @@ An operation that passes a limit throws and leaves the repository as it was.
 
 | Form | Returns |
 | --- | --- |
-| `text(model, prompt, schema?, files?)` | A `Completion<string>`: `value` is the text |
-| `texts(model, prompts, schema?, files?)` | A `Completion<string>[]`, `result[i]` for `prompts[i]` |
+| `text(model, prompt, files?)` | A `Completion<string>`: `value` is the text |
+| `texts(model, prompts, files?)` | A `Completion<string>[]`, `result[i]` for `prompts[i]` |
 | `call<T>(model, prompt, files?)` | A `Completion<T>`: `value` is a `T`, checked field by field against the response |
 | `batch<T>(model, prompts, files?)` | A `Completion<T>[]`, each response checked on its own |
 | `models()` | The `Model`s this caller may call |
@@ -144,10 +144,10 @@ An operation that passes a limit throws and leaves the repository as it was.
   so a program checks `ok` before it reads `value`. A truncated text
   completion is `ok: false` with `reason: "truncated"` and still carries its
   partial `text`.
-- The text forms send a `schema` only when the program passes one, and never
-  check the answer against it. The typed forms need `T`, written or supplied
-  by the expected type: they send a JSON Schema for `T` and check the
-  response against it. A response that is not JSON or doesn't match is
+- The text forms send no schema: a program that wants structured output
+  calls a typed form. The typed forms need `T`, written or supplied by the
+  expected type: they send a JSON Schema for `T` and check the response
+  against it. A response that is not JSON or doesn't match is
   `ok: false` with `reason: "invalid-output"`; its siblings in a batch are
   unaffected.
 - `files` lists paths in the program's filesystem to send with every prompt:
@@ -628,8 +628,8 @@ Gated model calls: text/texts for text, call<T>/batch<T> for checked values, and
 | `batch<T>(model: string, prompts: string[], files?: string[]): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
 | `call<T>(model: string, prompt: string, files?: string[]): Completion<T>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its answer checked as a `T`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
-| `text(model: string, prompt: string, schema?: string, files?: string[]): Completion<string>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion text as a `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
-| `texts(model: string, prompts: string[], schema?: string, files?: string[]): Completion<string>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion<string>` each, positionally: `result[i]` is the text outcome of `prompts[i]`, including when that element failed. |
+| `text(model: string, prompt: string, files?: string[]): Completion<string>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion text as a `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
+| `texts(model: string, prompts: string[], files?: string[]): Completion<string>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion<string>` each, positionally: `result[i]` is the text outcome of `prompts[i]`, including when that element failed. |
 
 ### `Completion`
 
