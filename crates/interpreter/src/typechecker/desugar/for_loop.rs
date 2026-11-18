@@ -58,14 +58,21 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
     // The reboxes precede the update because JS copies the bindings into the new
     // per-iteration environment first and *then* runs the update in it, so the
     // update mutates the new binding rather than the one the last pass's closures
-    // captured. With neither to do, the plain `while` shape suffices.
+    // captured. The first iteration also gets fresh cells, separate from any
+    // closures in the initializer; only the update is skipped on that pass.
+    // With neither to do, the plain `while` shape suffices.
     let rebox = per_iteration_rebox(ctx, &init, span)?;
     let (pre_while, while_stmt) = if update.is_some() || !rebox.is_empty() {
-        let (flag, let_flag) = ctx.first_pass_flag("for_first", span)?;
-        let head: Vec<StmtId> = rebox.into_iter().chain(update).collect();
-        let step = ctx.skip_on_first_pass(&flag, head, span)?;
+        let (pre_while, step) = if let Some(update) = update {
+            let (flag, let_flag) = ctx.first_pass_flag("for_first", span)?;
+            let step = ctx.skip_on_first_pass(&flag, vec![update], span)?;
+            (Some(let_flag), Some(step))
+        } else {
+            (None, None)
+        };
         let guarded = guard_body(ctx, condition, body, span)?;
-        let while_body = ctx.push_stmt(TypedStmtKind::Block(vec![step, guarded]), span)?;
+        let head = rebox.into_iter().chain(step).chain([guarded]).collect();
+        let while_body = ctx.push_stmt(TypedStmtKind::Block(head), span)?;
         let cond_true = ctx.bool_true()?;
         let w = ctx.push_stmt(
             TypedStmtKind::While {
@@ -74,7 +81,7 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
             },
             span,
         )?;
-        (Some(let_flag), w)
+        (pre_while, w)
     } else {
         let cond = condition.map_or_else(|| ctx.bool_true(), Ok)?;
         let w = ctx.push_stmt(

@@ -92,10 +92,10 @@ pub struct FunctionEmitter<'a> {
     single_evaluations: Vec<(ExprId, u32)>,
     parameter_input_slots: BTreeMap<String, (u32, Type)>,
     uninitialized_parameters: HashSet<Ident>,
-    parameter_binding_cells: HashMap<Ident, u32>,
+    binding_cells: HashMap<Ident, u32>,
     /// Binding cells a read can reach before their initializer has run: a
-    /// parameter or pattern cell a default can observe, or a capture that may
-    /// be one. Every other cell is initialized when it is created.
+    /// local reserved at block entry, parameter cell a default can observe,
+    /// or a capture of either.
     pub(super) uninitialized_cells: HashSet<u32>,
     /// Slots of the locals that hold a read which may have found no value.
     /// See `typechecker::infer::missing_reads`.
@@ -223,7 +223,7 @@ impl<'a> FunctionEmitter<'a> {
             single_evaluations: Vec::new(),
             parameter_input_slots: BTreeMap::new(),
             uninitialized_parameters: HashSet::new(),
-            parameter_binding_cells: HashMap::new(),
+            binding_cells: HashMap::new(),
             maybe_missing_slots: HashMap::new(),
             present_flag_request: None,
             uninitialized_cells: HashSet::new(),
@@ -1268,8 +1268,8 @@ pub fn emit_closure_function(
             ctx.symbols.value_type(&c.ty)?
         };
         let captured_local = emitter.define_local(&c.name, local_ty)?;
-        // A closure a default creates can run before a later parameter is set.
-        if c.boxed && !ctx.ta.parameter_default_prologues.is_empty() {
+        // A closure can run before a captured local or parameter is initialized.
+        if c.boxed {
             emitter.uninitialized_cells.insert(captured_local);
         }
         emitter

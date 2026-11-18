@@ -377,3 +377,159 @@ fn run_with_delete(source: &str, expected_nodes: usize) -> String {
         assert_eq!(count, expected_nodes);
     })
 }
+
+#[test]
+fn forward_capture_reads_later_const() {
+    // Infer the same binding types in declaration order, then restore the
+    // authored order at the alternate-frontend boundary.
+    let source = include_str!("typed_value_sources/forward-capture.ts");
+    let infer_source = source.replace(
+        "const read = (): number => late;\n  const late = 7;",
+        "const late = 7;\n  const read = (): number => late;",
+    );
+    assert_eq!(
+        run(&infer_source, |ast| {
+            let body = ast
+                .functions
+                .iter()
+                .find(|f| f.name.name == "main")
+                .unwrap()
+                .body;
+            let TypedStmtKind::Block(statements) = &mut ast.try_stmt_mut(body).unwrap().kind else {
+                panic!("main block")
+            };
+            statements.swap(0, 1);
+        }),
+        "7"
+    );
+}
+
+#[test]
+fn forward_capture_tdz_shadowing_and_block_reentry() {
+    let source = include_str!("typed_value_sources/forward-capture-edges.ts")
+        .replace("=> late", "=> lateMarker()")
+        .replace("read ? late :", "read ? lateMarker() :");
+    let source = format!("function lateMarker(): number {{ return -999; }}\n{source}");
+    assert_eq!(
+        run(&source, |ast| {
+            let mut count = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                if matches!(&expr.kind, TypedExprKind::Call { mangled, .. } if mangled == &submilli_engine::mangle::package_symbol("main", "lateMarker"))
+                {
+                    expr.kind = TypedExprKind::LocalRef {
+                        ident: Ident {
+                            name: "late".into(),
+                            span: expr.span,
+                        },
+                        boxed: false,
+                    };
+                    count += 1;
+                }
+            }
+            assert_eq!(count, 5);
+        }),
+        "0"
+    );
+}
+
+#[test]
+fn forward_capture_writes_check_tdz_after_rhs() {
+    let source = include_str!("typed_value_sources/forward-capture-writes.ts")
+        .replace("late = value()", "writeMarker(value())")
+        .replace("=> late++", "=> bumpMarker()");
+    let source = format!(
+        "function writeMarker(n: number): void {{}}\nfunction bumpMarker(): number {{ return 0; }}\n{source}"
+    );
+    assert_eq!(
+        run(&source, |ast| {
+            let mut writes = 0;
+            for id in ast.stmt_ids().unwrap() {
+                let stmt = ast.try_stmt(id).unwrap().clone();
+                let TypedStmtKind::Expr(expr) = stmt.kind else {
+                    continue;
+                };
+                let TypedExprKind::Call { mangled, args, .. } =
+                    ast.try_expr(expr).unwrap().kind.clone()
+                else {
+                    continue;
+                };
+                if mangled == submilli_engine::mangle::package_symbol("main", "writeMarker") {
+                    ast.try_stmt_mut(id).unwrap().kind = TypedStmtKind::AssignLocal {
+                        ident: Ident {
+                            name: "late".into(),
+                            span: stmt.span,
+                        },
+                        target_ty: Type::Number,
+                        value: args[0],
+                        boxed: false,
+                        narrowed_shadow_ty: None,
+                    };
+                    writes += 1;
+                }
+            }
+            let mut bumps = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                if matches!(&expr.kind, TypedExprKind::Call { mangled, .. } if mangled == &submilli_engine::mangle::package_symbol("main", "bumpMarker"))
+                {
+                    expr.kind = TypedExprKind::PostfixUnary {
+                        op: submilli_engine::PostfixOp::Inc,
+                        target: submilli_engine::PostfixTarget::Local {
+                            ident: Ident {
+                                name: "late".into(),
+                                span: expr.span,
+                            },
+                            target_ty: Type::Number,
+                            boxed: false,
+                        },
+                    };
+                    bumps += 1;
+                }
+            }
+            assert_eq!((writes, bumps), (1, 1));
+        }),
+        "0"
+    );
+}
+
+#[test]
+fn forward_capture_mutual_and_let_self_recursion() {
+    let source = include_str!("typed_value_sources/forward-capture-recursion.ts")
+        .replace("odd(n - 1)", "oddMarker()(n - 1)")
+        .replace("fib(n - 1)", "fibMarker()(n - 1)")
+        .replace("fib(n - 2)", "fibMarker()(n - 2)");
+    let source = format!(
+        "function oddMarker(): (n: number) => boolean {{ return (n: number): boolean => false; }}\nfunction fibMarker(): (n: number) => number {{ return (n: number): number => 0; }}\n{source}"
+    );
+    assert_eq!(
+        run(&source, |ast| {
+            let mut count = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                let TypedExprKind::Call { mangled, .. } = &expr.kind else {
+                    continue;
+                };
+                let name = if mangled
+                    == &submilli_engine::mangle::package_symbol("main", "oddMarker")
+                {
+                    "odd"
+                } else if mangled == &submilli_engine::mangle::package_symbol("main", "fibMarker") {
+                    "fib"
+                } else {
+                    continue;
+                };
+                expr.kind = TypedExprKind::LocalRef {
+                    ident: Ident {
+                        name: name.into(),
+                        span: expr.span,
+                    },
+                    boxed: false,
+                };
+                count += 1;
+            }
+            assert_eq!(count, 3);
+        }),
+        "0"
+    );
+}
