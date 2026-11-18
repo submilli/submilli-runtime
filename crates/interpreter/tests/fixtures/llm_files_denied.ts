@@ -15,14 +15,14 @@ function main(): void {
   }
   assert(capability === "fs.read", "the refusal names fs.read: " + capability);
 
-  // An empty batch sends nothing, but its files are still gated.
+  // A batch's files are gated before any of its prompts is sent.
   let gated = false;
   try {
-    llm.texts("claude-haiku-4-5", [], ["/secret.txt"]);
+    llm.texts("claude-haiku-4-5", ["hi", { prompt: "Summarize.", files: ["/secret.txt"] }]);
   } catch (e: PermissionDeniedError) {
     gated = true;
   }
-  assert(gated, "an empty batch's files are gated too");
+  assert(gated, "a batch's files are gated too");
 
   // Without files, the model call itself is still allowed.
   const plain = llm.text("claude-haiku-4-5", "hi");

@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use interpreter::runtime::{
-    FailureReason, LlmCallError, LlmFailure, LlmFile, LlmModel, LlmOutcome, LlmProvider,
+    FailureReason, LlmCallError, LlmFailure, LlmModel, LlmOutcome, LlmPrompt, LlmProvider,
 };
 use interpreter::stdlib::llm::{OPS, request_digest};
 use serde_json::Value;
@@ -52,15 +52,17 @@ impl LlmProvider for RecordedLlmProvider {
         prompts: &'a [String],
         schema_json: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
-        self.call_with_files(model, prompts, schema_json, &[])
+        Box::pin(async move {
+            let prompts: Vec<LlmPrompt> = prompts.iter().map(LlmPrompt::text).collect();
+            self.call_with_files(model, &prompts, schema_json).await
+        })
     }
 
     fn call_with_files<'a>(
         &'a self,
         model: &'a str,
-        prompts: &'a [String],
+        prompts: &'a [LlmPrompt],
         schema_json: Option<&'a str>,
-        files: &'a [LlmFile],
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
         Box::pin(async move {
             let declared = self.declared.models().await?;
@@ -74,7 +76,7 @@ impl LlmProvider for RecordedLlmProvider {
             // answers both alike.
             let accept: Vec<String> = OPS
                 .iter()
-                .map(|op| request_digest(op, model, prompts, schema_json, files))
+                .map(|op| request_digest(op, model, prompts, schema_json))
                 .collect();
             match self
                 .cassette
@@ -85,7 +87,7 @@ impl LlmProvider for RecordedLlmProvider {
                 Err(miss) if self.live => {
                     self.cassette.went_live(miss);
                     self.declared
-                        .call_with_files(model, prompts, schema_json, files)
+                        .call_with_files(model, prompts, schema_json)
                         .await
                 }
                 Err(miss) => {

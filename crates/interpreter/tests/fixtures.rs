@@ -1145,32 +1145,44 @@ impl LlmProvider for FixtureLlm {
     fn call_with_files<'a>(
         &'a self,
         model: &'a str,
-        prompts: &'a [String],
+        prompts: &'a [submilli_engine::runtime::LlmPrompt],
         schema_json: Option<&'a str>,
-        files: &'a [submilli_engine::runtime::LlmFile],
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>,
     > {
-        if files.is_empty() {
-            return self.call(model, prompts, schema_json);
+        if prompts.iter().all(|prompt| prompt.files.is_empty()) {
+            return Box::pin(async move {
+                let texts: Vec<String> = prompts.iter().map(|prompt| prompt.text.clone()).collect();
+                self.call(model, &texts, schema_json).await
+            });
         }
         if self.scenario.contains("files_unsupported") {
             let model = model.to_string();
             return Box::pin(async move { Err(LlmCallError::FilesUnsupported { model }) });
         }
-        let sent: Vec<String> = files
+        // Each prompt is answered with the files it carried, and one that
+        // carried none as any prompt is.
+        let outcomes = prompts
             .iter()
-            .map(|file| {
-                format!(
-                    "{} {} {}",
-                    file.name,
-                    file.kind.media_type(),
-                    file.bytes.len()
-                )
+            .enumerate()
+            .map(|(index, prompt)| {
+                if prompt.files.is_empty() {
+                    return self.outcome(index, &prompt.text);
+                }
+                let sent: Vec<String> = prompt
+                    .files
+                    .iter()
+                    .map(|file| {
+                        format!(
+                            "{} {} {}",
+                            file.name,
+                            file.kind.media_type(),
+                            file.bytes.len()
+                        )
+                    })
+                    .collect();
+                LlmOutcome::success(format!("answer {index}: {}", sent.join(", ")))
             })
-            .collect();
-        let outcomes = (0..prompts.len())
-            .map(|index| LlmOutcome::success(format!("answer {index}: {}", sent.join(", "))))
             .collect();
         Box::pin(async move { Ok(outcomes) })
     }

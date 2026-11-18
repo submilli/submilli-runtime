@@ -1115,7 +1115,7 @@ async fn empty_batches_still_validate_credentials() {
 
 /// Every prompt of a call carries the call's files to the dispatch.
 #[tokio::test]
-async fn each_prompt_is_dispatched_with_the_calls_files() {
+async fn each_prompt_is_dispatched_with_its_own_files() {
     #[derive(Default)]
     struct FileNames(Mutex<Vec<Vec<String>>>);
 
@@ -1139,14 +1139,20 @@ async fn each_prompt_is_dispatched_with_the_calls_files() {
         kind: interpreter::runtime::LlmFileKind::Text,
         bytes: b"# Notes".as_slice().into(),
     };
-    let prompts = vec!["a".to_string(), "b".to_string()];
+    let prompts = vec![
+        interpreter::runtime::LlmPrompt {
+            text: "a".to_string(),
+            files: vec![file],
+        },
+        interpreter::runtime::LlmPrompt::text("b"),
+    ];
     provider
-        .call_with_files(MODEL, &prompts, None, std::slice::from_ref(&file))
+        .call_with_files(MODEL, &prompts, None)
         .await
         .expect("dispatch");
 
-    assert_eq!(
-        *seen.0.lock().expect("lock"),
-        vec![vec!["notes.md".to_string()]; 2]
-    );
+    // Each request carries its own prompt's files, and only those.
+    let mut seen = seen.0.lock().expect("lock").clone();
+    seen.sort();
+    assert_eq!(seen, vec![vec![], vec!["notes.md".to_string()]]);
 }

@@ -1,5 +1,5 @@
-// `call<T>` takes a model, a prompt and optional files, `batch<T>` a model,
-// prompts and optional files: nothing else. The JSON Schema a typed call
+// `call<T>` takes a model, a prompt and optional files, `batch<T>` a model
+// and prompts (each a string or a `Prompt` with its files): nothing else. The JSON Schema a typed call
 // sends and the check it runs travel in the type descriptor of `T` — part of
 // how a generic function is
 // called, built by the compiler — so a program that writes a schema or a
@@ -13,6 +13,7 @@
 // no schema either: they return text, and structured output is `call<T>`.
 // expect-error: expected 2-3 argument(s), got 4
 // expect-error: expected 2-3 argument(s), got 5
+// expect-error: `llm.batch` expects 2 argument(s), got 3
 import llm from "submilli:llm";
 
 interface Severity {
@@ -25,7 +26,7 @@ function main(): void {
   const typed = llm.call<Severity>("m", "classify this", [], "{}");
 
   // The same through `batch`.
-  const batched = llm.batch<Severity>("m", ["classify this"], [], "{}");
+  const batched = llm.batch<Severity>("m", ["classify this"], "{}");
 
   // A hand-written check is refused for the same reason.
   const checked = llm.call<Severity>("m", "classify this", [], "{}", (v: unknown): unknown => v);

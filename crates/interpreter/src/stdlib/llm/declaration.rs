@@ -67,6 +67,7 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_failure_interface(&mut defs);
     insert_completion_alias(&mut defs);
     insert_model_interface(&mut defs);
+    insert_prompt_interface(&mut defs);
     insert_fn(
         &mut defs,
         LLM_TEXT,
@@ -102,11 +103,10 @@ pub fn package_declaration() -> PackageDeclaration {
         LLM_TEXTS,
         vec![
             Param::new("model", Type::String),
-            Param::new("prompts", Type::Array(Box::new(Type::String))),
-            files_param(),
+            Param::new("prompts", prompts_type()),
         ],
         Type::Array(Box::new(completion_type(Type::String))),
-        &with_files_doc(
+        &with_prompts_doc(
             "/**\n * Send every prompt to `model` and return one `Completion<string>` each, \
          positionally: `result[i]` is the text outcome of `prompts[i]`, including when \
          that element failed. An empty `prompts` returns `[]`.\n *\n * Fan-out \
@@ -117,10 +117,8 @@ pub fn package_declaration() -> PackageDeclaration {
          checked against the \
          prompt-count and prompt-size bounds, and its tokens reserved, before any \
          bytes leave the process.\n * @param model Model name. Call `models()` for \
-         the ones this runtime serves.\n * @param prompts The prompts, in the order \
-         the results come back. Bounded in count, and each in bytes.{FILES}\n * @capability llm.call { model: $model, prompt_count: \
+         the ones this runtime serves.{PROMPTS}\n * @capability llm.call { model: $model, prompt_count: \
          $prompts.length }\n */",
-            "every prompt",
         ),
     );
     insert_generic_fn(
@@ -170,11 +168,10 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![CALL_TYPE_PARAM.to_string()],
         vec![
             Param::new("model", Type::String),
-            Param::new("prompts", Type::Array(Box::new(Type::String))),
-            files_param(),
+            Param::new("prompts", prompts_type()),
         ],
         Type::Array(Box::new(completion_type(call_type_var()))),
-        &with_files_doc(
+        &with_prompts_doc(
             "/**\n * Send every prompt to `model` and return one `Completion` each, \
          positionally: `result[i]` is the outcome of `prompts[i]`, including when that \
          element failed. An empty `prompts` returns `[]`.\n *\n * Fan-out happens \
@@ -190,10 +187,8 @@ pub fn package_declaration() -> PackageDeclaration {
          prompt-size bounds, and its tokens reserved, before any bytes leave the \
          process — so an oversized batch is refused without partially dispatching.\n \
          * @param model Model name. Call `models()` for the ones this runtime \
-         serves.\n * @param prompts The prompts, in the order the results come back. \
-         Bounded in count, and each in bytes.{FILES}\n * @capability llm.call { model: \
+         serves.{PROMPTS}\n * @capability llm.call { model: \
          $model, prompt_count: $prompts.length }\n */",
-            "every prompt",
         ),
     );
     for name in [LLM_CALL, LLM_BATCH] {
@@ -223,20 +218,74 @@ pub fn package_declaration() -> PackageDeclaration {
     defs
 }
 
+/// What every form says of the files it sends.
+const FILES_DOC: &str = "PDFs, images (PNG, JPEG, GIF, WebP) and UTF-8 text, told apart \
+     by their leading bytes. Each is gated and read as `fs.read` reads it, once \
+     however many prompts send it. Too large a file, or too many bytes of files \
+     with one prompt, is a `RangeError`; any other file is a `TypeError`; and a \
+     runtime whose model provider does not accept files throws a catchable error.";
+
 /// `doc` with its `{FILES}` marker replaced by the `@param files` text, for
-/// files sent `with` the prompt or every prompt.
+/// files sent `with` the prompt.
 fn with_files_doc(doc: &str, with: &str) -> String {
     doc.replace(
         "{FILES}",
         &format!(
             "\n * @param files Paths of files in this program's filesystem, sent to the \
-             model with {with}: PDFs, images (PNG, JPEG, GIF, WebP) and UTF-8 text, told \
-             apart by their leading bytes. Each is gated and read as `fs.read` reads it. \
-             Too large a file, or too many bytes of files in one call, is a `RangeError`; \
-             any other file is a `TypeError`; and a runtime whose model provider does not \
-             accept files throws a catchable error."
+             model with {with}: {FILES_DOC}"
         ),
     )
+}
+
+/// `doc` with its `{PROMPTS}` marker replaced by the `@param prompts` text of
+/// the batch forms.
+fn with_prompts_doc(doc: &str) -> String {
+    doc.replace(
+        "{PROMPTS}",
+        &format!(
+            "\n * @param prompts The prompts, in the order the results come back. Bounded \
+             in count, and each in bytes. A prompt is its text, or a `Prompt` whose \
+             `files` are paths in this program's filesystem sent to the model with that \
+             prompt only: {FILES_DOC} To send one file with every prompt, name it in each."
+        ),
+    )
+}
+
+/// `(string | Prompt)[]`, the prompts of `texts` and `batch`.
+fn prompts_type() -> Type {
+    Type::Array(Box::new(Type::Union(vec![Type::String, prompt_type()])))
+}
+
+fn prompt_type() -> Type {
+    Type::InterfaceRef {
+        mangled: crate::mangle::package_symbol(MODULE_NAME, "Prompt"),
+        package: package(),
+        name: "Prompt".to_string(),
+        args: Vec::new(),
+    }
+}
+
+fn insert_prompt_interface(defs: &mut PackageDeclaration) {
+    let mut properties = BTreeMap::new();
+    insert_property(
+        &mut properties,
+        "prompt",
+        Type::String,
+        "/** The prompt text. Bounded in bytes like any prompt. */",
+    );
+    insert_optional_property(
+        &mut properties,
+        "files",
+        Type::Array(Box::new(Type::String)),
+        "/** Paths of files in this program's filesystem, sent to the model with this prompt only, before its text. */",
+    );
+    insert_interface(
+        defs,
+        "Prompt",
+        Vec::new(),
+        properties,
+        "/** One prompt of `texts` or `batch` with the files sent with it: `{ prompt: \"Summarize.\", files: [\"/attachments/report.pdf\"] }`. A plain string is a prompt without files. */",
+    );
 }
 
 /// `files?: string[]`, last of what a program writes.

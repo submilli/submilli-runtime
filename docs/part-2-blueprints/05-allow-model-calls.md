@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "39fe4d35e95935047cefe99f4bf404046da40580926332023791eda9104b2d89"
+  contentHash: "6c6850faf9df2bd2d92fc67e0b0d3783c101ad2e8fa981a76d52188a60ec66ed"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -95,7 +95,7 @@ submilli docs submilli:llm
 ```text
 submilli:llm — Gated model calls: call/batch, and models() to discover them.
 …
-function batch<T>(model: string, prompts: string[], files?: string[]): Completion<T>[];
+function batch<T>(model: string, prompts: (string | Prompt)[]): Completion<T>[];
 function call<T>(model: string, prompt: string, files?: string[]): Completion<T>;
 function models(): Model[];
 …

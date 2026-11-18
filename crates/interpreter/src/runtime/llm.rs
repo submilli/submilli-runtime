@@ -46,7 +46,8 @@ pub const DEFAULT_OUTPUT_CAP: u64 = 64_000;
 pub const DEFAULT_MAX_PROMPT_COUNT: u64 = 128;
 /// UTF-8 bytes in a single prompt element.
 pub const DEFAULT_MAX_PROMPT_BYTES: u64 = 256 * 1024;
-/// Bytes of every file one call sends. Files travel base64-encoded, a third
+/// Bytes of the files sent with one prompt, each prompt being its own
+/// request. Files travel base64-encoded, a third
 /// larger, and Amazon Bedrock's 20 MB is the smallest request limit Anthropic
 /// lists for Claude (<https://platform.claude.com/docs/en/api/overview#request-size-limits>).
 /// Three quarters of 19 MB is what fits there once a megabyte is left for the
@@ -73,8 +74,8 @@ pub struct LlmLimits {
     pub max_prompt_count: u64,
     /// UTF-8 bytes in a single prompt element. Enforced at the stdlib boundary.
     pub max_prompt_bytes: u64,
-    /// Bytes of every file one call sends with each prompt. Enforced at the
-    /// stdlib boundary, beside `fs.maxReadSize()` for each file.
+    /// Bytes of the files sent with one prompt. Enforced at the stdlib
+    /// boundary, beside `fs.maxReadSize()` for each file.
     pub max_file_bytes: u64,
 }
 
@@ -222,7 +223,7 @@ pub enum PromptBoundKind {
     /// UTF-8 bytes of the schema sent with every prompt, held to the
     /// per-prompt bound.
     SchemaBytes,
-    /// Bytes of every file one call sends.
+    /// Bytes of the files sent with one prompt.
     FileBytes,
 }
 
@@ -232,7 +233,7 @@ impl std::fmt::Display for PromptBoundKind {
             Self::PromptCount => write!(f, "prompts in one batch"),
             Self::PromptBytes => write!(f, "bytes in a single prompt"),
             Self::SchemaBytes => write!(f, "bytes in the schema"),
-            Self::FileBytes => write!(f, "bytes of files in one call"),
+            Self::FileBytes => write!(f, "bytes of files sent with one prompt"),
         }
     }
 }
@@ -286,7 +287,7 @@ impl std::fmt::Display for LlmCallError {
             } => write!(
                 f,
                 "prompt bound exceeded: {actual} {} exceeds the {limit} allowed — send \
-                 fewer or smaller files per call",
+                 fewer or smaller files per prompt",
                 PromptBoundKind::FileBytes
             ),
             Self::PromptBoundsExceeded {
@@ -669,8 +670,27 @@ impl LlmModel {
     }
 }
 
-/// A file sent to the model with every prompt of a call, read from the
-/// program's filesystem.
+/// One prompt of a call and the files sent to the model with it, before the
+/// prompt text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmPrompt {
+    pub text: String,
+    pub files: Vec<LlmFile>,
+}
+
+impl LlmPrompt {
+    /// A prompt that sends no files.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            files: Vec::new(),
+        }
+    }
+}
+
+/// A file sent to the model with a prompt, read from the program's
+/// filesystem. A file several prompts of a batch send is read once and
+/// shared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmFile {
     /// The file's name, the last component of the path the program passed.
@@ -789,7 +809,7 @@ pub trait LlmProvider: Send + Sync {
         None
     }
 
-    /// [`Self::call`], with `files` sent alongside every prompt. The
+    /// [`Self::call`], with each prompt's own files sent alongside it. The
     /// interpreter dispatches every call through here.
     ///
     /// The default sends a call without files to [`Self::call`] and refuses
@@ -798,17 +818,17 @@ pub trait LlmProvider: Send + Sync {
     fn call_with_files<'a>(
         &'a self,
         model: &'a str,
-        prompts: &'a [String],
+        prompts: &'a [LlmPrompt],
         schema_json: Option<&'a str>,
-        files: &'a [LlmFile],
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
-        if files.is_empty() {
-            return self.call(model, prompts, schema_json);
-        }
         Box::pin(async move {
-            Err(LlmCallError::FilesUnsupported {
-                model: model.to_string(),
-            })
+            if prompts.iter().any(|prompt| !prompt.files.is_empty()) {
+                return Err(LlmCallError::FilesUnsupported {
+                    model: model.to_string(),
+                });
+            }
+            let texts: Vec<String> = prompts.iter().map(|prompt| prompt.text.clone()).collect();
+            self.call(model, &texts, schema_json).await
         })
     }
 }
@@ -1752,22 +1772,28 @@ mod tests {
     #[tokio::test]
     async fn a_provider_without_file_support_refuses_files_only() {
         let provider: Arc<dyn LlmProvider> = Arc::new(NoopProvider);
-        let prompts = vec!["a".to_string()];
         let file = super::LlmFile {
             name: "notes.md".to_string(),
             kind: super::LlmFileKind::Text,
             bytes: b"# Notes".as_slice().into(),
         };
-        let refused = provider
-            .call_with_files(MODEL, &prompts, None, std::slice::from_ref(&file))
-            .await;
+        let with_file = [
+            super::LlmPrompt::text("a"),
+            super::LlmPrompt {
+                text: "b".to_string(),
+                files: vec![file],
+            },
+        ];
+        let refused = provider.call_with_files(MODEL, &with_file, None).await;
         assert_eq!(
             refused,
             Err(LlmCallError::FilesUnsupported {
                 model: MODEL.to_string()
             })
         );
-        let served = provider.call_with_files(MODEL, &prompts, None, &[]).await;
+        let served = provider
+            .call_with_files(MODEL, &[super::LlmPrompt::text("a")], None)
+            .await;
         assert_eq!(served.map(|outcomes| outcomes.len()), Ok(1));
     }
 

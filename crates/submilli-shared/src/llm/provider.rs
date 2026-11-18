@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
 use interpreter::runtime::{
-    FailureReason, LlmCallError, LlmFailure, LlmFile, LlmModel, LlmOutcome, LlmProvider,
+    FailureReason, LlmCallError, LlmFailure, LlmFile, LlmModel, LlmOutcome, LlmPrompt, LlmProvider,
 };
 use submilli_blueprint::Blueprint;
 
@@ -324,15 +324,17 @@ impl LlmProvider for BlueprintLlmProvider {
         prompts: &'a [String],
         schema_json: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
-        self.call_with_files(model, prompts, schema_json, &[])
+        Box::pin(async move {
+            let prompts: Vec<LlmPrompt> = prompts.iter().map(LlmPrompt::text).collect();
+            self.call_with_files(model, &prompts, schema_json).await
+        })
     }
 
     fn call_with_files<'a>(
         &'a self,
         model: &'a str,
-        prompts: &'a [String],
+        prompts: &'a [LlmPrompt],
         schema_json: Option<&'a str>,
-        files: &'a [LlmFile],
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
         Box::pin(async move {
             let (provider, output_cap) = self.resolve(model)?;
@@ -358,10 +360,10 @@ impl LlmProvider for BlueprintLlmProvider {
                     let request = ModelRequest {
                         model,
                         provider,
-                        prompt,
+                        prompt: &prompt.text,
                         schema_json,
                         output_cap,
-                        files,
+                        files: &prompt.files,
                     };
                     async move { (index, classify(self.dispatch.dispatch(request).await)) }
                 })

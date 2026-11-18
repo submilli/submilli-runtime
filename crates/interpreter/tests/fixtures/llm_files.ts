@@ -29,19 +29,29 @@ function main(): void {
   const image = llm.text("claude-haiku-4-5", "Describe.", ["/chart.bin"]);
   assert(value(image) === "answer 0: chart.bin image/png 9", "a PNG is an image: " + value(image));
 
-  // `texts` sends the same files with every prompt.
-  const many = llm.texts("claude-haiku-4-5", ["a", "b"], ["/notes.md"]);
-  assert(many.length === 2, "one answer per prompt");
-  assert(value(many[1]) === "answer 1: notes.md text/plain 7", "every prompt carries the files");
+  // In `texts` each prompt carries its own files, and a plain string carries none.
+  const many = llm.texts("claude-haiku-4-5", [
+    { prompt: "Summarize the report.", files: ["/report.pdf"] },
+    { prompt: "Summarize the notes.", files: ["/notes.md"] },
+    { prompt: "Compare them.", files: ["/report.pdf", "/notes.md"] },
+  ]);
+  assert(many.length === 3, "one answer per prompt");
+  assert(value(many[0]) === "answer 0: report.pdf application/pdf 25", "the first prompt's file: " + value(many[0]));
+  assert(value(many[1]) === "answer 1: notes.md text/plain 7", "the second prompt's file: " + value(many[1]));
+  assert(
+    value(many[2]) === "answer 2: report.pdf application/pdf 25, notes.md text/plain 7",
+    "a file several prompts name reaches each of them: " + value(many[2]),
+  );
+  const mixed = llm.texts("claude-haiku-4-5", ["hi", { prompt: "Describe.", files: ["/chart.bin"] }]);
+  assert(value(mixed[0]).indexOf("answer 0 for 2 bytes") === 0, "a string prompt sends no files: " + value(mixed[0]));
+  assert(value(mixed[1]) === "answer 1: chart.bin image/png 9", "beside one that does: " + value(mixed[1]));
 
   // The typed forms take `files` after the prompt.
   const typed = llm.call<Summary>("claude-haiku-4-5", "Title?", ["/notes.md"]);
   assert(!typed.ok && typed.reason === "invalid-output", "the fake's prose is not a Summary");
-  const typedBatch = llm.batch<Summary>("claude-haiku-4-5", ["Title?"], ["/notes.md"]);
-  assert(typedBatch.length === 1, "batch takes files too");
-
-  // An empty batch sends nothing, so it reads none of its files.
-  assert(llm.texts("claude-haiku-4-5", [], ["/absent.pdf"]).length === 0, "empty batch");
+  const typedBatch = llm.batch<Summary>("claude-haiku-4-5", [{ prompt: "Title?", files: ["/notes.md"] }]);
+  assert(typedBatch.length === 1, "batch takes files per prompt too");
+  assert(llm.texts("claude-haiku-4-5", []).length === 0, "an empty batch sends nothing");
 
   // Without `files`, a call is what it was before.
   assert(value(llm.text("claude-haiku-4-5", "hi")).indexOf("answer 0 for 2 bytes") === 0, "no files");
@@ -65,6 +75,15 @@ function main(): void {
     empty = e.message;
   }
   assert(empty.indexOf("or is empty") >= 0, "an empty file is a TypeError: " + empty);
+
+  // A batch refuses a bad file before sending any prompt.
+  let batchKind = "";
+  try {
+    llm.texts("claude-haiku-4-5", ["fine", { prompt: "Read this.", files: ["/blob"] }]);
+  } catch (e: TypeError) {
+    batchKind = e.message;
+  }
+  assert(batchKind.indexOf("/blob is not a PDF") >= 0, "a batch's bad file is a TypeError: " + batchKind);
 
   // A missing file fails as `fs.read` fails.
   let missing = false;

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f7b418fc492a71d967b5dac965b6d0606082eb1e0641c3a4a86407a809600eab"
+  contentHash: "dfd578282d1f6daf92493f99b0def87d09d9423993d7e27349d46192c0413e62"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -135,9 +135,9 @@ An operation that passes a limit throws and leaves the repository as it was.
 | Form | Returns |
 | --- | --- |
 | `text(model, prompt, files?)` | A `Completion<string>`: `value` is the text |
-| `texts(model, prompts, files?)` | A `Completion<string>[]`, `result[i]` for `prompts[i]` |
+| `texts(model, prompts)` | A `Completion<string>[]`, `result[i]` for `prompts[i]` |
 | `call<T>(model, prompt, files?)` | A `Completion<T>`: `value` is a `T`, checked field by field against the response |
-| `batch<T>(model, prompts, files?)` | A `Completion<T>[]`, each response checked on its own |
+| `batch<T>(model, prompts)` | A `Completion<T>[]`, each response checked on its own |
 | `models()` | The `Model`s this caller may call |
 
 - A `Completion<T>` is `{ ok: true, value: T }` or `{ ok: false, reason, message }`,
@@ -150,12 +150,15 @@ An operation that passes a limit throws and leaves the repository as it was.
   against it. A response that is not JSON or doesn't match is
   `ok: false` with `reason: "invalid-output"`; its siblings in a batch are
   unaffected.
-- `files` lists paths in the program's filesystem to send with every prompt:
+- `files` lists paths in the program's filesystem to send with the prompt:
   PDFs, images (PNG, JPEG, GIF, WebP) and UTF-8 text, told apart by their
-  leading bytes. Each is gated and read as `fs.read` reads it, and one call
-  sends at most 14.25 MB of files, which still fits Amazon Bedrock's 20 MB
-  request limit once base64-encoded. Any other or empty file throws a
-  `TypeError`.
+  leading bytes. In `texts` and `batch` each prompt is a string or a
+  `Prompt`, `{ prompt, files? }`, so each prompt sends its own files:
+  `texts(model, pdfs.map((path) => ({ prompt: "Summarize.", files: [path] })))`.
+  Each file is gated and read as `fs.read` reads it, once however many prompts
+  send it, and one prompt sends at most 14.25 MB of files, which still fits
+  Amazon Bedrock's 20 MB request limit once base64-encoded. Any other or
+  empty file throws a `TypeError`.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
@@ -625,11 +628,11 @@ Gated model calls: text/texts for text, call<T>/batch<T> for checked values, and
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `batch<T>(model: string, prompts: string[], files?: string[]): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
+| `batch<T>(model: string, prompts: (string \| Prompt)[]): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
 | `call<T>(model: string, prompt: string, files?: string[]): Completion<T>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its answer checked as a `T`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 | `text(model: string, prompt: string, files?: string[]): Completion<string>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion text as a `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
-| `texts(model: string, prompts: string[], files?: string[]): Completion<string>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion<string>` each, positionally: `result[i]` is the text outcome of `prompts[i]`, including when that element failed. |
+| `texts(model: string, prompts: (string \| Prompt)[]): Completion<string>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion<string>` each, positionally: `result[i]` is the text outcome of `prompts[i]`, including when that element failed. |
 
 ### `Completion`
 
@@ -664,6 +667,15 @@ One model this caller may call.
 | `readonly contextWindow?: number` | The model's context window in tokens, absent when the operator declared none. |
 | `readonly description?: string` | Operator-authored deployment intent, absent when none was declared. |
 | `readonly name: string` | The model name, exactly as `call` and `batch` expect it. |
+
+### `Prompt`
+
+One prompt of `texts` or `batch` with the files sent with it: `{ prompt: "Summarize.", files: ["/attachments/report.pdf"] }`.
+
+| Member | Description |
+| --- | --- |
+| `readonly files?: string[]` | Paths of files in this program's filesystem, sent to the model with this prompt only, before its text. |
+| `readonly prompt: string` | The prompt text. |
 
 ### `Success`
 

@@ -82,7 +82,7 @@ pub use limits::{
 pub use llm::{
     DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_EXECUTION_TOKENS, ExecutionTokenBudget,
     FailureReason, LLM_MODULE_NAME, LlmCallError, LlmFailure, LlmFile, LlmFileKind, LlmLimitKind,
-    LlmLimits, LlmModel, LlmOutcome, LlmProvider, PromptBoundKind, SharedTokenBudget,
+    LlmLimits, LlmModel, LlmOutcome, LlmPrompt, LlmProvider, PromptBoundKind, SharedTokenBudget,
 };
 pub use mcp::{
     MCP_MODULE_NAME, McpCallError, McpOutcome, McpResponse, McpTransport, install_mcp_async,
