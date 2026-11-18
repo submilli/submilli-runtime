@@ -56,7 +56,20 @@ pub fn emit_statement(
             // Wasm locals are function-scoped, so a source-level block only
             // needs a fresh name-resolution scope — no Wasm `block`.
             emitter.push_scope();
-            for &child in stmts {
+            let prologue = ctx
+                .ta
+                .parameter_default_prologues
+                .get(&id)
+                .copied()
+                .unwrap_or(0);
+            let (defaults, body) = stmts.split_at_checked(prologue).ok_or_else(|| {
+                crate::codegen::internal_failure("parameter prologue exceeds body length")
+            })?;
+            for &child in defaults {
+                emit_statement(emitter, ctx, child)?;
+            }
+            emitter.prepare_block_bindings(body)?;
+            for &child in body {
                 emit_statement(emitter, ctx, child)?;
             }
             emitter.pop_scope()?;
@@ -103,16 +116,7 @@ pub fn emit_statement(
                 let box_idx = ctx.symbols.box_type_idx(ty)?.ok_or_else(|| {
                     crate::codegen::internal_failure("box type registered for every boxed Let")
                 })?;
-                if ctx.ta.parameter_initializations.contains(&id) {
-                    let slot = emitter
-                        .parameter_binding_cells
-                        .get(name)
-                        .copied()
-                        .ok_or_else(|| {
-                            crate::codegen::internal_failure(
-                                "parameter pattern cell was not reserved",
-                            )
-                        })?;
+                if let Some(slot) = emitter.binding_cells.get(name).copied() {
                     let value_slot = emitter.add_anonymous_local(ctx.symbols.value_type(ty)?)?;
                     emitter.instruction(Instruction::LocalSet(value_slot));
                     emitter.instruction(Instruction::LocalGet(slot));

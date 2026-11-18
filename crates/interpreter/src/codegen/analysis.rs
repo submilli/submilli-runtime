@@ -1558,7 +1558,7 @@ impl CodegenAnalysis {
 
     fn note_binding_cell(&mut self) {
         self.string_pool
-            .intern_text(super::function_emitter::binding_cells::UNINITIALIZED_PARAMETER_MESSAGE);
+            .intern_text(super::function_emitter::binding_cells::UNINITIALIZED_BINDING_MESSAGE);
     }
 
     /// Each step's receiver is the previous step's result, so a chain has to be

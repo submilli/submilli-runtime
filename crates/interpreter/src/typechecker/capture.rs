@@ -174,8 +174,9 @@ struct Frame {
 struct LocalBinding {
     name_ident: Ident,
     ty: Type,
-    /// Captured `let`/params get boxed; captured `const`s are copied.
-    mutable: bool,
+    /// Mutable bindings and not-yet-initialized consts need a shared cell.
+    /// Initialized consts can be copied into the environment.
+    capture_by_cell: bool,
     source: BindingSource,
 }
 
@@ -187,7 +188,7 @@ enum BindingSource {
         try_stmt: StmtId,
         index: usize,
     },
-    ParameterBinding(StmtId),
+    CellBinding(StmtId),
     Const,
     Param {
         owner: ParamOwner,
@@ -293,7 +294,7 @@ impl State<'_> {
                     .span,
             },
             ty: this_ty,
-            mutable: false,
+            capture_by_cell: false,
             source: BindingSource::Const,
         })?;
         self.walk_expr(expr_id)?;
@@ -322,7 +323,7 @@ impl State<'_> {
                         .span,
                 },
                 ty,
-                mutable: false,
+                capture_by_cell: false,
                 source: BindingSource::Const,
             })?;
         }
@@ -330,7 +331,7 @@ impl State<'_> {
             self.bind(LocalBinding {
                 name_ident: p.name.clone(),
                 ty: p.ty.clone(),
-                mutable: true,
+                capture_by_cell: true,
                 source: BindingSource::Param {
                     owner: owner.clone(),
                     index: i,
@@ -382,8 +383,33 @@ impl State<'_> {
             self.bind(LocalBinding {
                 name_ident: name.clone(),
                 ty: ty.clone(),
-                mutable: true,
-                source: BindingSource::ParameterBinding(id),
+                capture_by_cell: true,
+                source: BindingSource::CellBinding(id),
+            })?;
+        }
+        Ok(())
+    }
+
+    /// A closure resolves names across the whole enclosing block, even when
+    /// its creation precedes a declaration. Such captures need a shared cell;
+    /// an initialized const can still be copied by later closures.
+    fn predeclare_block_bindings(&mut self, statements: &[StmtId]) -> Result<(), CompilerFailure> {
+        for &id in statements {
+            let kind = &self
+                .ta
+                .try_stmt(id)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind;
+            let (TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. }) =
+                kind
+            else {
+                continue;
+            };
+            self.bind(LocalBinding {
+                name_ident: name.clone(),
+                ty: ty.clone(),
+                capture_by_cell: true,
+                source: BindingSource::CellBinding(id),
             })?;
         }
         Ok(())
@@ -401,8 +427,23 @@ impl State<'_> {
                 // Blocks change lexical lookup without introducing a closure
                 // boundary. Deferred references retain their binding source.
                 let locals = self.frames.last().map(|frame| frame.locals.clone());
-                for s in stmts {
-                    self.walk_stmt(s)?;
+                let prologue = self
+                    .ta
+                    .parameter_default_prologues
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(0);
+                let (defaults, body) = stmts.split_at_checked(prologue).ok_or_else(|| {
+                    crate::typechecker::invariant_failure("parameter prologue exceeds body length")
+                })?;
+                // Parameter defaults have their own scope: body declarations
+                // must not shadow the bindings those defaults capture.
+                for &statement in defaults {
+                    self.walk_stmt(statement)?;
+                }
+                self.predeclare_block_bindings(body)?;
+                for &statement in body {
+                    self.walk_stmt(statement)?;
                 }
                 if let (Some(frame), Some(locals)) = (self.frames.last_mut(), locals) {
                     frame.locals = locals;
@@ -418,7 +459,7 @@ impl State<'_> {
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty,
-                    mutable: true,
+                    capture_by_cell: true,
                     source: BindingSource::Let(id),
                 })?;
             }
@@ -432,8 +473,14 @@ impl State<'_> {
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty,
-                    mutable: false,
-                    source: BindingSource::Const,
+                    capture_by_cell: matches!(
+                        self.ta
+                            .try_stmt(id)
+                            .map_err(crate::typechecker::arena_failure)?
+                            .kind,
+                        TypedStmtKind::Let { boxed: true, .. }
+                    ),
+                    source: BindingSource::CellBinding(id),
                 })?;
             }
             TypedStmtKind::If {
@@ -459,6 +506,7 @@ impl State<'_> {
             } => {
                 // Init binding's scope is the for-body.
                 self.frames.push(Frame::default());
+                self.predeclare_block_bindings(&init)?;
                 for i in init {
                     self.walk_stmt(i)?;
                 }
@@ -484,7 +532,7 @@ impl State<'_> {
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty: element_ty,
-                    mutable: matches!(binding_kind, crate::BindingKind::Let),
+                    capture_by_cell: matches!(binding_kind, crate::BindingKind::Let),
                     source: BindingSource::Const,
                 })?;
                 self.walk_stmt(body)?;
@@ -572,7 +620,7 @@ impl State<'_> {
                     self.bind(LocalBinding {
                         name_ident: clause.binding.clone(),
                         ty: clause.ty.clone(),
-                        mutable: true,
+                        capture_by_cell: true,
                         source: BindingSource::Catch {
                             try_stmt: id,
                             index,
@@ -651,7 +699,7 @@ impl State<'_> {
                                 .span,
                         },
                         ty: Type::Unknown,
-                        mutable: false,
+                        capture_by_cell: false,
                         source: BindingSource::Const,
                     })?;
                 }
@@ -664,7 +712,7 @@ impl State<'_> {
                             .map_err(crate::typechecker::arena_failure)?
                             .ty
                             .clone(),
-                        mutable: false,
+                        capture_by_cell: false,
                         source: BindingSource::Const,
                     })?;
                 }
@@ -672,7 +720,7 @@ impl State<'_> {
                     self.bind(LocalBinding {
                         name_ident: p.name.clone(),
                         ty: p.ty.clone(),
-                        mutable: true,
+                        capture_by_cell: true,
                         source: BindingSource::Param {
                             owner: ParamOwner::Closure(id),
                             index: i,
@@ -947,11 +995,11 @@ impl State<'_> {
                 f.captures.push(CapturedVar {
                     name: binding.name_ident.clone(),
                     ty: binding.ty.clone(),
-                    boxed: binding.mutable,
+                    boxed: binding.capture_by_cell,
                 });
             }
         }
-        let _: () = if binding.mutable {
+        let _: () = if binding.capture_by_cell {
             let source = binding.source.clone();
             self.mark_source_boxed(&source)?;
         };
@@ -979,7 +1027,7 @@ impl State<'_> {
             BindingSource::Catch { try_stmt, index } => {
                 self.catch_clause_mut(*try_stmt, *index)?.boxed = true;
             }
-            BindingSource::ParameterBinding(sid) => self.box_parameter_binding(*sid)?,
+            BindingSource::CellBinding(sid) => self.box_local_binding(*sid)?,
             BindingSource::Const => {} // ordinary const captures are copied
             BindingSource::Param { owner, index } => match owner {
                 ParamOwner::Function(fidx) => {
@@ -1064,7 +1112,7 @@ impl State<'_> {
             .ok_or_else(|| crate::typechecker::invariant_failure("missing catch capture binding"))
     }
 
-    fn box_parameter_binding(&mut self, id: StmtId) -> Result<(), CompilerFailure> {
+    fn box_local_binding(&mut self, id: StmtId) -> Result<(), CompilerFailure> {
         let statement = self
             .ta
             .try_stmt_mut(id)
@@ -1087,7 +1135,7 @@ impl State<'_> {
             }
             _ => {
                 return Err(crate::typechecker::invariant_failure(
-                    "parameter capture source is not a binding",
+                    "capture source is not a binding",
                 ));
             }
         }
@@ -1168,7 +1216,7 @@ impl State<'_> {
                 }
             },
             BindingSource::Catch { try_stmt, index } => self.catch_clause(*try_stmt, *index)?.boxed,
-            BindingSource::ParameterBinding(sid) => match &self
+            BindingSource::CellBinding(sid) => match &self
                 .ta
                 .try_stmt(*sid)
                 .map_err(crate::typechecker::arena_failure)?
@@ -1178,7 +1226,7 @@ impl State<'_> {
                 TypedStmtKind::Const { .. } => false,
                 _ => {
                     return Err(crate::typechecker::invariant_failure(
-                        "parameter capture source is not a binding",
+                        "capture source is not a binding",
                     ));
                 }
             },
