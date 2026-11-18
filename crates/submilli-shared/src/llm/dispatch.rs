@@ -179,6 +179,7 @@ impl HttpModelDispatch {
             base_url,
             request.model,
             request.prompt,
+            request.files,
             schema.as_ref(),
             request.output_cap,
             key.as_deref(),

@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
 use interpreter::runtime::{
-    FailureReason, LlmCallError, LlmFailure, LlmModel, LlmOutcome, LlmProvider,
+    FailureReason, LlmCallError, LlmFailure, LlmFile, LlmModel, LlmOutcome, LlmPrompt, LlmProvider,
 };
 use submilli_blueprint::Blueprint;
 
@@ -273,6 +273,8 @@ pub struct ModelRequest<'a> {
     /// Sent as the request's output cap, so the budget reservation is an actual
     /// upper bound rather than an estimate.
     pub output_cap: Option<u64>,
+    /// Sent before the prompt.
+    pub files: &'a [LlmFile],
 }
 
 /// The outbound model provider bound to one blueprint.
@@ -323,6 +325,18 @@ impl LlmProvider for BlueprintLlmProvider {
         schema_json: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
         Box::pin(async move {
+            let prompts: Vec<LlmPrompt> = prompts.iter().map(LlmPrompt::text).collect();
+            self.call_with_files(model, &prompts, schema_json).await
+        })
+    }
+
+    fn call_with_files<'a>(
+        &'a self,
+        model: &'a str,
+        prompts: &'a [LlmPrompt],
+        schema_json: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
+        Box::pin(async move {
             let (provider, output_cap) = self.resolve(model)?;
 
             // A credential that cannot resolve belongs to the configuration,
@@ -346,9 +360,10 @@ impl LlmProvider for BlueprintLlmProvider {
                     let request = ModelRequest {
                         model,
                         provider,
-                        prompt,
+                        prompt: &prompt.text,
                         schema_json,
                         output_cap,
+                        files: &prompt.files,
                     };
                     async move { (index, classify(self.dispatch.dispatch(request).await)) }
                 })

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a84cad7932b8b6d7c34e741f2b884f9a6e39844c5d9f5232323d3598b24e7b3b"
+  contentHash: "6c6850faf9df2bd2d92fc67e0b0d3783c101ad2e8fa981a76d52188a60ec66ed"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -95,15 +95,16 @@ submilli docs submilli:llm
 ```text
 submilli:llm — Gated model calls: call/batch, and models() to discover them.
 …
-function batch<T>(model: string, prompts: string[]): Completion<T>[];
-function call<T>(model: string, prompt: string): Completion<T>;
+function batch<T>(model: string, prompts: (string | Prompt)[]): Completion<T>[];
+function call<T>(model: string, prompt: string, files?: string[]): Completion<T>;
 function models(): Model[];
 …
 ```
 
 The typed form, `call<Verdict>`, sends a JSON Schema for `Verdict` with
 the request and checks the response against it field by field, so the
-value it returns has that shape. One capability covers all three:
+value it returns has that shape. One capability covers all three; a call
+that sends `files` also needs `fs.read` for each file it names:
 
 ```sh
 submilli blueprint capability list submilli:llm

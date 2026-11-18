@@ -85,6 +85,7 @@ fn request<'a>(schema_json: Option<&'a str>) -> ModelRequest<'a> {
         prompt: PROMPT,
         schema_json,
         output_cap: Some(256),
+        files: &[],
     }
 }
 

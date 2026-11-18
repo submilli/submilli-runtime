@@ -39,15 +39,16 @@ use crate::runtime::ModelCallUsage;
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
+use crate::runtime::durable::EffectId;
 use crate::runtime::fuel;
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::llm::{
-    ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmLimits, LlmModel, LlmOutcome,
-    LlmProvider, PromptBoundKind,
+    ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmFile, LlmFileKind, LlmLimits,
+    LlmModel, LlmOutcome, LlmPrompt, LlmProvider, PromptBoundKind,
 };
 use crate::runtime::model_calls::add_part;
 use crate::stdlib::abi;
-use crate::stdlib::json_schema;
+use crate::stdlib::fs::{WholeFile, read_whole};
 use crate::stdlib::shared::{
     audit_quota_denial, check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
     preflight_models, sanitize_description,
@@ -91,8 +92,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteArray(intr.object_fields.clone()),
     ));
 
-    // `text` and `texts` take what a program writes, the optional `schema`
-    // arriving as `string | undefined`.
+    // `text` and `texts` take only what a program writes.
     register_host_value_async(
         linker,
         MODULE_NAME,
@@ -107,9 +107,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.text (model)")?;
                 let prompt =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.text (prompt)")?;
-                let schema =
-                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.text")?;
-                text(caller, model, prompt, schema).await
+                let paths = read_file_paths(caller, abi_arg(params, 2)?, "llm.text (files)")?;
+                text(caller, model, prompt, paths).await
             })
         },
     )?;
@@ -117,19 +116,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "texts"),
-        FuncType::new(
-            &engine,
-            [string.clone(), array.clone(), nullable_object.clone()],
-            [array.clone()],
-        ),
+        FuncType::new(&engine, [string.clone(), array.clone()], [array.clone()]),
         |caller, params| {
             Box::pin(async move {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.texts (model)")?;
-                let prompts = read_prompts(caller, abi_arg(params, 1)?, "llm.texts (prompts)")?;
-                let schema =
-                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.texts")?;
-                texts(caller, model, prompts, schema).await
+                let prompts = read_prompts(caller, abi_arg(params, 1)?, "llm.texts").await?;
+                texts(caller, model, prompts).await
             })
         },
     )?;
@@ -139,7 +132,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         crate::mangle::package_symbol(MODULE_NAME, "call"),
         FuncType::new(
             &engine,
-            [string.clone(), string.clone(), types.clone()],
+            [
+                string.clone(),
+                string.clone(),
+                nullable_object.clone(),
+                types.clone(),
+            ],
             [nullable_object.clone()],
         ),
         |caller, params| {
@@ -147,8 +145,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
                 let prompt =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
-                let descriptor = abi::read_type_argument(caller, abi_arg(params, 2)?, 0)?;
-                call(caller, model, prompt, &descriptor).await
+                let paths = read_file_paths(caller, abi_arg(params, 2)?, "llm.call (files)")?;
+                let descriptor = abi::read_type_argument(caller, abi_arg(params, 3)?, 0)?;
+                call(caller, model, prompt, paths, &descriptor).await
             })
         },
     )?;
@@ -165,7 +164,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.batch (model)")?;
-                let prompts = read_prompts(caller, abi_arg(params, 1)?, "llm.batch (prompts)")?;
+                let prompts = read_prompts(caller, abi_arg(params, 1)?, "llm.batch").await?;
                 let descriptor = abi::read_type_argument(caller, abi_arg(params, 2)?, 0)?;
                 batch(caller, model, prompts, &descriptor).await
             })
@@ -226,7 +225,7 @@ fn api_name(api: Api) -> String {
 }
 
 /// One provider request for `text`, `texts`, `call` or `batch`: gate, bound,
-/// reserve, dispatch, reconcile.
+/// read files, reserve, dispatch, reconcile.
 ///
 /// The ordering is the point and is load-bearing at every step.
 ///
@@ -237,9 +236,13 @@ fn api_name(api: Api) -> String {
 ///    error to enumerate the operator's catalog behind the `model` filter's
 ///    back. (The `llm_provider` field read is a store lookup that sends nothing
 ///    and reveals nothing; it is `provider.call` that must stay downstream.)
+///    Each file is then gated as the `fs.read` it is, with `fs.read`'s own
+///    context, so no file is read unless both gates allow it.
 /// 2. **Bound before reserving.** A slice outside the prompt bounds is refused
 ///    without ever charging the budget, the validate-then-reserve-then-mutate
-///    ordering session-KV uses.
+///    ordering session-KV uses. Files are read inside the effect, after the
+///    bounds: a replay restores the outcome without reading them again, and
+///    the history never holds their bytes.
 /// 3. **Reserve before dispatching.** The reservation covers output tokens as
 ///    well as input, so the ceiling is preventive rather than retroactive.
 /// 4. **Reconcile after.** Reported usage commits, unreported usage is held —
@@ -253,24 +256,51 @@ async fn dispatch(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     api: Api,
     model: &str,
-    prompts: Vec<String>,
+    prompts: Vec<WrittenPrompt>,
     schema: Option<String>,
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
-    let op = api.op();
     let ticket = gate(caller, model, prompts.len()).await?;
+    let (prompts, paths): (Vec<String>, Vec<Vec<String>>) = prompts
+        .into_iter()
+        .map(|prompt| (prompt.text, prompt.paths))
+        .unzip();
+    // A file several prompts send is gated, and later read, once.
+    let distinct = distinct_paths(&paths);
+    let mut file_tickets = Vec::with_capacity(distinct.len());
+    for path in &distinct {
+        file_tickets.push(
+            check_and_approve_call(&mut *caller, "fs.read", serde_json::json!({ "path": path }))
+                .await?,
+        );
+    }
+    // Recorded here so a resumed attempt or a call that fails early still has
+    // its request. A call with files is recorded again once they are read, so
+    // the record names what was sent rather than only where it came from.
     record_payload(&*caller, ticket, Side::Request, || {
-        request_payload(op, model, &prompts, schema.as_deref())
+        request_payload_by_path(api.op(), model, &prompts, schema.as_deref(), &paths)
     });
 
     let request = LlmRequest {
         model: model.to_owned(),
         prompts,
         schema,
+        paths,
     };
-    let operation = api.effect();
-    let mut response = effects::execute(caller, operation, request, move |caller, _, request| {
-        Box::pin(call_provider(caller, api, ticket, request))
-    })
+    let mut response = effects::execute(
+        caller,
+        api.effect(),
+        request,
+        move |caller, effect_id, request| {
+            Box::pin(call_provider(
+                caller,
+                api,
+                ticket,
+                effect_id,
+                request,
+                file_tickets,
+            ))
+        },
+    )
     .await?;
     // The live reservation is settled once; replay restores only this run's spend.
     if let Some(settlement) = &mut response.settlement {
@@ -319,12 +349,15 @@ async fn call_provider(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     api: Api,
     ticket: Option<CallTicket>,
+    effect_id: EffectId,
     request: LlmRequest,
+    file_tickets: Vec<Option<CallTicket>>,
 ) -> wasmtime::Result<LlmResponse> {
     let LlmRequest {
         model,
         prompts,
         schema,
+        paths,
     } = request;
     let model = model.as_str();
     let budget = budget(caller);
@@ -332,11 +365,29 @@ async fn call_provider(
         .as_ref()
         .map_or_else(LlmLimits::default, |b| b.limits());
     check_prompt_bounds(model, &prompts, schema.as_deref(), &limits)
-        .map_err(|e| throw(api.name(), e))?;
-
+        .map_err(|error| throw(api.name(), error))?;
     // Clone the provider out of the store before any `await`: the borrow on
-    // `caller.data()` cannot be held across one.
+    // `caller.data()` cannot be held across one. Looked up before the files
+    // are read, so an unconfigured runtime reads nothing.
     let provider = provider(caller, api.name(), model)?;
+    let distinct = distinct_paths(&paths);
+    let files = read_files(
+        caller,
+        api,
+        model,
+        &effect_id,
+        &distinct,
+        &file_tickets,
+        &limits,
+    )
+    .await?;
+    let prompts = with_files(api, model, prompts, &paths, &distinct, &files, &limits)?;
+    if !files.is_empty() {
+        record_payload(&*caller, ticket, Side::Request, || {
+            request_payload(api.op(), model, &prompts, schema.as_deref())
+        });
+    }
+
     let sent = sent_bytes(&prompts, schema.as_deref());
     fuel::charge(&mut *caller, fuel::IO, sent)?;
 
@@ -357,7 +408,9 @@ async fn call_provider(
             Err(denial) => denial,
         }
     })?;
-    let dispatched = provider.call(model, &prompts, schema.as_deref()).await;
+    let dispatched = provider
+        .call_with_files(model, &prompts, schema.as_deref())
+        .await;
 
     match dispatched {
         Ok(outcomes) => {
@@ -436,24 +489,111 @@ async fn call_provider(
     }
 }
 
+/// What the replay history fingerprints: the call as the program wrote it,
+/// with files by path. A call without files fingerprints as it did before
+/// files existed, so a history recorded then still replays.
 #[derive(serde::Serialize)]
 struct LlmRequest {
     model: String,
     prompts: Vec<String>,
     schema: Option<String>,
+    /// Each prompt's files, positionally.
+    #[serde(rename = "files", skip_serializing_if = "sends_no_files")]
+    paths: Vec<Vec<String>>,
 }
 
-/// A call's request as the recorder keeps it.
+fn sends_no_files(paths: &[Vec<String>]) -> bool {
+    paths.iter().all(Vec::is_empty)
+}
+
+/// One prompt as the program wrote it: its text and the paths of the files
+/// sent with it.
+struct WrittenPrompt {
+    text: String,
+    paths: Vec<String>,
+}
+
+impl WrittenPrompt {
+    fn new(text: String, paths: Vec<String>) -> Self {
+        Self { text, paths }
+    }
+}
+
+/// Every path the prompts name, each once, in the order first named.
+fn distinct_paths(paths: &[Vec<String>]) -> Vec<String> {
+    let mut distinct: Vec<String> = Vec::new();
+    for path in paths.iter().flatten() {
+        if !distinct.contains(path) {
+            distinct.push(path.clone());
+        }
+    }
+    distinct
+}
+
+/// A call's request as the recorder keeps it. Files are named by digest, not
+/// copied: their bytes are in the `fs.read` calls that read them.
 fn request_payload(
+    op: &str,
+    model: &str,
+    prompts: &[LlmPrompt],
+    schema: Option<&str>,
+) -> Payload<'static> {
+    let texts: Vec<&str> = prompts.iter().map(|prompt| prompt.text.as_str()).collect();
+    let records = prompts
+        .iter()
+        .map(|prompt| prompt.files.iter().map(file_record).collect())
+        .collect();
+    request_record(op, model, &texts, schema, records).with_size(sent_bytes(prompts, schema))
+}
+
+/// A call's request before its files are read, naming them by path.
+fn request_payload_by_path(
     op: &str,
     model: &str,
     prompts: &[String],
     schema: Option<&str>,
+    paths: &[Vec<String>],
+) -> Payload<'static> {
+    let texts: Vec<&str> = prompts.iter().map(String::as_str).collect();
+    let records = paths
+        .iter()
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|path| serde_json::json!({ "path": path }))
+                .collect()
+        })
+        .collect();
+    let unread: Vec<LlmPrompt> = prompts.iter().map(LlmPrompt::text).collect();
+    request_record(op, model, &texts, schema, records).with_size(sent_bytes(&unread, schema))
+}
+
+/// The record both forms share: `files` holds each prompt's files,
+/// positionally. A call without files records no `files` key, as it did
+/// before files existed, so an old cassette still matches.
+fn request_record(
+    op: &str,
+    model: &str,
+    prompts: &[&str],
+    schema: Option<&str>,
+    records: Vec<Vec<serde_json::Value>>,
 ) -> Payload<'static> {
     let body = serde_json::to_vec(prompts).unwrap_or_default();
-    Payload::meta(serde_json::json!({ "op": op, "model": model, "schema": schema }))
-        .with_owned_body(body)
-        .with_size(sent_bytes(prompts, schema))
+    let mut meta = serde_json::json!({ "op": op, "model": model, "schema": schema });
+    if records.iter().any(|files| !files.is_empty()) {
+        meta["files"] = records.into();
+    }
+    Payload::meta(meta).with_owned_body(body)
+}
+
+fn file_record(file: &LlmFile) -> serde_json::Value {
+    use sha2::{Digest, Sha256};
+    serde_json::json!({
+        "name": file.name,
+        "media_type": file.kind.media_type(),
+        "size": file.bytes.len(),
+        "sha256": format!("{:x}", Sha256::digest(&file.bytes)),
+    })
 }
 
 /// The ops a request is recorded under, `call` and `batch`. The provider is not told
@@ -461,7 +601,12 @@ fn request_payload(
 pub const OPS: [&str; 2] = ["call", "batch"];
 
 /// The digest the call log records for a request of this `op`.
-pub fn request_digest(op: &str, model: &str, prompts: &[String], schema: Option<&str>) -> String {
+pub fn request_digest(
+    op: &str,
+    model: &str,
+    prompts: &[LlmPrompt],
+    schema: Option<&str>,
+) -> String {
     request_payload(op, model, prompts, schema).digest()
 }
 
@@ -488,6 +633,9 @@ fn call_error_record(error: &LlmCallError) -> serde_json::Value {
         LlmCallError::Transport { detail, .. } => {
             serde_json::json!({ "kind": "transport", "model": model, "detail": detail })
         }
+        LlmCallError::FilesUnsupported { .. } => {
+            serde_json::json!({ "kind": "files-unsupported", "model": model })
+        }
     }
 }
 
@@ -503,14 +651,22 @@ fn failure_record(failure: &crate::runtime::llm::LlmFailure) -> serde_json::Valu
     })
 }
 
-/// The bytes a dispatch sends: each prompt, and the schema with every one of
-/// them, since each prompt is its own request.
-fn sent_bytes(prompts: &[String], schema: Option<&str>) -> u64 {
+/// The bytes a dispatch sends: each prompt with its files, and the schema
+/// with every one of them, since each prompt is its own request.
+fn sent_bytes(prompts: &[LlmPrompt], schema: Option<&str>) -> u64 {
     let schema = schema.map_or(0, str::len) as u64;
     prompts.iter().fold(0u64, |total, prompt| {
         total
-            .saturating_add(prompt.len() as u64)
+            .saturating_add(prompt.text.len() as u64)
             .saturating_add(schema)
+            .saturating_add(file_bytes(&prompt.files))
+    })
+}
+
+/// The bytes of `files` together.
+fn file_bytes(files: &[LlmFile]) -> u64 {
+    files.iter().fold(0u64, |total, file| {
+        total.saturating_add(file.bytes.len() as u64)
     })
 }
 
@@ -669,7 +825,7 @@ fn reserve(
     budget: Option<&ExecutionTokenBudget>,
     api: &str,
     model: &str,
-    prompts: &[String],
+    prompts: &[LlmPrompt],
     schema: Option<&str>,
     output_reserve: Option<u64>,
 ) -> wasmtime::Result<u64> {
@@ -699,13 +855,197 @@ fn reserve(
 /// the output cap in the reservation is, and reconciliation replaces this with
 /// reported usage the moment the provider answers. Rounding up rather than down
 /// keeps a refusal early rather than after the bill. A schema is input to
-/// every prompt it travels with.
-fn estimated_input_tokens(prompts: &[String], schema: Option<&str>) -> u64 {
-    let schema = schema.map_or(0, str::len) as u64;
+/// every prompt, and each prompt's files to that prompt.
+///
+/// Files are not billed by their bytes; see [`file_tokens`].
+fn estimated_input_tokens(prompts: &[LlmPrompt], schema: Option<&str>) -> u64 {
+    let schema_bytes = schema.map_or(0, str::len) as u64;
     prompts
         .iter()
-        .map(|p| (p.len() as u64).saturating_add(schema).div_ceil(4))
+        .map(|prompt| {
+            let file_tokens = prompt
+                .files
+                .iter()
+                .map(file_tokens)
+                .fold(0u64, u64::saturating_add);
+            (prompt.text.len() as u64)
+                .saturating_add(schema_bytes)
+                .div_ceil(4)
+                .saturating_add(file_tokens)
+        })
         .fold(0u64, u64::saturating_add)
+}
+
+/// The input tokens one file reserves with the prompt it travels with.
+///
+/// Providers scale a large image down before counting it, and Anthropic
+/// documents about 1,600 tokens for one at its largest size
+/// (<https://platform.claude.com/docs/en/build-with-claude/vision>). A PDF is
+/// billed by its pages, each as extracted text (1,500 to 3,000 tokens) plus
+/// the page as an image
+/// (<https://platform.claude.com/docs/en/build-with-claude/pdf-support>).
+/// Pages kept in compressed object streams cannot be counted without
+/// decompressing them, so a PDF reserves whichever is more: the pages it
+/// shows, or what a prompt of its size would, up to the 100 pages a request
+/// with a context window under a million tokens may hold. A text file
+/// reserves as a prompt.
+fn file_tokens(file: &LlmFile) -> u64 {
+    let by_size = (file.bytes.len() as u64).div_ceil(4);
+    match file.kind {
+        LlmFileKind::Png | LlmFileKind::Jpeg | LlmFileKind::Gif | LlmFileKind::Webp => IMAGE_TOKENS,
+        LlmFileKind::Pdf => {
+            let shown = PDF_PAGE_TOKENS.saturating_mul(pdf_page_count(&file.bytes));
+            shown.max(by_size.min(PDF_PAGE_TOKENS.saturating_mul(100)))
+        }
+        LlmFileKind::Text => by_size,
+    }
+}
+
+const IMAGE_TOKENS: u64 = 1_600;
+const PDF_PAGE_TOKENS: u64 = 3_000 + IMAGE_TOKENS;
+
+/// The page objects a PDF declares in the open (`/Type /Page`, not `/Pages`).
+/// Pages kept in compressed object streams are not seen.
+fn pdf_page_count(bytes: &[u8]) -> u64 {
+    const TYPE: &[u8] = b"/Type";
+    const PAGE: &[u8] = b"/Page";
+    let mut pages = 0u64;
+    let mut rest = bytes;
+    while let Some(at) = find(rest, TYPE) {
+        rest = rest
+            .get(at.saturating_add(TYPE.len())..)
+            .unwrap_or_default();
+        let value = rest.trim_ascii_start();
+        let is_page = value.starts_with(PAGE)
+            && !value.get(PAGE.len()).is_some_and(u8::is_ascii_alphanumeric);
+        if is_page {
+            pages = pages.saturating_add(1);
+        }
+    }
+    pages
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// The paths `files` names, or none when it is `undefined`.
+fn read_file_paths(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<Vec<String>> {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
+        return Ok(Vec::new());
+    }
+    let elements = crate::runtime::prelude::collection::read_array_vals(caller, val)?;
+    let mut paths = Vec::with_capacity(elements.len());
+    for element in &elements {
+        paths.push(read_string_arg(caller, element, name)?);
+    }
+    Ok(paths)
+}
+
+/// Read each file a call sends, already gated under `fs.read`, once however
+/// many prompts send it, and tell what it holds. Each file is held to
+/// `fs.maxReadSize()`, as `fs.read` holds it, and to
+/// [`LlmLimits::max_file_bytes`], so one too large for any prompt is refused
+/// without being read whole; [`with_files`] then holds each prompt's files
+/// together to that bound.
+async fn read_files(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    api: Api,
+    model: &str,
+    effect_id: &EffectId,
+    paths: &[String],
+    tickets: &[Option<CallTicket>],
+    limits: &LlmLimits,
+) -> wasmtime::Result<Vec<LlmFile>> {
+    let context = format!("{} (files)", api_name(api));
+    let max_read_size = caller.data().fs_max_read_size;
+    let cap = max_read_size.min(limits.max_file_bytes);
+    let mut files = Vec::with_capacity(paths.len());
+    for (path, ticket) in paths.iter().zip(tickets) {
+        let read = read_whole(caller, effect_id, path, &context, *ticket, cap).await?;
+        let bytes = match read {
+            WholeFile::Read(bytes) => bytes,
+            WholeFile::TooLarge { .. } if cap == max_read_size => {
+                return Err(range_error(format!(
+                    "{context}: {path} exceeds fs.maxReadSize()"
+                )));
+            }
+            WholeFile::TooLarge { size } => {
+                return Err(file_bytes_exceeded(api, model, size, limits));
+            }
+        };
+        let kind = LlmFileKind::of(&bytes).ok_or_else(|| {
+            type_error(format!(
+                "{context}: {path} is not a PDF, an image (PNG, JPEG, GIF or WebP) or \
+                 UTF-8 text, or is empty"
+            ))
+        })?;
+        files.push(LlmFile {
+            name: file_name(path),
+            kind,
+            bytes: bytes.into(),
+        });
+    }
+    Ok(files)
+}
+
+/// Each prompt with the files it names, read once in [`read_files`]. A prompt's
+/// files are held together to [`LlmLimits::max_file_bytes`], since each prompt
+/// is its own request; a batch is bounded by its fuel, as every read is.
+fn with_files(
+    api: Api,
+    model: &str,
+    prompts: Vec<String>,
+    paths: &[Vec<String>],
+    distinct: &[String],
+    files: &[LlmFile],
+    limits: &LlmLimits,
+) -> wasmtime::Result<Vec<LlmPrompt>> {
+    let mut built = Vec::with_capacity(prompts.len());
+    for (index, text) in prompts.into_iter().enumerate() {
+        let names = paths.get(index).map(Vec::as_slice).unwrap_or_default();
+        let sent: Vec<LlmFile> = names
+            .iter()
+            .filter_map(|path| {
+                let at = distinct.iter().position(|candidate| candidate == path)?;
+                files.get(at).cloned()
+            })
+            .collect();
+        let total = file_bytes(&sent);
+        if total > limits.max_file_bytes {
+            return Err(file_bytes_exceeded(api, model, total, limits));
+        }
+        built.push(LlmPrompt { text, files: sent });
+    }
+    Ok(built)
+}
+
+/// The refusal for a prompt whose files hold more than
+/// [`LlmLimits::max_file_bytes`].
+fn file_bytes_exceeded(api: Api, model: &str, actual: u64, limits: &LlmLimits) -> wasmtime::Error {
+    throw(
+        api.name(),
+        LlmCallError::PromptBoundsExceeded {
+            model: model.to_string(),
+            limit_kind: PromptBoundKind::FileBytes,
+            actual,
+            limit: limits.max_file_bytes,
+        },
+    )
+}
+
+/// The last component of `path`, which a provider may show the model.
+fn file_name(path: &str) -> String {
+    path.rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
 
 /// Split a dispatch's reservation into what the provider reported and what it
@@ -810,15 +1150,30 @@ fn throw(api: &str, error: LlmCallError) -> wasmtime::Error {
     }
 }
 
-fn read_prompts(
+/// The prompts of `texts` or `batch`, each a string or a `Prompt` naming the
+/// files sent with it.
+async fn read_prompts(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
-    name: &str,
-) -> wasmtime::Result<Vec<String>> {
-    let elements = crate::runtime::prelude::collection::read_array_vals(caller, val)?;
+    api: &str,
+) -> wasmtime::Result<Vec<WrittenPrompt>> {
+    use crate::runtime::prelude::{collection, object};
+    let string = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
+        .string
+        .clone();
+    let elements = collection::read_array_vals(caller, val)?;
     let mut prompts = Vec::with_capacity(elements.len());
     for element in &elements {
-        prompts.push(read_string_arg(caller, element, name)?);
+        if collection::is_a(caller, element, &string)? {
+            let text = read_string_arg(caller, element, &format!("{api} (prompts)"))?;
+            prompts.push(WrittenPrompt::new(text, Vec::new()));
+            continue;
+        }
+        let text = object::read_property(caller, element, "prompt").await?;
+        let text = read_string_arg(caller, &text, &format!("{api} (prompt)"))?;
+        let files = object::read_property(caller, element, "files").await?;
+        let paths = read_file_paths(caller, &files, &format!("{api} (files)"))?;
+        prompts.push(WrittenPrompt::new(text, paths));
     }
     Ok(prompts)
 }
@@ -828,9 +1183,10 @@ async fn text(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: String,
     prompt: String,
-    schema: Option<String>,
+    paths: Vec<String>,
 ) -> wasmtime::Result<Val> {
-    let outcomes = dispatch(caller, Api::Text, &model, vec![prompt], schema).await?;
+    let prompts = vec![WrittenPrompt::new(prompt, paths)];
+    let outcomes = dispatch(caller, Api::Text, &model, prompts, None).await?;
     let outcome = first_outcome(Api::Text, &model, outcomes)?;
     text_envelope(caller, outcome)
 }
@@ -839,10 +1195,9 @@ async fn text(
 async fn texts(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: String,
-    prompts: Vec<String>,
-    schema: Option<String>,
+    prompts: Vec<WrittenPrompt>,
 ) -> wasmtime::Result<Val> {
-    let outcomes = dispatch(caller, Api::Texts, &model, prompts, schema).await?;
+    let outcomes = dispatch(caller, Api::Texts, &model, prompts, None).await?;
     let mut built = Vec::with_capacity(outcomes.len());
     for outcome in outcomes {
         built.push(text_envelope(caller, outcome)?);
@@ -855,10 +1210,12 @@ async fn call(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: String,
     prompt: String,
+    paths: Vec<String>,
     descriptor: &abi::TypeDescriptor,
 ) -> wasmtime::Result<Val> {
     let schema = descriptor.schema_for(&api_name(Api::Call))?.to_string();
-    let outcomes = dispatch(caller, Api::Call, &model, vec![prompt], Some(schema)).await?;
+    let prompts = vec![WrittenPrompt::new(prompt, paths)];
+    let outcomes = dispatch(caller, Api::Call, &model, prompts, Some(schema)).await?;
     let outcome = first_outcome(Api::Call, &model, outcomes)?;
     envelope(caller, outcome, descriptor).await
 }
@@ -867,7 +1224,7 @@ async fn call(
 async fn batch(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: String,
-    prompts: Vec<String>,
+    prompts: Vec<WrittenPrompt>,
     descriptor: &abi::TypeDescriptor,
 ) -> wasmtime::Result<Val> {
     let schema = descriptor.schema_for(&api_name(Api::Batch))?.to_string();
@@ -1111,7 +1468,7 @@ mod tests {
     use crate::runtime::effects::{EffectCall, EffectHistory, HistoryError, RecordedOutcome};
     use crate::runtime::llm::{
         ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmLimits, LlmModel,
-        LlmOutcome, LlmProvider, SharedTokenBudget,
+        LlmOutcome, LlmPrompt, LlmProvider, SharedTokenBudget,
     };
     use crate::runtime::{
         CheckOutcome, RuntimeConfig, SecurityCheck, StoreData, Vfs, dispatch_main_async,
@@ -2098,85 +2455,6 @@ mod tests {
         );
     }
 
-    /// `text` without a schema sends none, and with one sends it unchanged:
-    /// the program's own schema constrains the provider and never checks the
-    /// answer, so prose comes back as the text, not as an `invalid-output`.
-    #[tokio::test]
-    async fn text_sends_a_written_schema_unchanged_and_returns_the_text() {
-        let (provider, recorder) = MockProvider::new(
-            vec![LlmOutcome::success("not json".to_string())],
-            Vec::new(),
-        );
-        let out = Harness::new()
-            .provider(provider)
-            .run(
-                r#"import llm from "submilli:llm";
-                   function main(): string {
-                     const a = llm.text("m", "p");
-                     const b = llm.text("m", "p", "{\"type\":\"object\"}");
-                     return (a.ok ? a.value : a.reason) + "|" + (b.ok ? b.value : b.reason);
-                   }"#,
-            )
-            .await
-            .expect("program completes");
-        assert_eq!(out, "not json|not json");
-        let schemas: Vec<Option<String>> = recorder
-            .dispatches()
-            .iter()
-            .map(|dispatch| dispatch.schema.clone())
-            .collect();
-        assert_eq!(
-            schemas,
-            vec![None, Some("{\"type\":\"object\"}".to_string())]
-        );
-    }
-
-    /// A written schema must be a JSON document, or it would be dropped on the
-    /// way to the provider: a catchable `TypeError` names the function. It is
-    /// also held to the prompt byte bound, since it travels with every prompt.
-    #[tokio::test]
-    async fn a_written_schema_must_be_json_and_within_the_prompt_bound() {
-        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
-        let out = Harness::new()
-            .provider(provider)
-            .run(
-                r#"import llm from "submilli:llm";
-                   function main(): string {
-                     try { llm.text("m", "p", "true"); return "sent a boolean schema"; }
-                     catch (e) { if (!(e instanceof TypeError)) { return "boolean: " + e.message; } }
-                     try { llm.texts("m", ["p"], "{not json"); return "sent"; }
-                     catch (e) { return (e instanceof TypeError ? "TypeError:" : "other:") + e.message; }
-                   }"#,
-            )
-            .await
-            .expect("program completes");
-        assert_eq!(
-            out,
-            "TypeError:llm.texts: `schema` is not a JSON Schema: write a JSON object"
-        );
-        assert!(recorder.dispatches().is_empty(), "nothing was sent");
-
-        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
-        let out = Harness::new()
-            .provider(provider)
-            .run(
-                r#"import llm from "submilli:llm";
-                   function main(): string {
-                     const schema = "{\"description\":\"" + "x".repeat(300000) + "\"}";
-                     try { llm.text("m", "p", schema); return "sent"; }
-                     catch (e) { return (e instanceof RangeError ? "RangeError:" : "other:") + e.message; }
-                   }"#,
-            )
-            .await
-            .expect("program completes");
-        assert!(
-            out.starts_with("RangeError:llm.text: model \"m\": prompt bound exceeded")
-                && out.contains("bytes in the schema"),
-            "{out}"
-        );
-        assert!(recorder.dispatches().is_empty(), "nothing was sent");
-    }
-
     /// SUB-2084: an `invalid-output` entry names the type, never a key the
     /// model wrote, so model text does not reach the message.
     #[tokio::test]
@@ -2927,6 +3205,83 @@ mod tests {
         assert_eq!(provider.invoked(), 1, "replay must not call the provider");
     }
 
+    /// A replay restores a call with files from its outcome alone: the file
+    /// the live run wrote is not there on the resumed attempt (the write is
+    /// replayed, not redone), and nothing reads it or calls the provider.
+    #[tokio::test]
+    async fn a_replayed_call_with_files_does_not_read_them_again() {
+        let provider = QueuedProvider::new(vec![vec![LlmOutcome::success("summary")]]);
+        let history = Arc::new(MemoryHistory::new());
+        let source = r#"import llm from "submilli:llm";
+            import fs from "submilli:fs";
+            function main(): string {
+              fs.writeText("/notes.txt", "meeting notes");
+              const done = llm.text("haiku", "Summarize.", ["/notes.txt"]);
+              return done.ok ? done.value : done.message;
+            }"#;
+        let first = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(Arc::clone(&history) as Arc<dyn EffectHistory>)
+            .run(source)
+            .await;
+        assert_eq!(first.expect("live run"), "summary");
+        history.replay();
+        let second = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(history)
+            .run(source)
+            .await;
+        assert_eq!(second.expect("replayed run"), "summary");
+        assert_eq!(provider.invoked(), 1, "replay must not call the provider");
+    }
+
+    /// A file several prompts of a batch send is gated as `fs.read` once, not
+    /// once per prompt, and each prompt still gets its answer.
+    #[tokio::test]
+    async fn a_file_several_prompts_send_is_gated_once() {
+        let provider = QueuedProvider::new(vec![Vec::new()]);
+        let (policy, contexts) = RecordingPolicy::new(|_| CheckOutcome::Allow { rule: None });
+        let out = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .policy(policy)
+            .run(
+                r#"import llm from "submilli:llm";
+                   import fs from "submilli:fs";
+                   function main(): string {
+                     fs.writeText("/report.txt", "Q3 revenue grew.");
+                     fs.writeText("/notes.txt", "Supplier delays.");
+                     const r = llm.texts("haiku", [
+                       { prompt: "Revenue?", files: ["/report.txt"] },
+                       { prompt: "Risks?", files: ["/report.txt", "/notes.txt"] },
+                       "No files.",
+                     ]);
+                     return r.length + ":" + r.filter((c) => c.ok).length;
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "3:3");
+        let reads: Vec<serde_json::Value> = contexts
+            .lock()
+            .expect("contexts")
+            .iter()
+            .filter(|context| {
+                context.as_object().is_some_and(|fields| fields.len() == 1)
+                    && context.get("path").is_some()
+            })
+            .cloned()
+            .collect();
+        assert_eq!(
+            reads,
+            vec![
+                serde_json::json!({ "path": "/report.txt" }),
+                serde_json::json!({ "path": "/notes.txt" }),
+            ],
+            "each distinct file is gated once, in the order first named"
+        );
+        assert_eq!(provider.invoked(), 1, "one dispatch for the batch");
+    }
+
     fn llm_call(
         model: &str,
         input: Option<u64>,
@@ -2989,6 +3344,23 @@ mod tests {
                             .unwrap_or_else(|| LlmOutcome::success(format!("answer {index}")))
                     })
                     .collect())
+            })
+        }
+
+        // Takes files and answers as if they were not there.
+        fn call_with_files<'a>(
+            &'a self,
+            model: &'a str,
+            prompts: &'a [LlmPrompt],
+            schema_json: Option<&'a str>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let texts: Vec<String> = prompts.iter().map(|prompt| prompt.text.clone()).collect();
+                self.call(model, &texts, schema_json).await
             })
         }
 
@@ -3104,5 +3476,53 @@ mod tests {
         async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod file_token_tests {
+    use super::{IMAGE_TOKENS, PDF_PAGE_TOKENS, file_tokens, pdf_page_count};
+    use crate::runtime::llm::{LlmFile, LlmFileKind};
+
+    fn file(kind: LlmFileKind, bytes: &[u8]) -> LlmFile {
+        LlmFile {
+            name: "f".into(),
+            kind,
+            bytes: bytes.into(),
+        }
+    }
+
+    #[test]
+    fn a_pdf_counts_its_pages_and_not_its_page_tree() {
+        let pdf = b"%PDF-1.4 1 0 obj<</Type /Pages/Count 2>> 2 0 obj<</Type/Page>> \
+                    3 0 obj<</Type /Page /Parent 1 0 R>> 4 0 obj<</Type /PageLabel>>";
+        assert_eq!(pdf_page_count(pdf), 2);
+        assert_eq!(
+            file_tokens(&file(LlmFileKind::Pdf, pdf)),
+            2 * PDF_PAGE_TOKENS
+        );
+    }
+
+    #[test]
+    fn a_pdf_with_hidden_pages_reserves_by_size_up_to_a_hundred_pages() {
+        let one_shown_page = [b"<</Type /Page>>".as_slice(), &[b'x'; 1 << 20]].concat();
+        assert_eq!(
+            file_tokens(&file(LlmFileKind::Pdf, &one_shown_page)),
+            (one_shown_page.len() as u64).div_ceil(4)
+        );
+        let small = vec![b'x'; 400];
+        assert_eq!(file_tokens(&file(LlmFileKind::Pdf, &small)), 100);
+        let large = vec![b'x'; 8 * 1024 * 1024];
+        assert_eq!(
+            file_tokens(&file(LlmFileKind::Pdf, &large)),
+            100 * PDF_PAGE_TOKENS
+        );
+    }
+
+    #[test]
+    fn an_image_reserves_a_flat_count_and_text_its_size() {
+        let big = vec![0u8; 1 << 20];
+        assert_eq!(file_tokens(&file(LlmFileKind::Png, &big)), IMAGE_TOKENS);
+        assert_eq!(file_tokens(&file(LlmFileKind::Text, b"12345")), 2);
     }
 }

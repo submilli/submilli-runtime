@@ -487,49 +487,78 @@ async fn read_whole_capped(
         path.to_owned(),
         move |caller, effect_id, path| {
             Box::pin(async move {
-                charge_path_work(caller, &[&path])?;
-                let filesystem = caller.data().filesystem.clone();
-                let work = begin_work(caller)?;
-                let meta = filesystem
-                    .metadata(&effect_id, Some(work.clone()), &path, true)
-                    .await
-                    .map_err(|e| backend_error(&ctx, &path, e))?;
-                if meta.is_dir() {
-                    wasmtime::bail!("{ctx} {}: path is a directory", path);
-                }
-                if meta.len() > caller.data().fs_max_read_size {
-                    record_payload(&*caller, ticket, Side::Response, || {
-                        Payload::meta(serde_json::json!({ "over_max_read_size": meta.len() }))
-                            .with_size(0)
-                    });
-                    return Ok(None);
-                }
-                // The size is known before the read, so the charge comes first.
-                fuel::charge(&mut *caller, fuel::IO, meta.len())?;
-                let bytes = filesystem
-                    .read(
-                        &effect_id,
-                        Some(work.clone()),
-                        &path,
-                        0,
-                        caller.data().fs_max_read_size.saturating_add(1),
-                    )
-                    .await
-                    .map_err(|e| backend_error(&ctx, &path, e))?;
-                // Detect growth since metadata instead of returning a truncated whole file.
-                if bytes.len() as u64 > caller.data().fs_max_read_size {
-                    work.settle(&mut *caller)?;
-                    return Ok(None);
-                }
-                record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::Value::Null).with_body(&bytes)
-                });
-                work.settle(&mut *caller)?;
-                Ok(Some(runtime_effects::OutcomeBytes(bytes)))
+                let max = caller.data().fs_max_read_size;
+                Ok(
+                    match read_whole(caller, &effect_id, &path, &ctx, ticket, max).await? {
+                        WholeFile::Read(bytes) => Some(runtime_effects::OutcomeBytes(bytes)),
+                        WholeFile::TooLarge { .. } => None,
+                    },
+                )
             })
         },
     )
     .await
+}
+
+/// A whole-file read: its bytes, or a refusal because it held more than the
+/// bound, with the size it was found to have.
+pub(crate) enum WholeFile {
+    Read(Vec<u8>),
+    TooLarge { size: u64 },
+}
+
+/// Load the whole file at `path`, already gated under `fs.read` as `ticket`,
+/// unless it holds more than `max` bytes. Runs inside the caller's effect,
+/// which owns `effect_id`.
+pub(crate) async fn read_whole(
+    caller: &mut Caller<'_, StoreData>,
+    effect_id: &crate::runtime::durable::EffectId,
+    path: &str,
+    ctx: &str,
+    ticket: Option<CallTicket>,
+    max: u64,
+) -> wasmtime::Result<WholeFile> {
+    charge_path_work(caller, &[path])?;
+    let filesystem = caller.data().filesystem.clone();
+    let work = begin_work(caller)?;
+    let meta = filesystem
+        .metadata(effect_id, Some(work.clone()), path, true)
+        .await
+        .map_err(|e| backend_error(ctx, path, e))?;
+    if meta.is_dir() {
+        wasmtime::bail!("{ctx} {}: path is a directory", path);
+    }
+    if meta.len() > max {
+        record_payload(&*caller, ticket, Side::Response, || {
+            Payload::meta(serde_json::json!({ "over_limit": meta.len(), "limit": max }))
+                .with_size(0)
+        });
+        return Ok(WholeFile::TooLarge { size: meta.len() });
+    }
+    // The size is known before the read, so the charge comes first.
+    fuel::charge(&mut *caller, fuel::IO, meta.len())?;
+    let bytes = filesystem
+        .read(
+            effect_id,
+            Some(work.clone()),
+            path,
+            0,
+            max.saturating_add(1),
+        )
+        .await
+        .map_err(|e| backend_error(ctx, path, e))?;
+    // Detect growth since metadata instead of returning a truncated whole file.
+    if bytes.len() as u64 > max {
+        work.settle(&mut *caller)?;
+        return Ok(WholeFile::TooLarge {
+            size: bytes.len() as u64,
+        });
+    }
+    record_payload(&*caller, ticket, Side::Response, || {
+        Payload::meta(serde_json::Value::Null).with_body(&bytes)
+    });
+    work.settle(&mut *caller)?;
+    Ok(WholeFile::Read(bytes))
 }
 
 /// `readBytes(path, offset, length)`: validated random-access range read; may

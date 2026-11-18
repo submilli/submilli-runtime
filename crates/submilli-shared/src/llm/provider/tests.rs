@@ -1112,3 +1112,47 @@ async fn empty_batches_still_validate_credentials() {
         Err(LlmCallError::Unauthorized { .. })
     ));
 }
+
+/// Every prompt of a call carries the call's files to the dispatch.
+#[tokio::test]
+async fn each_prompt_is_dispatched_with_its_own_files() {
+    #[derive(Default)]
+    struct FileNames(Mutex<Vec<Vec<String>>>);
+
+    impl ModelDispatch for FileNames {
+        fn dispatch<'a>(
+            &'a self,
+            request: ModelRequest<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderFailure>> + Send + 'a>>
+        {
+            let names = request.files.iter().map(|file| file.name.clone()).collect();
+            self.0.lock().expect("lock").push(names);
+            Box::pin(async move { Ok(stopped("ok")) })
+        }
+    }
+
+    let seen = Arc::new(FileNames::default());
+    let provider =
+        BlueprintLlmProvider::new(blueprint(), Arc::clone(&seen) as Arc<dyn ModelDispatch>);
+    let file = interpreter::runtime::LlmFile {
+        name: "notes.md".to_string(),
+        kind: interpreter::runtime::LlmFileKind::Text,
+        bytes: b"# Notes".as_slice().into(),
+    };
+    let prompts = vec![
+        interpreter::runtime::LlmPrompt {
+            text: "a".to_string(),
+            files: vec![file],
+        },
+        interpreter::runtime::LlmPrompt::text("b"),
+    ];
+    provider
+        .call_with_files(MODEL, &prompts, None)
+        .await
+        .expect("dispatch");
+
+    // Each request carries its own prompt's files, and only those.
+    let mut seen = seen.0.lock().expect("lock").clone();
+    seen.sort();
+    assert_eq!(seen, vec![vec![], vec!["notes.md".to_string()]]);
+}

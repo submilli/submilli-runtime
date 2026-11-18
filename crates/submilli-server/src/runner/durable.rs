@@ -200,6 +200,8 @@ pub(crate) fn restore_limits(
                 max_prompt_count: saved.max_prompt_count,
                 max_prompt_bytes: saved.max_prompt_bytes,
                 default_output_cap: saved.default_output_cap,
+                // Not saved: no server setting changes it from the default.
+                ..interpreter::runtime::LlmLimits::default()
             },
             sessions.llm_budget().clone(),
         ))

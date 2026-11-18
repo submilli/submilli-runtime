@@ -30,6 +30,8 @@
 //! (R13/KTD7); the ladder in [`super::provider`] is what enforces that, and this
 //! module's job is only to fill them faithfully.
 
+use base64::Engine as _;
+use interpreter::runtime::{LlmFile, LlmFileKind};
 use serde_json::{Map, Value, json};
 
 use super::provider::{ProviderFailure, ProviderResponse, ProviderUsage, StopReason};
@@ -113,25 +115,29 @@ pub struct WireRequest {
 /// `base_url` is the row's `base_url` if it declared one, else the kind's
 /// default. `api_key` is already resolved; it is placed in a header and
 /// returned, never logged.
+// One argument per part of the request, and every kind reads each of them.
+#[allow(clippy::too_many_arguments)]
 pub fn build_request(
     kind: ProviderKind,
     base_url: &str,
     model: &str,
     prompt: &str,
+    files: &[LlmFile],
     schema_json: Option<&Value>,
     output_cap: Option<u64>,
     api_key: Option<&str>,
 ) -> WireRequest {
     let base = base_url.trim_end_matches('/');
+    let content = user_content(kind, prompt, files);
     match kind {
         ProviderKind::Anthropic => {
-            anthropic_request(base, model, prompt, schema_json, output_cap, api_key)
+            anthropic_request(base, model, content, schema_json, output_cap, api_key)
         }
         ProviderKind::Google => {
-            google_request(base, model, prompt, schema_json, output_cap, api_key)
+            google_request(base, model, content, schema_json, output_cap, api_key)
         }
         ProviderKind::OpenAi | ProviderKind::OpenAiCompatible => {
-            openai_request(kind, base, model, prompt, schema_json, output_cap, api_key)
+            openai_request(kind, base, model, content, schema_json, output_cap, api_key)
         }
     }
 }
@@ -153,7 +159,7 @@ pub fn build_request(
 fn anthropic_request(
     base: &str,
     model: &str,
-    prompt: &str,
+    content: Value,
     schema_json: Option<&Value>,
     output_cap: Option<u64>,
     api_key: Option<&str>,
@@ -166,7 +172,7 @@ fn anthropic_request(
         ),
         (
             "messages".into(),
-            json!([{ "role": "user", "content": prompt }]),
+            json!([{ "role": "user", "content": content }]),
         ),
     ]);
     if let Some(schema) = schema_json {
@@ -208,7 +214,7 @@ fn anthropic_request(
 fn google_request(
     base: &str,
     model: &str,
-    prompt: &str,
+    parts: Value,
     schema_json: Option<&Value>,
     output_cap: Option<u64>,
     api_key: Option<&str>,
@@ -230,7 +236,7 @@ fn google_request(
 
     let mut body = Map::from_iter([(
         "contents".into(),
-        json!([{ "role": "user", "parts": [{ "text": prompt }] }]),
+        json!([{ "role": "user", "parts": parts }]),
     )]);
     if !generation_config.is_empty() {
         body.insert(
@@ -286,7 +292,7 @@ fn openai_request(
     kind: ProviderKind,
     base: &str,
     model: &str,
-    prompt: &str,
+    content: Value,
     schema_json: Option<&Value>,
     output_cap: Option<u64>,
     api_key: Option<&str>,
@@ -295,7 +301,7 @@ fn openai_request(
         ("model".into(), json!(model)),
         (
             "messages".into(),
-            json!([{ "role": "user", "content": prompt }]),
+            json!([{ "role": "user", "content": content }]),
         ),
     ]);
     if let Some(cap) = output_cap {
@@ -324,6 +330,89 @@ fn openai_request(
         headers,
         body: Value::Object(body),
     }
+}
+
+/// The one user message's content: the prompt alone, or `files` before it,
+/// each in the form its kind documents. Long documents go first because
+/// Anthropic's guidance places them above the question
+/// (<https://docs.claude.com/en/docs/build-with-claude/prompt-engineering/long-context-tips>).
+///
+/// - Anthropic: a PDF and a text file are `document` blocks
+///   (<https://docs.claude.com/en/docs/build-with-claude/pdf-support>,
+///   <https://docs.claude.com/en/docs/build-with-claude/citations>), an image an
+///   `image` block.
+/// - OpenAI: a PDF is a `file` part with `file_data`, the only file type chat
+///   completions takes (<https://platform.openai.com/docs/guides/pdf-files>); an
+///   image is an `image_url` data URL; a text file is a `text` part headed by
+///   its name.
+/// - Google: every kind is an `inlineData` part with its MIME type
+///   (<https://ai.google.dev/gemini-api/docs/document-processing>). Google's
+///   content is always a list of parts.
+fn user_content(kind: ProviderKind, prompt: &str, files: &[LlmFile]) -> Value {
+    let is_google = matches!(kind, ProviderKind::Google);
+    if files.is_empty() && !is_google {
+        return json!(prompt);
+    }
+    let prompt_part = if is_google {
+        json!({ "text": prompt })
+    } else {
+        json!({ "type": "text", "text": prompt })
+    };
+    let mut parts: Vec<Value> = files.iter().map(|file| file_part(kind, file)).collect();
+    // Providers refuse an empty text part; files alone are a whole message.
+    if parts.is_empty() || !prompt.is_empty() {
+        parts.push(prompt_part);
+    }
+    Value::Array(parts)
+}
+
+fn file_part(kind: ProviderKind, file: &LlmFile) -> Value {
+    let media_type = file.kind.media_type();
+    let base64 = || base64::engine::general_purpose::STANDARD.encode(&file.bytes);
+    let text = || String::from_utf8_lossy(&file.bytes).into_owned();
+    match (kind, file.kind) {
+        (ProviderKind::Anthropic, LlmFileKind::Text) => json!({
+            "type": "document",
+            "title": file.name,
+            "source": { "type": "text", "media_type": media_type, "data": text() },
+        }),
+        (ProviderKind::Anthropic, LlmFileKind::Pdf) => json!({
+            "type": "document",
+            "title": file.name,
+            "source": { "type": "base64", "media_type": media_type, "data": base64() },
+        }),
+        (ProviderKind::Anthropic, _) => json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": media_type, "data": base64() },
+        }),
+        (ProviderKind::Google, _) => json!({
+            "inlineData": { "mimeType": media_type, "data": base64() },
+        }),
+        (ProviderKind::OpenAi | ProviderKind::OpenAiCompatible, LlmFileKind::Pdf) => json!({
+            "type": "file",
+            "file": {
+                "filename": pdf_file_name(&file.name),
+                "file_data": format!("data:{media_type};base64,{}", base64()),
+            },
+        }),
+        (ProviderKind::OpenAi | ProviderKind::OpenAiCompatible, LlmFileKind::Text) => json!({
+            "type": "text",
+            "text": format!("{}:\n{}", file.name, text()),
+        }),
+        (ProviderKind::OpenAi | ProviderKind::OpenAiCompatible, _) => json!({
+            "type": "image_url",
+            "image_url": { "url": format!("data:{media_type};base64,{}", base64()) },
+        }),
+    }
+}
+
+/// OpenAI tells a file input's type from its name, so a PDF whose name does not
+/// say so is named as one.
+fn pdf_file_name(name: &str) -> String {
+    if name.to_ascii_lowercase().ends_with(".pdf") {
+        return name.to_owned();
+    }
+    format!("{name}.pdf")
 }
 
 /// Parse a 2xx body into a [`ProviderResponse`].
