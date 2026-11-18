@@ -6,6 +6,7 @@
 
 use crate::compiler_error::CompilerFailure;
 
+use std::cell::LazyCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
@@ -1899,7 +1900,9 @@ impl<'a> Inferer<'a> {
             Type::InterfaceRef { args, .. } => args.as_slice(),
             _ => &[],
         };
-        let candidates = runtime_carrier_candidates(members);
+        // Only inspect nested member types when compatibility depends on
+        // the collection's type arguments.
+        let candidates = LazyCell::new(|| runtime_carrier_candidates(members));
         let mut carriers =
             self.array_and_set_interface_carriers(target, name, target_args, &candidates, members);
         carriers.extend(self.map_interface_carriers(
@@ -2005,7 +2008,7 @@ impl<'a> Inferer<'a> {
         target: &Type,
         name: &str,
         target_args: &[Type],
-        candidates: &[Type],
+        candidates: &LazyCell<Vec<Type>, impl FnOnce() -> Vec<Type>>,
         members: &std::collections::BTreeMap<String, crate::ObjectField>,
     ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
         let mut carriers = std::collections::BTreeSet::new();
@@ -2029,35 +2032,31 @@ impl<'a> Inferer<'a> {
             // only the matching instantiations and validate their contents.
             let array_fit =
                 self.carrier_fit(&Type::Array(Box::new(Type::Unknown)), target, members);
-            let array_matches = array_fit.matching(candidates, |element| {
-                let array = Type::Array(Box::new(element.clone()));
-                let tuple = Type::Tuple(vec![element.clone()].into());
-                super::assignable(&array, target, self.resolver())
-                    || super::assignable(&tuple, target, self.resolver())
-            });
-            if array_matches.len() == candidates.len() {
-                carriers.insert(crate::InterfaceCarrier::ArrayAny);
-            } else {
-                carriers.extend(
-                    array_matches.into_iter().map(|element| {
-                        crate::InterfaceCarrier::Array(Type::Array(Box::new(element)))
-                    }),
-                );
-            }
+            carriers.extend(array_fit.unary_carriers(
+                candidates,
+                crate::InterfaceCarrier::ArrayAny,
+                |element| crate::InterfaceCarrier::Array(Type::Array(Box::new(element))),
+                |element| {
+                    let array = Type::Array(Box::new(element.clone()));
+                    let tuple = Type::Tuple(vec![element.clone()].into());
+                    super::assignable(&array, target, self.resolver())
+                        || super::assignable(&tuple, target, self.resolver())
+                },
+            ));
             let set_fit = self.carrier_fit(
                 &Type::prelude_interface("Set".to_string(), vec![Type::Unknown]),
                 target,
                 members,
             );
-            let set_matches = set_fit.matching(candidates, |element| {
-                let set = Type::prelude_interface("Set".to_string(), vec![element.clone()]);
-                super::assignable(&set, target, self.resolver())
-            });
-            if set_matches.len() == candidates.len() {
-                carriers.insert(crate::InterfaceCarrier::SetAny);
-            } else {
-                carriers.extend(set_matches.into_iter().map(crate::InterfaceCarrier::Set));
-            }
+            carriers.extend(set_fit.unary_carriers(
+                candidates,
+                crate::InterfaceCarrier::SetAny,
+                crate::InterfaceCarrier::Set,
+                |element| {
+                    let set = Type::prelude_interface("Set".to_string(), vec![element.clone()]);
+                    super::assignable(&set, target, self.resolver())
+                },
+            ));
         }
         carriers
     }
@@ -2067,7 +2066,7 @@ impl<'a> Inferer<'a> {
         target: &Type,
         name: &str,
         target_args: &[Type],
-        candidates: &[Type],
+        candidates: &LazyCell<Vec<Type>, impl FnOnce() -> Vec<Type>>,
         members: &std::collections::BTreeMap<String, crate::ObjectField>,
     ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
         let mut carriers = std::collections::BTreeSet::new();
@@ -4610,17 +4609,28 @@ enum CarrierFit {
 }
 
 impl CarrierFit {
-    /// The candidates whose instantiation satisfies the target, trying each
-    /// with `satisfies` only when the fit is not already decided.
-    fn matching(self, candidates: &[Type], mut satisfies: impl FnMut(&Type) -> bool) -> Vec<Type> {
+    fn unary_carriers(
+        self,
+        candidates: &LazyCell<Vec<Type>, impl FnOnce() -> Vec<Type>>,
+        unrestricted: crate::InterfaceCarrier,
+        exact: impl FnMut(Type) -> crate::InterfaceCarrier,
+        mut satisfies: impl FnMut(&Type) -> bool,
+    ) -> BTreeSet<crate::InterfaceCarrier> {
         match self {
-            Self::None => Vec::new(),
-            Self::Every => candidates.to_vec(),
-            Self::TryEach => candidates
-                .iter()
-                .filter(|candidate| satisfies(candidate))
-                .cloned()
-                .collect(),
+            Self::None => BTreeSet::new(),
+            Self::Every => BTreeSet::from([unrestricted]),
+            Self::TryEach => {
+                let matching: Vec<_> = candidates
+                    .iter()
+                    .filter(|candidate| satisfies(candidate))
+                    .cloned()
+                    .collect();
+                if matching.len() == candidates.len() {
+                    BTreeSet::from([unrestricted])
+                } else {
+                    matching.into_iter().map(exact).collect()
+                }
+            }
         }
     }
 }

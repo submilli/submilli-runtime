@@ -42,7 +42,7 @@ use crate::CapabilitySchema;
 // shapes, so a reader that asks for a runnable artifact refuses a version it
 // does not understand instead of decoding it with the wrong types.
 // v21: closure property state and deletable match-array metadata change Wasm layouts.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 21;
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 22;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";

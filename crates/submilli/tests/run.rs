@@ -1243,29 +1243,46 @@ fn operations_charge_for_the_input_they_process() {
         stderr(&stopped)
     );
 
-    let mut iterator_costs = Vec::new();
     for count in [128, 256] {
-        let setup =
-            format!("const values:number[]=[]; for(let i=0;i<{count};i++){{ values.push(i); }}");
-        let baseline = host_fuel(
-            "iterator-baseline",
-            &format!("function main():number{{ {setup} return 0; }}"),
-        );
-        let actual = host_fuel(
+        let loop_body = "let sum=0; for(const value of it){ sum+=value; } return sum % 10;";
+        let loop_cost = |name: &str, setup: &str| {
+            let baseline = host_fuel(
+                "iterator-baseline",
+                &format!("function main():number{{ {setup} return 0; }}"),
+            );
+            host_fuel(
+                name,
+                &format!("function main():number{{ {setup} {loop_body} }}"),
+            ) - baseline
+        };
+        let actual = loop_cost(
             "iterator-results",
             &format!(
-                "function main():number{{ {setup} let sum=0; for(const value of values.values()){{ sum+=value; }} return sum % 10; }}"
+                "const values:number[]=[]; for(let i=0;i<{count};i++){{ values.push(i); }}
+                 const it = values.values();"
             ),
-        ) - baseline;
-        eprintln!("iterator {count}: {actual}");
-        let old = if count == 128 { 16_262 } else { 32_390 };
-        assert!(
-            actual < old - (count as u64) * 8,
-            "iterator allocation fuel: {actual}, old {old}"
         );
-        iterator_costs.push(actual);
+        // The control uses the same structural method dispatch and result
+        // reads, but reuses both results and advances its cursor in Wasm.
+        let dispatch = loop_cost(
+            "iterator-dispatch",
+            &format!(
+                "const done: IteratorResult<number> = {{ done: true, value: undefined }};
+                 const item: IteratorResult<number> = {{ done: false, value: 1 }};
+                 let remaining = {count};
+                 const it: Iterator<number> = {{
+                     next(): IteratorResult<number> {{ return remaining-- > 0 ? item : done; }}
+                 }};"
+            ),
+        );
+        let steps = (count + 1) * CALL;
+        // Allow one flat charge for differences in the first field lookup.
+        // Each subsequent step should pay only CALL, including its result.
+        assert!(
+            (dispatch + steps..=dispatch + steps + CALL).contains(&actual),
+            "iterator {count}: fuel {actual}, dispatch {dispatch}, steps {steps}"
+        );
     }
-    assert!(iterator_costs[1] < iterator_costs[0] * 5 / 2);
 
     let mut callback_default_costs = Vec::new();
     for count in [128, 256] {
