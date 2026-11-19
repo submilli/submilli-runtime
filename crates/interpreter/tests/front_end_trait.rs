@@ -12,8 +12,9 @@ use submilli_engine::runtime::{
 use submilli_engine::{
     CheckedPackage, CheckedScript, CompileError, CompiledScript, Diagnostic, EngineFrontEnd,
     FileId, FrontEnd, ModulePath, PackageDeclaration, PackageRequest, PackageSourceModule,
-    PackageSurface, ParsedScript, RuntimeConfig, ScriptRequest, Severity, Stdlib, classify_imports,
-    dispatch_main_async, runtime_declarations, script_request,
+    PackageSurface, ParsedScript, RuntimeConfig, ScriptRequest, Severity, Stdlib, TypeKind,
+    TypedTypeDecl, Visibility, classify_imports, dispatch_main_async, runtime_declarations,
+    script_request,
 };
 use wasmtime::{Linker, Module};
 
@@ -33,7 +34,9 @@ function main(): string { return greet("world"); }
 /// built, as another implementation (ts-rust) would hand back its own. It
 /// drops the engine front end's warnings, so a Submilli diagnostic that still
 /// appears comes from the engine's back end, not from a front end.
-struct Relay;
+struct Relay {
+    edit_package: fn(&mut CheckedPackage),
+}
 
 struct RelayedScript(Box<dyn ParsedScript>);
 
@@ -45,6 +48,7 @@ impl FrontEnd for Relay {
     fn check_package(&self, request: &PackageRequest<'_>) -> Result<CheckedPackage, CompileError> {
         let mut checked = EngineFrontEnd.check_package(request)?;
         checked.diagnostics.retain(is_error);
+        (self.edit_package)(&mut checked);
         Ok(checked)
     }
 }
@@ -183,7 +187,12 @@ fn error_messages(error: CompileError) -> Vec<String> {
 }
 
 fn front_ends() -> [&'static dyn FrontEnd; 2] {
-    [&EngineFrontEnd, &Relay]
+    [
+        &EngineFrontEnd,
+        &Relay {
+            edit_package: |_| {},
+        },
+    ]
 }
 
 #[test]
@@ -196,6 +205,62 @@ fn a_script_and_a_package_compile_and_run_through_either_front_end() {
         });
         assert_eq!(run(&package, &script), "hello, world");
     }
+}
+
+#[test]
+fn protected_package_members_have_public_runtime_behavior() {
+    let library = r#"
+        export class Base {
+            field: number = 7;
+            constructor() {}
+            method(): number { return this.field; }
+            static count(): number { return 2; }
+        }
+    "#;
+    let script = r#"
+        import { Base } from "@test/greeting";
+        class Derived extends Base {
+            constructor() { super(); }
+            read(): string {
+                const count: () => number = Derived.count;
+                return this.method() + ":" + count() + ":" + Object.keys(this).join(",");
+            }
+        }
+        function main(): string { return new Derived().read(); }
+    "#;
+    let (package, script) = on_small_stack(move || {
+        let front_end = Relay {
+            edit_package: protect_base_members,
+        };
+        let package = compile_package(&front_end, library);
+        let script = compile_script(&EngineFrontEnd, script, &[&package.declaration]).unwrap();
+        (package, script)
+    });
+    assert_eq!(run(&package, &script), "7:2:field");
+}
+
+fn protect_base_members(package: &mut CheckedPackage) {
+    let [TypedTypeDecl::Class(class)] = package.typed_ast.types.as_mut_slice() else {
+        panic!("expected one class");
+    };
+    class.fields[0].visibility = Visibility::Protected;
+    class.methods[0].visibility = Visibility::Protected;
+    *class.static_methods.get_mut("count").unwrap() = Visibility::Protected;
+
+    let TypeKind::Class {
+        fields,
+        method_visibility,
+        static_visibility,
+        constructor_visibility,
+        ..
+    } = &mut package.declaration.types.get_mut("Base").unwrap().kind
+    else {
+        panic!("expected a class declaration");
+    };
+    fields.get_mut("field").unwrap().visibility = Visibility::Protected;
+    method_visibility.insert("method".into(), Visibility::Protected);
+    static_visibility.insert("count".into(), Visibility::Protected);
+    *constructor_visibility = Visibility::Protected;
 }
 
 #[test]

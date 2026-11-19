@@ -1133,10 +1133,12 @@ pub enum TypeKind {
         /// the type system. Carries the setter's parameter name + type so the
         /// public surface (docs, `.d.ts`) renders the full signature.
         accessors: Vec<AccessorSig>,
-        /// Constructor parameter signature (no return type).
+        /// Effective constructor parameter signature, including inherited parameters.
         constructor: Vec<Param>,
         /// A `private` constructor may be called, and the class extended, only in
         /// the module that declares the class.
+        /// A `protected` constructor may be called within the class and its
+        /// subclasses. The class may be extended across packages.
         #[serde(default, skip_serializing_if = "crate::Visibility::is_public")]
         constructor_visibility: crate::Visibility,
         /// Static methods — self-less functions dispatched by name on the class

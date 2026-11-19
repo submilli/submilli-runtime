@@ -5023,6 +5023,7 @@ fn visibility_keyword(v: Visibility) -> &'static str {
     match v {
         Visibility::Public => "public",
         Visibility::Private => "private",
+        Visibility::Protected => "protected",
     }
 }
 

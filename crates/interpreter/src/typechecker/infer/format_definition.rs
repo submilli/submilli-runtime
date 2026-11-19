@@ -281,8 +281,7 @@ fn write_interface(
         if let Some(doc) = &sig.doc {
             write_doc_block(out, "  ", doc)?;
         }
-        out.push("  ")?;
-        write_method(out, prefix, sig, &sub, limits)?;
+        write_method(out, prefix, "", sig, &sub, limits)?;
         out.push("\n")?;
     }
     for (name, sig) in methods {
@@ -290,8 +289,14 @@ fn write_interface(
         if let Some(doc) = &sig.doc {
             write_doc_block(out, "  ", doc)?;
         }
-        out.push("  ")?;
-        write_method(out, &crate::packages::method_name(name), sig, &sub, limits)?;
+        write_method(
+            out,
+            &crate::packages::method_name(name),
+            "",
+            sig,
+            &sub,
+            limits,
+        )?;
         out.push("\n")?;
     }
     out.push("}")
@@ -450,23 +455,27 @@ fn write_class(
             out.push(">")?;
         }
     }
-    let has_members = chain.iter().any(|link| match &link.sym.kind {
-        TypeKind::Class {
-            fields,
-            methods,
-            statics,
-            static_fields,
-            constructor,
-            ..
-        } => {
-            !fields.is_empty()
-                || !methods.is_empty()
-                || !statics.is_empty()
-                || !static_fields.is_empty()
-                || !constructor.is_empty()
-        }
-        _ => false,
-    });
+    let has_members = chain
+        .iter()
+        .enumerate()
+        .any(|(index, link)| match &link.sym.kind {
+            TypeKind::Class {
+                fields,
+                methods,
+                statics,
+                static_fields,
+                constructor,
+                constructor_visibility,
+                ..
+            } => {
+                !fields.is_empty()
+                    || !methods.is_empty()
+                    || !statics.is_empty()
+                    || !static_fields.is_empty()
+                    || (index == 0 && show_constructor(constructor, *constructor_visibility))
+            }
+            _ => false,
+        });
     if !has_members {
         return out.push(" {}");
     }
@@ -577,19 +586,12 @@ fn write_class_methods<'a>(
             if !first_member(out, seen, name)? {
                 continue;
             }
-            out.format(format_args!(
-                "  {}{}",
-                visibility_prefix(
-                    visibility
-                        .get(name)
-                        .copied()
-                        .unwrap_or(crate::Visibility::Public)
-                ),
-                if is_static { "static " } else { "" }
-            ))?;
+            let access = visibility_prefix(visibility.get(name).copied().unwrap_or_default());
+            let static_modifier = if is_static { "static " } else { "" };
             write_method(
                 out,
                 name,
+                format_args!("{access}{static_modifier}"),
                 sig,
                 if is_static { &empty } else { &link.sub },
                 limits,
@@ -605,34 +607,39 @@ fn write_constructor(
     chain: &[ClassLink<'_>],
     limits: &CopyBudget,
 ) -> Result<(), RenderError> {
-    for (i, link) in chain.iter().enumerate() {
-        let TypeKind::Class {
-            constructor,
-            constructor_visibility,
-            ..
-        } = &link.sym.kind
-        else {
-            return Err(RenderError::InvalidMetadata("class has wrong kind"));
-        };
-        if constructor.is_empty() {
-            continue;
-        }
-        out.format(format_args!(
-            "  {}constructor(",
-            visibility_prefix(*constructor_visibility)
-        ))?;
-        super::format_signature::write_params(out, constructor, &link.sub, limits)?;
-        out.push(");")?;
-        return inherited(out, link, i);
+    // Class metadata already holds the effective constructor, including when
+    // the front end inherited its signature from a parent.
+    let Some(link) = chain.first() else {
+        return Ok(());
+    };
+    let TypeKind::Class {
+        constructor,
+        constructor_visibility,
+        ..
+    } = &link.sym.kind
+    else {
+        return Err(RenderError::InvalidMetadata("class has wrong kind"));
+    };
+    if !show_constructor(constructor, *constructor_visibility) {
+        return Ok(());
     }
-    Ok(())
+    out.format(format_args!(
+        "  {}constructor(",
+        visibility_prefix(*constructor_visibility)
+    ))?;
+    super::format_signature::write_params(out, constructor, &link.sub, limits)?;
+    out.push(");\n")
+}
+
+fn show_constructor(params: &[crate::Param], visibility: crate::Visibility) -> bool {
+    !params.is_empty() || visibility == crate::Visibility::Protected
 }
 
 fn visibility_prefix(visibility: crate::Visibility) -> &'static str {
-    if visibility == crate::Visibility::Private {
-        "private "
-    } else {
-        ""
+    match visibility {
+        crate::Visibility::Public => "",
+        crate::Visibility::Private => "private ",
+        crate::Visibility::Protected => "protected ",
     }
 }
 
@@ -663,6 +670,7 @@ fn header(
 fn write_method(
     out: &mut Writer,
     name: &str,
+    modifiers: impl std::fmt::Display + Copy,
     sig: &MethodSig,
     sub: &TypeParamSubstitution,
     limits: &CopyBudget,
@@ -670,14 +678,14 @@ fn write_method(
     if !sig.overloads.is_empty() {
         for (position, signature) in sig.signatures().enumerate() {
             if position > 0 {
-                out.push("\n  ")?;
+                out.push("\n")?;
             }
-            write_method(out, name, &signature, sub, limits)?;
+            write_method(out, name, modifiers, &signature, sub, limits)?;
         }
         return Ok(());
     }
 
-    out.push(name)?;
+    out.format(format_args!("  {modifiers}{name}"))?;
     if sig.optional {
         out.push("?")?;
     }
@@ -1131,6 +1139,61 @@ mod tests {
             out.contains("status: number;"),
             "expected the registry-resolved property body, got: {out}"
         );
+    }
+
+    #[test]
+    fn class_dump_uses_the_effective_constructor_visibility() {
+        use crate::Visibility;
+
+        let mut registry = TypeRegistry::new();
+        let base = crate::mangle::package_symbol("test", "Base");
+        let child = crate::mangle::package_symbol("test", "Child");
+        for (name, mangled_name, constructor_visibility, extends) in [
+            ("Base", base.clone(), Visibility::Protected, None),
+            (
+                "Child",
+                child.clone(),
+                Visibility::Public,
+                Some(crate::ClassExtends {
+                    parent: base.clone(),
+                    args: Vec::new(),
+                }),
+            ),
+        ] {
+            registry.insert_owned(TypeSymbol {
+                name: name.into(),
+                mangled_name,
+                declaration_span: Span::at(crate::FileId(0)),
+                kind: TypeKind::Class {
+                    generics: Default::default(),
+                    fields: BTreeMap::new(),
+                    narrowing_checks: BTreeMap::new(),
+                    methods: BTreeMap::new(),
+                    method_visibility: BTreeMap::new(),
+                    accessors: Vec::new(),
+                    constructor: Vec::new(),
+                    constructor_visibility,
+                    statics: BTreeMap::new(),
+                    static_visibility: BTreeMap::new(),
+                    static_fields: BTreeMap::new(),
+                    extends,
+                    implements: Vec::new(),
+                    doc: None,
+                },
+            });
+        }
+        let dump = |name, mangled| {
+            format_definition(
+                &Type::class_ref(crate::Package("test".into()), name, mangled, vec![]),
+                &empty_ns(),
+                &registry,
+            )
+        };
+        assert_eq!(
+            dump("Base", base),
+            "class Base {\n  protected constructor();\n}"
+        );
+        assert_eq!(dump("Child", child), "class Child extends Base {}");
     }
 
     #[test]

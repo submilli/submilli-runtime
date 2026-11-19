@@ -176,11 +176,11 @@ pub(super) fn is_static_field(ta: &TypedAst, mangled: &MangledName) -> bool {
 fn member_bodies(class: &TypedClassDecl, class_is_public: bool) -> Vec<Body<'_>> {
     let class_name = &class.name.name;
     let exposure = |visibility: Visibility| match (class_is_public, visibility) {
-        (false, Visibility::Public | Visibility::Private) => Exposure::Unexported {
+        (false, _) => Exposure::Unexported {
             symbol: class_name.clone(),
         },
         (true, Visibility::Private) => Exposure::PrivateMember,
-        (true, Visibility::Public) => Exposure::Public,
+        (true, Visibility::Public | Visibility::Protected) => Exposure::Public,
     };
     let constructor = class.constructor.iter().map(|constructor| Body {
         label: format!("new {class_name}"),
