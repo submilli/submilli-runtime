@@ -2668,6 +2668,9 @@ fn package_configuration_build_inputs_reach_runtime_and_documentation_checks() {
         "--config",
         "tag=\u{10fffe}\u{100000}",
     ];
+    let not_installed = build_subcommand("check", &project, tmp.path(), &[]);
+    assert!(!not_installed.status.success());
+    assert!(stderr(&not_installed).contains("missing required configuration parameter `baseUrl`"));
     for command in ["check", "test", "publish-local", "authority-map"] {
         let output = build_subcommand(command, &project, tmp.path(), &flags);
         assert!(output.status.success(), "{command}: {}", stderr(&output));
@@ -2677,6 +2680,18 @@ fn package_configuration_build_inputs_reach_runtime_and_documentation_checks() {
             "{command}: {capabilities}"
         );
     }
+    // A repository-wide build uses the installed overrides, as the error above suggests.
+    let repository_wide = build_subcommand("check", &project, tmp.path(), &[]);
+    assert!(
+        repository_wide.status.success(),
+        "{}",
+        stderr(&repository_wide)
+    );
+    let capabilities = fs::read_to_string(project.join("capabilities.yaml")).unwrap();
+    assert!(
+        capabilities.contains("host == \"configured.test\""),
+        "{capabilities}"
+    );
     let missing = build_subcommand("check", &project, tmp.path(), &["-p", "@pied-piper/search"]);
     assert!(!missing.status.success());
     assert!(stderr(&missing).contains("missing required configuration parameter `baseUrl`"));

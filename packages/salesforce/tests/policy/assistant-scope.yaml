@@ -1,0 +1,28 @@
+# Run by `policy_scripts_pass_under_their_blueprints` in crates/submilli/tests/package_policy.rs.
+# An assistant's agent: it emails only inside the company, runs one flow and one report,
+# reads its own approvals queue, logs calls and reads metadata. The package is granted
+# nothing, so an allowed call stops when the package reads the org's URL or its token.
+kind: blueprint
+name: salesforce-assistant-scope-test
+packages:
+  - '@submilli/salesforce'
+default: deny
+permissions:
+  main:
+    - capability: salesforce.com/email.send
+      filter: domain == "example.com"
+      action: allow
+    - capability: salesforce.com/flows.run
+      filter: flow == "escalate_case"
+      action: allow
+    - capability: salesforce.com/reports.run
+      filter: reportId == "00O000000000001EAA"
+      action: allow
+    - capability: salesforce.com/approvals.listPending
+      filter: actorId == "005000000000001AAA"
+      action: allow
+    - capability: salesforce.com/activities.log
+      filter: type == "call" and object == ""
+      action: allow
+    - capability: salesforce.com/objects.describe
+      action: allow

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+  <apiVersion>62.0</apiVersion>
+  <assignments>
+    <name>Greet</name><label>Greet</label><locationX>176</locationX><locationY>134</locationY>
+    <assignmentItems><assignToReference>greeting</assignToReference><operator>Assign</operator><value><elementReference>greetingText</elementReference></value></assignmentItems>
+    <assignmentItems><assignToReference>doubled</assignToReference><operator>Assign</operator><value><elementReference>doubledValue</elementReference></value></assignmentItems>
+  </assignments>
+  <formulas><name>doubledValue</name><dataType>Number</dataType><expression>{!count} * 2</expression><scale>0</scale></formulas>
+  <formulas><name>greetingText</name><dataType>String</dataType><expression>&quot;Hello &quot; &amp; {!name}</expression></formulas>
+  <interviewLabel>Submilli Test Flow {!$Flow.CurrentDateTime}</interviewLabel>
+  <label>Submilli Test Flow</label>
+  <processMetadataValues><name>BuilderType</name><value><stringValue>LightningFlowBuilder</stringValue></value></processMetadataValues>
+  <processType>AutoLaunchedFlow</processType>
+  <start><locationX>50</locationX><locationY>0</locationY><connector><targetReference>Greet</targetReference></connector></start>
+  <status>Active</status>
+  <variables><name>count</name><dataType>Number</dataType><isCollection>false</isCollection><isInput>true</isInput><isOutput>false</isOutput><scale>0</scale></variables>
+  <variables><name>doubled</name><dataType>Number</dataType><isCollection>false</isCollection><isInput>false</isInput><isOutput>true</isOutput><scale>0</scale></variables>
+  <variables><name>greeting</name><dataType>String</dataType><isCollection>false</isCollection><isInput>false</isInput><isOutput>true</isOutput></variables>
+  <variables><name>name</name><dataType>String</dataType><isCollection>false</isCollection><isInput>true</isInput><isOutput>false</isOutput></variables>
+</Flow>

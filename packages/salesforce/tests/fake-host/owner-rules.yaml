@@ -1,0 +1,40 @@
+# Run by `salesforce_owner_rules_hold_against_a_fake_salesforce` in
+# crates/submilli/tests/package_policy.rs, against the package installed with its org URL set to
+# a fake Salesforce on 127.0.0.1.
+kind: blueprint
+name: salesforce-owner-rules-fake-host-test
+allow_insecure_http: true
+packages:
+  - '@submilli/salesforce'
+secrets:
+  SALESFORCE_ACCESS_TOKEN:
+    store: policy-token
+default: deny
+permissions:
+  main:
+    - capability: salesforce.com/records.get
+      filter: ownerId == "005000000000001AAA"
+      action: allow
+    - capability: salesforce.com/records.update
+      filter: object == "opportunity" and ownerId == "005000000000001AAA"
+      action: allow
+    - capability: salesforce.com/records.delete
+      filter: ownerId == "005000000000001AAA"
+      action: allow
+    # Its own deals' stage, but not their amount.
+    - capability: salesforce.com/opportunities.update
+      filter: ownerId == "005000000000001AAA" and not (fields contains "amount")
+      action: allow
+  '@submilli/salesforce':
+    - capability: http.get
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.patch
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.delete
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: secrets.get
+      filter: name == "SALESFORCE_ACCESS_TOKEN"
+      action: allow

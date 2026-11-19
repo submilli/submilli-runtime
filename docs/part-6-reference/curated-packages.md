@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "96ce62cae6dce83bb1cf0bf1a83e300540975f1f4d0edbb39554989c89ececd9"
+  contentHash: "6be3a38ee62a5011c0ba22d078bf032dfc8b506933ed5ad5d8392c531167f28e"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -37,6 +37,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/linear`](#submillilinear) | Linear issues, comments, teams, projects, users, and agent sessions, through Linear's GraphQL API. | `LINEAR_API_KEY` | `api.linear.app` |
 | [`@submilli/notion`](#submillinotion) | Notion search, pages as enhanced Markdown, databases, data sources, views, comments, users, blocks, and file uploads. | `NOTION_ACCESS_TOKEN` | `api.notion.com` |
 | [`@submilli/posthog`](#submilliposthog) | PostHog Cloud (US) event reads in bounded, fully paged windows, event and property schema, cohort state, and event capture. | `POSTHOG_PERSONAL_API_KEY`, `POSTHOG_PROJECT_API_KEY` | `us.posthog.com`, `us.i.posthog.com` |
+| [`@submilli/salesforce`](#submillisalesforce) | Salesforce records of any object, typed standard objects (accounts, contacts, leads, opportunities, cases and more), queries written from typed conditions, totals, search, Bulk API exports, activities, notes, files, Chatter, email, approvals, flows, lead conversion, reports, dashboards and metadata. | `SALESFORCE_ACCESS_TOKEN` | The org's My Domain host, chosen at install (`--config orgUrl=…`) |
 | [`@submilli/sentry`](#submillisentry) | Sentry Cloud organizations, projects, issues, and events, and issue triage. | `SENTRY_AUTH_TOKEN` | `sentry.io` |
 | [`@submilli/slack-bot`](#submillislack-bot) | Slack as the app's bot: bot messages, conversation history and threads, conversations and members, direct messages, users, and reactions. | `SLACK_BOT_TOKEN` | `slack.com` |
 | [`@submilli/slack-user`](#submillislack-user) | Slack as the authenticated user: search, messages and threads, channels, users, files, sending messages, and reactions. | `SLACK_USER_TOKEN` | `files.slack.com`, `slack.com` |
@@ -369,6 +370,27 @@ submilli install submilli/submilli-runtime @submilli/posthog
 submilli blueprint add-package @submilli/posthog --no-capabilities
 submilli blueprint capability list @submilli/posthog
 submilli blueprint capability add posthog.com/schema.read
+```
+
+## @submilli/salesforce
+
+Salesforce records of any object, typed standard objects (accounts, contacts, leads, opportunities, cases and more), queries written from typed conditions, totals, search, Bulk API exports, activities, notes, files, Chatter, email, approvals, flows, lead conversion, reports, dashboards and metadata.
+
+| | |
+| --- | --- |
+| Build setting | `orgUrl` (required): the org's My Domain URL, such as `https://acme.my.salesforce.com` |
+| Secret | `SALESFORCE_ACCESS_TOKEN` |
+| Credential | An OAuth access token for that org with the `api` scope |
+| Without the secret | Throws `SalesforceError` with code `missing_token` |
+| HTTP | The org's host: GET, POST, PATCH, DELETE, and download; `convertLead` uses the SOAP API on the same host |
+| Filesystem | `exportQuery` and `downloadFile` write the file they are given; `uploadFile` reads one |
+| Readme | [`packages/salesforce/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/salesforce/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/salesforce --config orgUrl=https://acme.my.salesforce.com
+submilli blueprint add-package @submilli/salesforce --no-capabilities
+submilli blueprint capability list @submilli/salesforce
+submilli blueprint capability add salesforce.com/opportunities.find
 ```
 
 ## @submilli/sentry

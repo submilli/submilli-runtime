@@ -7,8 +7,9 @@
 //! HTTP calls, so an allowed call stops at that gated operation.
 //!
 //! A check whose fields come from the service's answers cannot be reached that
-//! way. `attio_status_rules_hold_against_a_fake_attio` covers one: it runs a
-//! copy of `@submilli/attio` against a fake Attio on 127.0.0.1.
+//! way. `attio_status_rules_hold_against_a_fake_attio` and
+//! `salesforce_owner_rules_hold_against_a_fake_salesforce` cover those: each runs
+//! a copy of its package against a fake service on 127.0.0.1.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -29,9 +30,18 @@ const PACKAGES: &[&str] = &[
     "jina",
     "notion",
     "posthog",
+    "salesforce",
     "slack-bot",
     "slack-user",
 ];
+
+/// Required build settings, as `--config` gives them. The policy blueprints deny the
+/// packages their secrets, so no request reaches these hosts.
+const SETTINGS: &[(&str, &str)] = &[("salesforce", SALESFORCE_ORG_SETTING)];
+
+/// The org every build of `@submilli/salesforce` in the tests uses, and so the
+/// host its checked-in `capabilities.yaml` names.
+const SALESFORCE_ORG_SETTING: &str = "orgUrl=https://example.my.salesforce.com";
 
 #[test]
 fn policy_scripts_pass_under_their_blueprints() {
@@ -39,15 +49,12 @@ fn policy_scripts_pass_under_their_blueprints() {
     put_secret(home.path(), "policy-token", "policy-placeholder");
     let mut failures = Vec::new();
     for package in PACKAGES {
-        let published = submilli(
-            &[
-                "build",
-                "publish-local",
-                "-p",
-                &format!("@submilli/{package}"),
-            ],
-            home.path(),
-        );
+        let name = format!("@submilli/{package}");
+        let mut arguments = vec!["build", "publish-local", "-p", &name];
+        if let Some((_, setting)) = SETTINGS.iter().find(|(with, _)| with == package) {
+            arguments.extend(["--config", setting]);
+        }
+        let published = submilli(&arguments, home.path());
         if !published.status.success() {
             failures.push(format!(
                 "publishing @submilli/{package} failed:\n{}",
@@ -97,7 +104,7 @@ const ATTIO_KEY: &str = "fake-attio-key";
 /// is denied by the create-only rules.
 #[test]
 fn attio_status_rules_hold_against_a_fake_attio() {
-    let fake = FakeAttio::start();
+    let fake = FakeHost::start(ATTIO_KEY, attio_answer);
     let home = tempfile::tempdir().expect("package store");
     put_secret(home.path(), "policy-token", ATTIO_KEY);
     let project = tempfile::tempdir().expect("package copy");
@@ -205,36 +212,41 @@ struct FakeRequest {
     body: serde_json::Value,
 }
 
-/// A fake Attio API on 127.0.0.1 serving one deal whose stage is Lead. It
-/// answers one request per connection and records every request.
-struct FakeAttio {
+/// How a fake service answers a method, path and query string: a status line
+/// and a JSON body, or none. A JSON string that starts with `<` is sent as XML,
+/// for Salesforce's SOAP API.
+type FakeAnswer = fn(&str, &str, &str) -> (&'static str, Option<serde_json::Value>);
+
+/// A fake service on 127.0.0.1 that accepts one bearer token. It answers one
+/// request per connection and records every request.
+struct FakeHost {
     port: u16,
     requests: Arc<Mutex<Vec<FakeRequest>>>,
 }
 
-impl FakeAttio {
-    fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fake Attio");
-        let port = listener.local_addr().expect("fake Attio address").port();
+impl FakeHost {
+    fn start(key: &'static str, answer: FakeAnswer) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fake host");
+        let port = listener.local_addr().expect("fake host address").port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&requests);
         // The thread serves until the test process exits.
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
-                serve(stream, &recorded);
+                serve(stream, &recorded, key, answer);
             }
         });
-        FakeAttio { port, requests }
+        FakeHost { port, requests }
     }
 
     fn requests(&self) -> Vec<FakeRequest> {
         // A poisoned lock means the serving thread panicked; the test fails either way.
-        std::mem::take(&mut *self.requests.lock().expect("fake Attio log"))
+        std::mem::take(&mut *self.requests.lock().expect("fake host log"))
     }
 }
 
-fn serve(stream: TcpStream, recorded: &Mutex<Vec<FakeRequest>>) {
+fn serve(stream: TcpStream, recorded: &Mutex<Vec<FakeRequest>>, key: &str, answer: FakeAnswer) {
     // A client that stops sending fails this request instead of stalling the server.
     if stream
         .set_read_timeout(Some(Duration::from_secs(10)))
@@ -263,31 +275,51 @@ fn serve(stream: TcpStream, recorded: &Mutex<Vec<FakeRequest>>) {
             length = value.parse().unwrap_or(0);
         }
         if name.eq_ignore_ascii_case("authorization") {
-            authorized = value == format!("Bearer {ATTIO_KEY}");
+            authorized = value == format!("Bearer {key}");
         }
     }
     let mut body = vec![0; length];
     if reader.read_exact(&mut body).is_err() {
         return;
     }
-    let path = target.split('?').next().unwrap_or_default().to_string();
-    let (status, answer) = fake_answer(&method, &path);
-    recorded.lock().expect("fake Attio log").push(FakeRequest {
+    let text = String::from_utf8_lossy(&body).into_owned();
+    // The SOAP API takes the token in the envelope's session header instead.
+    authorized |= text.contains(&format!("<urn:sessionId>{key}</urn:sessionId>"));
+    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
+    let (status, answer) = answer(&method, path, query);
+    recorded.lock().expect("fake host log").push(FakeRequest {
         method,
-        path,
+        path: path.to_string(),
         authorized,
-        body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+        body: if text.starts_with('<') {
+            serde_json::Value::String(text)
+        } else {
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+        },
     });
-    let text = answer.to_string();
+    let (kind, text) = match answer {
+        Some(serde_json::Value::String(xml)) if xml.starts_with('<') => ("text/xml", xml),
+        Some(json) => ("application/json", json.to_string()),
+        None => ("application/json", String::new()),
+    };
     let mut stream = reader.into_inner();
     let _ = write!(
         stream,
-        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+        "HTTP/1.1 {status}\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
         text.len()
     );
 }
 
-fn fake_answer(method: &str, path: &str) -> (&'static str, serde_json::Value) {
+fn attio_answer(
+    method: &str,
+    path: &str,
+    _query: &str,
+) -> (&'static str, Option<serde_json::Value>) {
+    let (status, body) = fake_attio(method, path);
+    (status, Some(body))
+}
+
+fn fake_attio(method: &str, path: &str) -> (&'static str, serde_json::Value) {
     use serde_json::json;
     let status = |id: &str, title: &str| json!({ "id": { "status_id": id }, "title": title, "is_archived": false });
     let attribute = |slug: &str, kind: &str| {
@@ -328,6 +360,292 @@ fn fake_answer(method: &str, path: &str) -> (&'static str, serde_json::Value) {
     }
 }
 
+const SALESFORCE_TOKEN: &str = "fake-salesforce-token";
+const SALESFORCE_API: &str = "/services/data/v68.0";
+const SALESFORCE_SOAP: &str = "/services/Soap/u/68.0";
+const SALESFORCE_ME: &str = "005000000000001AAA";
+const SALESFORCE_OTHER: &str = "005000000000002AAA";
+const OPPORTUNITY_MINE: &str = "006000000000001AAA";
+const OPPORTUNITY_THEIRS: &str = "006000000000002AAA";
+const LEAD_MINE: &str = "00Q000000000001EAA";
+const LEAD_THEIRS: &str = "00Q000000000002EAA";
+const WORK_ITEM: &str = "04i000000000001AAA";
+
+/// Every write check of `@submilli/salesforce` that names an owner reads it from
+/// Salesforce first, so an offline script never reaches it. Here a copy of the
+/// package, pointed at a fake Salesforce, runs `tests/fake-host/owner-rules.ts`
+/// under its blueprint: its own deal is read, renamed, moved to Closed Won and
+/// deleted; another owner's deal, and a missing one, are denied, and nothing is
+/// written to them.
+#[test]
+fn salesforce_owner_rules_hold_against_a_fake_salesforce() {
+    let mine = format!("{SALESFORCE_API}/sobjects/Opportunity/{OPPORTUNITY_MINE}");
+    let writes = salesforce_writes_against_a_fake("owner-rules");
+    assert_eq!(
+        writes,
+        vec![
+            (
+                "PATCH".to_string(),
+                mine.clone(),
+                serde_json::json!({ "Name": "Acme renewal" })
+            ),
+            (
+                "PATCH".to_string(),
+                mine.clone(),
+                serde_json::json!({ "StageName": "Closed Won" })
+            ),
+            ("DELETE".to_string(), mine, serde_json::Value::Null),
+        ],
+        "only the allowed writes reach Salesforce, all to the caller's own deal"
+    );
+}
+
+/// The process and collaboration operations read the facts their checks need
+/// (a record's owner and account, a lead's owner, an approval's process) from
+/// Salesforce. `tests/fake-host/process-rules.ts` hands its own deal to a
+/// queue, converts its own lead through the SOAP API, logs a call, approves a
+/// discount and posts to the deal's feed; the same calls on another owner's
+/// records, to a user rather than a queue, or mentioning someone else are
+/// denied and write nothing.
+#[test]
+fn salesforce_process_rules_hold_against_a_fake_salesforce() {
+    let writes = salesforce_writes_against_a_fake("process-rules");
+    let paths: Vec<(&str, &str)> = writes
+        .iter()
+        .map(|(method, path, _)| (method.as_str(), path.as_str()))
+        .collect();
+    let mine = format!("{SALESFORCE_API}/sobjects/Opportunity/{OPPORTUNITY_MINE}");
+    let task = format!("{SALESFORCE_API}/sobjects/Task");
+    let approvals = format!("{SALESFORCE_API}/process/approvals");
+    let feed = format!("{SALESFORCE_API}/chatter/feed-elements");
+    assert_eq!(
+        paths,
+        vec![
+            ("PATCH", mine.as_str()),
+            ("POST", SALESFORCE_SOAP),
+            ("POST", task.as_str()),
+            ("POST", approvals.as_str()),
+            ("POST", feed.as_str()),
+        ],
+        "only the allowed writes reach Salesforce"
+    );
+    let bodies: Vec<&serde_json::Value> = writes.iter().map(|(_, _, body)| body).collect();
+    assert_eq!(
+        bodies.first().copied(),
+        Some(&serde_json::json!({ "OwnerId": "00G000000000001EAA" }))
+    );
+    let envelope = bodies
+        .get(1)
+        .and_then(|body| body.as_str())
+        .unwrap_or_default();
+    assert!(
+        envelope.contains(&format!("<urn:leadId>{LEAD_MINE}</urn:leadId>"))
+            && envelope.contains("<urn:convertedStatus>Closed - Converted</urn:convertedStatus>")
+            && envelope.contains("<urn:doNotCreateOpportunity>true</urn:doNotCreateOpportunity>"),
+        "the conversion: {envelope}"
+    );
+    assert_eq!(
+        bodies.get(2).and_then(|body| body.get("WhatId")),
+        Some(&serde_json::json!(OPPORTUNITY_MINE))
+    );
+    assert_eq!(
+        bodies.get(3).copied(),
+        Some(
+            &serde_json::json!({ "requests": [{ "actionType": "Approve", "contextId": WORK_ITEM, "comments": "Within policy" }] })
+        )
+    );
+}
+
+/// Publishes a copy of the package pointed at a fake Salesforce, runs
+/// `tests/fake-host/<script>.ts` under its blueprint, and returns the writes that
+/// reached the fake (every request but reads), in order.
+fn salesforce_writes_against_a_fake(script: &str) -> Vec<(String, String, serde_json::Value)> {
+    let fake = FakeHost::start(SALESFORCE_TOKEN, salesforce_answer);
+    let home = tempfile::tempdir().expect("package store");
+    put_secret(home.path(), "policy-token", SALESFORCE_TOKEN);
+    let project = tempfile::tempdir().expect("package copy");
+    copy_salesforce(project.path());
+    let published = Command::new(env!("CARGO_BIN_EXE_submilli"))
+        .args([
+            "build",
+            "publish-local",
+            "-p",
+            "@submilli/salesforce",
+            "--config",
+            &format!("orgUrl=http://127.0.0.1:{}", fake.port),
+        ])
+        .current_dir(project.path())
+        .env("SUBMILLI_HOME", home.path())
+        .env("SUBMILLI_TELEMETRY", "0")
+        .output()
+        .expect("publish the package copy");
+    assert!(
+        published.status.success(),
+        "{}",
+        String::from_utf8_lossy(&published.stderr)
+    );
+
+    let directory = repository_root().join("packages/salesforce/tests/fake-host");
+    let source = directory.join(format!("{script}.ts"));
+    let blueprint = directory.join(format!("{script}.yaml"));
+    let run = submilli(
+        &[
+            "run",
+            &source.to_string_lossy(),
+            "--blueprint",
+            &blueprint.to_string_lossy(),
+        ],
+        home.path(),
+    );
+    assert!(
+        run.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let requests = fake.requests();
+    assert!(
+        requests.iter().all(|request| request.authorized),
+        "every request carries the token: {requests:#?}"
+    );
+    requests
+        .into_iter()
+        .filter(|request| request.method != "GET")
+        .map(|request| (request.method, request.path, request.body))
+        .collect()
+}
+
+/// Copies the package's sources into `project` with the org's URL replaced.
+/// A copy of the package, so that building it against the fake leaves the
+/// repository's `capabilities.yaml` alone.
+fn copy_salesforce(project: &Path) {
+    let source = repository_root().join("packages/salesforce");
+    let target = project.join("packages/salesforce");
+    for directory in ["src", "docs"] {
+        std::fs::create_dir_all(target.join(directory)).expect("package directory");
+        for entry in std::fs::read_dir(source.join(directory)).expect("package sources") {
+            let path = entry.expect("source entry").path();
+            let name = path.file_name().expect("a source file name");
+            std::fs::copy(&path, target.join(directory).join(name)).expect("copied source");
+        }
+    }
+    std::fs::write(
+        project.join("submilli.toml"),
+        "[[package]]\nname = \"@submilli/salesforce\"\nversion = \"0.1.0\"\n\
+         description = \"@submilli/salesforce against a fake Salesforce\"\nkeywords = [\"salesforce\"]\n\
+         path = \"packages/salesforce\"\n",
+    )
+    .expect("manifest");
+}
+
+/// A fake Salesforce: two opportunities on one account, one owned by the
+/// caller's user and one by another user (a third id does not exist), two leads
+/// owned likewise, and a discount approval of the caller's deal. Writes succeed.
+fn salesforce_answer(
+    method: &str,
+    path: &str,
+    query: &str,
+) -> (&'static str, Option<serde_json::Value>) {
+    use serde_json::json;
+    let opportunity = |id: &str, owner: &str| {
+        json!({ "attributes": { "type": "Opportunity", "url": format!("{SALESFORCE_API}/sobjects/Opportunity/{id}") },
+            "Id": id, "Name": "Acme pilot", "OwnerId": owner, "AccountId": "001000000000001AAA",
+            "StageName": "Prospecting", "Amount": 1200 })
+    };
+    let lead = |id: &str, owner: &str| json!({ "attributes": { "type": "Lead" }, "Id": id, "OwnerId": owner });
+    let mine = opportunity(OPPORTUNITY_MINE, SALESFORCE_ME);
+    let theirs = opportunity(OPPORTUNITY_THEIRS, SALESFORCE_OTHER);
+    let not_found = || json!([{ "errorCode": "NOT_FOUND", "message": "The requested resource does not exist" }]);
+    if method == "POST" && path == SALESFORCE_SOAP {
+        let result = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\">\
+             <soapenv:Body><convertLeadResponse><result><accountId>001000000000001AAA</accountId>\
+             <contactId>003000000000001AAA</contactId><leadId>{LEAD_MINE}</leadId>\
+             <opportunityId xsi:nil=\"true\"/><success>true</success></result></convertLeadResponse>\
+             </soapenv:Body></soapenv:Envelope>"
+        );
+        return ("200 OK", Some(json!(result)));
+    }
+    let Some(rest) = path.strip_prefix(SALESFORCE_API) else {
+        return ("404 Not Found", Some(not_found()));
+    };
+    let record = rest.strip_prefix("/sobjects/Opportunity/");
+    match (method, record) {
+        ("GET", Some(id)) if id == OPPORTUNITY_MINE => ("200 OK", Some(mine)),
+        ("GET", Some(id)) if id == OPPORTUNITY_THEIRS => ("200 OK", Some(theirs)),
+        ("PATCH" | "DELETE", Some(id)) if id == OPPORTUNITY_MINE || id == OPPORTUNITY_THEIRS => {
+            ("204 No Content", None)
+        }
+        ("POST", None) if rest == "/sobjects/Task" => (
+            "201 Created",
+            Some(json!({ "id": "00T000000000001AAA", "success": true, "errors": [] })),
+        ),
+        ("POST", None) if rest == "/process/approvals" => (
+            "200 OK",
+            Some(
+                json!([{ "success": true, "errors": null, "instanceId": "04g000000000001AAA",
+                "instanceStatus": "Approved", "entityId": OPPORTUNITY_MINE, "newWorkitemIds": [], "actorIds": [] }]),
+            ),
+        ),
+        ("POST", None) if rest == "/chatter/feed-elements" => {
+            ("201 Created", Some(json!({ "id": "0D5000000000001AAA" })))
+        }
+        ("GET", None) if rest == "/query/" => {
+            let soql = percent_decode(query.strip_prefix("q=").unwrap_or_default());
+            let records = if soql.contains("FROM LeadStatus") {
+                vec![
+                    json!({ "attributes": { "type": "LeadStatus" }, "MasterLabel": "Closed - Converted" }),
+                ]
+            } else if soql.contains(WORK_ITEM) {
+                vec![
+                    json!({ "attributes": { "type": "ProcessInstanceWorkitem" }, "Id": WORK_ITEM,
+                    "ProcessInstance": { "TargetObjectId": OPPORTUNITY_MINE,
+                        "TargetObject": { "attributes": { "type": "Name" }, "Type": "Opportunity" },
+                        "ProcessDefinition": { "DeveloperName": "Discount_Approval" } } }),
+                ]
+            } else if soql.contains(LEAD_MINE) {
+                vec![lead(LEAD_MINE, SALESFORCE_ME)]
+            } else if soql.contains(LEAD_THEIRS) {
+                vec![lead(LEAD_THEIRS, SALESFORCE_OTHER)]
+            } else if soql.contains(OPPORTUNITY_MINE) {
+                vec![mine]
+            } else if soql.contains(OPPORTUNITY_THEIRS) {
+                vec![theirs]
+            } else {
+                Vec::new()
+            };
+            let size = records.len();
+            (
+                "200 OK",
+                Some(json!({ "totalSize": size, "done": true, "records": records })),
+            )
+        }
+        _ => ("404 Not Found", Some(not_found())),
+    }
+}
+
+/// Decodes `%XX` escapes; the package encodes its query strings with `encodeComponent`.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let escaped = bytes
+            .get(index + 1..index + 3)
+            .filter(|_| bytes[index] == b'%')
+            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        if let Some(byte) = escaped {
+            out.push(byte);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn put_secret(home: &Path, name: &str, value: &str) {
     let mut put = Command::new(env!("CARGO_BIN_EXE_submilli"))
         .args(["secret", "put", name])
@@ -351,12 +669,30 @@ fn put_secret(home: &Path, name: &str, value: &str) {
     );
 }
 
+/// Installs the packages that have required build settings with them, so that a
+/// repository-wide build, which uses installed settings, can build them.
+fn install_required_settings(home: &Path) {
+    for (package, setting) in SETTINGS {
+        let name = format!("@submilli/{package}");
+        let published = submilli(
+            &["build", "publish-local", "-p", &name, "--config", setting],
+            home,
+        );
+        assert!(
+            published.status.success(),
+            "{}",
+            String::from_utf8_lossy(&published.stderr)
+        );
+    }
+}
+
 /// Fails on any warning that names `check()`: a repeated read or a misplaced
 /// `check()`, and a `check()` call with no `@capability`. These only warn, so a
 /// package that regresses still builds.
 #[test]
 fn first_party_packages_build_without_check_warnings() {
     let home = tempfile::tempdir().expect("package store");
+    install_required_settings(home.path());
     let checked = submilli(&["build", "check"], home.path());
     let stderr = String::from_utf8_lossy(&checked.stderr);
     assert!(checked.status.success(), "build check failed:\n{stderr}");

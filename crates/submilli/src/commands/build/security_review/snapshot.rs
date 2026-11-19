@@ -128,7 +128,9 @@ pub(super) fn collect_from_with_store(
             &mut remaining,
             &mut visited_entries,
         )?;
-        if only_package.is_some() && only_package != Some(name) {
+        // Every package but the selected one builds with its installed overrides, in a
+        // repository-wide review too (as `build check` does), so the review sees them.
+        if only_package != Some(name) {
             let config_path: PathBuf = package
                 .path
                 .as_path()
@@ -142,17 +144,23 @@ pub(super) fn collect_from_with_store(
                 .keys()
                 .any(|path| Path::new(path) == config_path || Path::new(path) == legacy_path)
             {
-                match store.load(name) {
-                    Ok(artifact) => {
-                        let overrides = artifact.metadata.config.overrides;
-                        let size = serde_json::to_vec(&overrides)?.len();
-                        remaining = remaining
-                            .checked_sub(size)
-                            .context("captured configuration exceeds review size limit")?;
-                        snapshot.configuration.insert(name.to_owned(), overrides);
+                let overrides = if only_package.is_none() {
+                    // A repository-wide build reads only the saved identity metadata.
+                    let saved = submilli_build::package_store::saved_overrides(store, name);
+                    (!saved.is_empty()).then_some(saved)
+                } else {
+                    match store.load(name) {
+                        Ok(artifact) => Some(artifact.metadata.config.overrides),
+                        Err(submilli_build::PackageStoreError::MissingPackage { .. }) => None,
+                        Err(error) => return Err(error.into()),
                     }
-                    Err(submilli_build::PackageStoreError::MissingPackage { .. }) => {}
-                    Err(error) => return Err(error.into()),
+                };
+                if let Some(overrides) = overrides {
+                    let size = serde_json::to_vec(&overrides)?.len();
+                    remaining = remaining
+                        .checked_sub(size)
+                        .context("captured configuration exceeds review size limit")?;
+                    snapshot.configuration.insert(name.to_owned(), overrides);
                 }
             }
         }
@@ -348,6 +356,12 @@ mod configuration_tests {
             "https://captured.test"
         );
         assert!(!snapshot.configuration.contains_key("@pied-piper/app"));
+        // A repository-wide review captures it too, as a repository-wide build uses it.
+        let (whole, _) = collect_from_with_store(root, None, &store).unwrap();
+        assert_eq!(
+            whole.configuration["@pied-piper/service"]["baseUrl"],
+            "https://captured.test"
+        );
         fs::remove_dir_all(home.path().join("@pied-piper/service")).unwrap();
         let evidence = super::super::authority::collect(
             &snapshot,

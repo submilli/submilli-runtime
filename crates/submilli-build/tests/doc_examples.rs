@@ -4,11 +4,13 @@
 //! the same checks with the full dependency closure; this test is the
 //! `cargo test --workspace` hook that keeps CI honest.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use submilli_build::{
-    PackageStore, build_packages, compile_check_doc_example, extract_doc_examples, parse_manifest,
+    PackageName, PackageStore, build_packages_configured, compile_check_doc_example,
+    extract_doc_examples, parse_manifest,
 };
 use tempfile::TempDir;
 
@@ -23,7 +25,16 @@ fn every_repo_package_ships_a_compiling_example() {
 
     let store_root = TempDir::new().expect("tempdir");
     let store = PackageStore::new(store_root.path());
-    let built = build_packages(&manifest, root, &store, None).expect("packages build");
+    // Required build settings, as the packages' own tests set them.
+    let settings = BTreeMap::from([(
+        PackageName::new("@submilli/salesforce"),
+        BTreeMap::from([(
+            "orgUrl".to_owned(),
+            "https://example.my.salesforce.com".to_owned(),
+        )]),
+    )]);
+    let built = build_packages_configured(&manifest, root, &store, None, &settings)
+        .expect("packages build");
     assert!(!built.is_empty(), "the repo manifest declares packages");
 
     let mut failures = Vec::new();

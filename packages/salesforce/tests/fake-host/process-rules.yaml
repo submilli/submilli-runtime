@@ -1,0 +1,43 @@
+# Run by `salesforce_process_rules_hold_against_a_fake_salesforce` in
+# crates/submilli/tests/package_policy.rs, against the package installed with its org URL set to
+# a fake Salesforce on 127.0.0.1.
+kind: blueprint
+name: salesforce-process-rules-fake-host-test
+allow_insecure_http: true
+packages:
+  - '@submilli/salesforce'
+secrets:
+  SALESFORCE_ACCESS_TOKEN:
+    store: policy-token
+default: deny
+permissions:
+  main:
+    # Its own records go to a queue, never to another person.
+    - capability: salesforce.com/records.changeOwner
+      filter: fromOwnerId == "005000000000001AAA" and toOwnerId glob "00G*"
+      action: allow
+    - capability: salesforce.com/leads.convert
+      filter: ownerId == "005000000000001AAA" and toOwnerId == "" and createOpportunity == false
+      action: allow
+    - capability: salesforce.com/activities.log
+      filter: type == "call" and accountId == "001000000000001AAA"
+      action: allow
+    - capability: salesforce.com/approvals.approve
+      filter: object == "opportunity" and processName == "discount_approval"
+      action: allow
+    - capability: salesforce.com/feed.post
+      filter: accountId == "001000000000001AAA" and not (mentions contains "005000000000002AAA")
+      action: allow
+  '@submilli/salesforce':
+    - capability: http.get
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.patch
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.post
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: secrets.get
+      filter: name == "SALESFORCE_ACCESS_TOKEN"
+      action: allow

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a228ccc4f852568810b134e80b97bb17a8438dca2587100867f3d05da35047a7"
+  contentHash: "a2901824f4f96ed42bb7f7150f18acf77ca42bbc4d294dfa5144a6667930c325"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -436,20 +436,20 @@ Sandbox filesystem: files and directories under the VFS root.
 | `cwd(): string` |  | The absolute guest working directory used by relative paths. |
 | `exists(path: string): boolean` | `fs.stat { path }` | Returns `true` iff `path` resolves to a filesystem entry under the VFS root. |
 | `info(): Info` |  | The active VFS configuration: the root's `mode` (`"none"` / `"ephemeral"` / `"per_session"` / `"named"`), `access`, `volume` and `sizeLimit` (the cap on the bytes its files may hold, or `-1` when none applies), plus `mounts`, the named volumes grafted below the root. |
-| `isEmpty(path: string): boolean` | `fs.list { path, recursive }` | Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. |
+| `isEmpty(path: string): boolean` | `fs.list { path, recursive: boolean }` | Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. |
 | `lines(path: string): Iterator<string>` | `fs.read { path }` | Stream the file at `path` as a constant-memory line iterator. |
-| `list(path: string, options?: RecursiveOptions): Iterator<DirEntry>` | `fs.list { path, recursive }` | List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. |
+| `list(path: string, options?: RecursiveOptions): Iterator<DirEntry>` | `fs.list { path, recursive: boolean }` | List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. |
 | `maxReadSize(): number` |  | Maximum number of bytes `read` / `readText` will load whole; past this they throw. |
-| `mkdir(path: string, options?: RecursiveOptions): void` | `fs.mkdir { path, recursive }` | Create the directory at `path`. |
+| `mkdir(path: string, options?: RecursiveOptions): void` | `fs.mkdir { path, recursive: boolean }` | Create the directory at `path`. |
 | `move(from: string, to: string): void` | `fs.move { from, to }` | Move / rename. |
 | `peek(path: string): Peek` | `fs.stat { path }` | Quick file-only inspection: preview (first ~256 bytes decoded UTF-8 lossy), detected `encoding` (`utf-8` / `utf-16le` / `utf-16be` / `latin1`), `lineEnding` (`lf` / `crlf`), and total `size`. |
 | `read(path: string): Uint8Array` | `fs.read { path }` | Read the whole file as a `Uint8Array`. |
 | `readBytes(path: string, offset: number, length: number): Uint8Array` | `fs.read { path, length }` | Random-access byte-range read. |
 | `readText(path: string): string` | `fs.read { path }` | Read the whole file as a UTF-8 string. |
-| `remove(path: string, options?: RecursiveOptions): void` | `fs.remove { path, recursive }` | Remove the entry at `path`. |
+| `remove(path: string, options?: RecursiveOptions): void` | `fs.remove { path, recursive: boolean }` | Remove the entry at `path`. |
 | `size(path: string): number` | `fs.stat { path }` | File size in bytes. |
 | `stat(path: string): Stat` | `fs.stat { path }` | Metadata about an entry under the VFS root. |
-| `summary(path: string): string` | `fs.list { path, recursive }` | Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. |
+| `summary(path: string): string` | `fs.list { path, recursive: boolean }` | Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. |
 | `write(path: string, content: Uint8Array): void` | `fs.write { path, length: number }` | Write `content` to `path` atomically (temp-file + rename). |
 | `writeText(path: string, content: string): void` | `fs.write { path, length: number }` | UTF-8 atomic write. |
 | `writer(path: string): FileWriter` | `fs.write { path }` | Open `path` as an append-only `FileWriter`. |

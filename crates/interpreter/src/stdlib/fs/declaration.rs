@@ -61,14 +61,14 @@ pub fn package_declaration() -> PackageDeclaration {
         "summary",
         vec![path_param.clone()],
         Type::String,
-        "/**\n * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path)` to visit all of them.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive }\n */",
+        "/**\n * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path)` to visit all of them.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive: boolean }\n */",
     );
     insert_fn(
         &mut defs,
         "isEmpty",
         vec![path_param.clone()],
         Type::Boolean,
-        "/**\n * Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. Throws when `path` does not exist — call `exists(path)` first if it may not.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive }\n */",
+        "/**\n * Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. Throws when `path` does not exist — call `exists(path)` first if it may not.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive: boolean }\n */",
     );
     insert_fn(
         &mut defs,
@@ -159,14 +159,14 @@ pub fn package_declaration() -> PackageDeclaration {
         "mkdir",
         vec![path_param.clone(), recursive_options_param()],
         Type::Void,
-        "/**\n * Create the directory at `path`. `options.recursive=true` creates intermediate directories (like `mkdir -p`); `options.recursive=false` throws when the parent is missing or the target already exists. Pass `{ recursive: true }` to recurse; omitted options default to false.\n * @param path Directory path under the VFS root.\n * @param options Whether to create missing parents.\n * @capability fs.mkdir { path, recursive }\n */",
+        "/**\n * Create the directory at `path`. `options.recursive=true` creates intermediate directories (like `mkdir -p`); `options.recursive=false` throws when the parent is missing or the target already exists. Pass `{ recursive: true }` to recurse; omitted options default to false.\n * @param path Directory path under the VFS root.\n * @param options Whether to create missing parents.\n * @capability fs.mkdir { path, recursive: boolean }\n */",
     );
     insert_fn(
         &mut defs,
         "remove",
         vec![path_param.clone(), recursive_options_param()],
         Type::Void,
-        "/**\n * Remove the entry at `path`. Files unconditionally; directories require `options.recursive=true` (matches `rm -rf`). Without the flag, a non-empty directory throws.\n * @param path File or directory path under the VFS root.\n * @param options Whether to remove directories recursively.\n * @capability fs.remove { path, recursive }\n */",
+        "/**\n * Remove the entry at `path`. Files unconditionally; directories require `options.recursive=true` (matches `rm -rf`). Without the flag, a non-empty directory throws.\n * @param path File or directory path under the VFS root.\n * @param options Whether to remove directories recursively.\n * @capability fs.remove { path, recursive: boolean }\n */",
     );
     insert_fn(
         &mut defs,
@@ -240,7 +240,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 args: Vec::new(),
             }],
         },
-        "/**\n * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `options.recursive=true` walks descendants as well; `options.recursive=false` yields only direct children.\n *\n * Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted.\n *\n * Symlinks surface as `kind=\"symlink\"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.\n * @param path Directory path under the VFS root.\n * @param options Whether to walk descendants recursively.\n * @capability fs.list { path, recursive }\n */",
+        "/**\n * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `options.recursive=true` walks descendants as well; `options.recursive=false` yields only direct children.\n *\n * Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted.\n *\n * Symlinks surface as `kind=\"symlink\"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.\n * @param path Directory path under the VFS root.\n * @param options Whether to walk descendants recursively.\n * @capability fs.list { path, recursive: boolean }\n */",
     );
 
     defs
