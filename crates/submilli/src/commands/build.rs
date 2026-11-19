@@ -1118,6 +1118,12 @@ mod test_runner {
                 cfg.max_store_bytes,
             );
             data.secret_provider = secret_provider.clone();
+            // Every package test has its own temporary filesystem and a fixed commit author.
+            data.git = Some(interpreter::stdlib::git::GitConfig {
+                name: "Submilli Package Tests".into(),
+                email: "package-tests@example.invalid".into(),
+                username: None,
+            });
             let mut store = cfg.store_async(engine, data)?;
             install_tenant_limits(&mut store);
             let mut linker = Linker::<StoreData>::new(engine);
