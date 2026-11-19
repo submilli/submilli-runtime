@@ -295,8 +295,15 @@ not finished.
 
 ```sh
 cargo run -p submilli -- build test -p @submilli/salesforce --skip-network
+node --test packages/salesforce/scripts/contract.test.mjs
 cargo test -p submilli --test package_policy
 ```
+
+`scripts/contract.test.mjs` runs the operations in Node against a mocked host
+and a mocked Salesforce: the request each sends (path, headers, body, the SOAP
+envelope), what its check sees after the lookups it makes first, that a denied
+check sends no write, and how errors map. Its `check` records the context; rule
+decisions are the policy tests'.
 
 `tests/lib.test.ts` runs offline: id normalization, SOQL
 and SOSL escaping, the query, aggregate and search builders, response mapping,
