@@ -2,8 +2,8 @@
 //! front end rejects several of them, so marker calls let it build the surrounding
 //! tree; each test then replaces only that marker with the reported TypedAst.
 use submilli_engine::{
-    FileId, Ident, RuntimeConfig, Type, TypedArrayElement, TypedAst, TypedExpr, TypedExprKind,
-    TypedObjectMember, TypedStmtKind, UnOp,
+    BinOp, FileId, Ident, RuntimeConfig, Type, TypedArrayElement, TypedAst, TypedExpr,
+    TypedExprKind, TypedObjectMember, TypedStmtKind, UnOp,
 };
 
 fn run(source: &str, prepare: impl FnOnce(&mut TypedAst) + Send + 'static) -> String {
@@ -154,6 +154,171 @@ fn assert_dynamic_constructor_edges(ast: &TypedAst, sources: &submilli_engine::S
                 && edge.reason.as_deref() == Some("dynamic constructor target")
         }));
     }
+}
+
+#[test]
+fn array_method_write_reports_a_typecheck_error() {
+    let source = include_str!("typed_value_sources/array-method-write.ts")
+        .replace("values.push = replacement", "write(values, replacement)");
+    let source =
+        format!("function write(a: number[], f: (n: number) => number): void {{}}\n{source}");
+    submilli_engine::compiler_thread::run(|| {
+        let (mut ast, diagnostics) =
+            submilli_engine::compile::typecheck_to_typed_ast(&source, FileId(0));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(replace_field_write_markers(&mut ast, "push"), 1);
+        let diagnostics = submilli_engine::typechecker::rules::check_script_submilli(&ast, &[])
+            .expect("check array method write");
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.severity == submilli_engine::Severity::Error
+                    && diagnostic
+                        .message
+                        .contains("cannot assign to named property `push` on an array")
+            }),
+            "{diagnostics:?}"
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn tuple_length_write_uses_array_setter() {
+    let source = include_str!("typed_value_sources/tuple-length-write.ts")
+        .replace("named.length = 1", "write(named, 1)")
+        .replace("tuple[\"length\"] = size", "write(tuple, size)");
+    let source = format!("function write(a: [number, number?], n: number): void {{}}\n{source}");
+    assert_eq!(
+        run(&source, |ast| {
+            assert_eq!(replace_field_write_markers(ast, "length"), 2);
+        }),
+        "0"
+    );
+}
+
+fn replace_field_write_markers(ast: &mut TypedAst, name: &str) -> usize {
+    let marker = submilli_engine::mangle::package_symbol("main", "write");
+    let mut replaced = 0;
+    for id in ast.stmt_ids().unwrap() {
+        let stmt = ast.try_stmt(id).unwrap();
+        let TypedStmtKind::Expr(expr) = stmt.kind else {
+            continue;
+        };
+        let TypedExprKind::Call { mangled, args, .. } = &ast.try_expr(expr).unwrap().kind else {
+            continue;
+        };
+        if mangled != &marker {
+            continue;
+        }
+        ast.try_stmt_mut(id).unwrap().kind = TypedStmtKind::AssignField {
+            receiver: args[0],
+            value: args[1],
+            name: Ident {
+                name: name.into(),
+                span: stmt.span,
+            },
+        };
+        replaced += 1;
+    }
+    replaced
+}
+
+#[test]
+fn concatenation_can_have_a_template_literal_type() {
+    let source =
+        include_str!("typed_value_sources/template-concatenation.ts").replace(": `k${number}`", "");
+    assert_eq!(
+        run(&source, |ast| {
+            let mut replaced = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                if matches!(expr.kind, TypedExprKind::Binary { op: BinOp::Add, .. }) {
+                    expr.ty = Type::TemplateLiteral {
+                        parts: vec!["k".into(), "".into()],
+                        substitutions: vec![Type::Number],
+                    };
+                    replaced += 1;
+                }
+            }
+            assert_eq!(replaced, 1);
+        }),
+        "k3"
+    );
+}
+
+#[test]
+fn logical_and_preserves_falsy_generic_intersections() {
+    assert_eq!(
+        run(
+            include_str!("typed_value_sources/generic-logical-and.ts"),
+            |ast| {
+                let mut replaced = 0;
+                for id in ast.expr_ids().unwrap() {
+                    let TypedExprKind::Binary {
+                        op: BinOp::And,
+                        lhs,
+                        rhs,
+                    } = ast.try_expr(id).unwrap().kind
+                    else {
+                        continue;
+                    };
+                    let parameter = Type::TypeVar("T".into());
+                    let (left, right) = if ast.try_expr(rhs).unwrap().ty == Type::String {
+                        (
+                            Type::union(vec![
+                                Type::Intersection(vec![
+                                    parameter.clone(),
+                                    Type::BooleanLiteral(false),
+                                ]),
+                                Type::Intersection(vec![parameter, Type::BooleanLiteral(true)]),
+                            ]),
+                            Type::String,
+                        )
+                    } else {
+                        (
+                            Type::Intersection(vec![parameter, Type::Number]),
+                            Type::Boolean,
+                        )
+                    };
+                    ast.try_expr_mut(lhs).unwrap().ty = left;
+                    ast.try_expr_mut(id).unwrap().ty = right;
+                    replaced += 1;
+                }
+                assert_eq!(replaced, 2);
+            }
+        ),
+        "0"
+    );
+}
+
+#[test]
+fn placeholders_do_not_replace_captured_parameter_bindings() {
+    assert_eq!(
+        run(
+            include_str!("typed_value_sources/nested-captured-parameter.ts"),
+            |ast| {
+                // An alternate front end can append placeholders after the real closures.
+                let mut replacements = std::collections::BTreeMap::new();
+                for id in std::mem::take(&mut ast.placeholder_closures) {
+                    let placeholder = ast.try_expr(id).unwrap().clone();
+                    let new_id = ast.try_push_expr(placeholder).unwrap();
+                    ast.placeholder_closures.extend([id, new_id]);
+                    replacements.insert(id, new_id);
+                }
+                assert_eq!(replacements.len(), 3);
+                for id in ast.stmt_ids().unwrap() {
+                    if let TypedStmtKind::Let { value, .. } =
+                        &mut ast.try_stmt_mut(id).unwrap().kind
+                        && let Some(replacement) = replacements.get(value)
+                    {
+                        *value = *replacement;
+                    }
+                }
+            }
+        ),
+        "0"
+    );
 }
 
 #[test]

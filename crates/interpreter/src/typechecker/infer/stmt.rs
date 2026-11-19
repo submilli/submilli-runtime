@@ -1678,6 +1678,12 @@ impl Inferer<'_> {
                 }
                 placeholder(self, None)?
             }
+        } else if crate::typechecker::rules::array_writes::rejects_named_write(
+            &receiver_ty,
+            &name.name,
+        ) {
+            // The shared typed-tree rule reports the restriction for both front ends.
+            placeholder(self, None)?
         } else if self.try_report_method_assignment(name.span, &receiver_ty, &name.name) {
             // Every non-class receiver whose member is a method: an interface
             // surfaces it as a readonly property of function type, a structural

@@ -226,6 +226,11 @@ fn connect_closures(
     flow: &mut Flow,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
+        // A placeholder can reuse the real closure's parameter identities.
+        // Only the real body has reads and determines their cell storage.
+        if ast.placeholder_closures.contains(&id) {
+            continue;
+        }
         match &ast
             .try_expr(id)
             .map_err(crate::codegen::arena_failure)?
@@ -268,7 +273,7 @@ fn connect_reads(
     seed_imported_callbacks(ast, dependencies, flow)?;
     for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
         connect_expression(ast, id, flow)?;
-        seed_interface_logical_operand(ast, id, flow)?;
+        seed_logical_storage(ast, id, flow)?;
         seed_imported_read(ast, dependencies, id, flow)?;
         seed_never_read(ast, id, flow)?;
         if let Some(name) = locals.reads.get(&id) {
@@ -287,29 +292,53 @@ fn connect_reads(
     Ok(())
 }
 
-/// An interface's static truthy narrowing does not describe its boxed
-/// primitive values. Keep both short-circuit outcomes in erased storage.
-fn seed_interface_logical_operand(
+/// Keep both short-circuit outcomes when the authored type omits a value the
+/// left operand can produce.
+fn seed_logical_storage(
     ast: &TypedAst,
     id: ExprId,
     flow: &mut Flow,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let expr = ast.try_expr(id).map_err(crate::codegen::arena_failure)?;
-    if let TypedExprKind::Binary {
-        op: BinOp::And | BinOp::Or,
-        lhs,
-        ..
-    } = &expr.kind
+    let TypedExprKind::Binary { op, lhs, rhs } = expr.kind else {
+        return Ok(());
+    };
+    if !matches!(op, BinOp::And | BinOp::Or) {
+        return Ok(());
+    }
+    let lhs_ty = &ast.try_expr(lhs).map_err(crate::codegen::arena_failure)?.ty;
+    if lhs_ty.any_member(&|member| matches!(member, Type::InterfaceRef { .. })) {
+        // A structural interface can hold a boxed falsy primitive.
+        flow.widened.insert(Place::Expr(lhs));
+    }
+    if op == BinOp::And
+        && expr.ty == ast.try_expr(rhs).map_err(crate::codegen::arena_failure)?.ty
+        && generic_primitive_intersection_can_be_falsy(lhs_ty)
     {
-        let ty = &ast
-            .try_expr(*lhs)
-            .map_err(crate::codegen::arena_failure)?
-            .ty;
-        if ty.any_member(&|member| matches!(member, Type::InterfaceRef { .. })) {
-            flow.widened.insert(Place::Expr(*lhs));
-        }
+        // An alternate front end can give `a && b` only the type of `b` even
+        // when `a` is a narrowed parameter (`T & false`, `T & number`, etc.).
+        flow.widened.insert(Place::Expr(id));
     }
     Ok(())
+}
+
+fn generic_primitive_intersection_can_be_falsy(ty: &Type) -> bool {
+    use crate::typechecker::infer::narrowing::{TruthinessClass, truthiness_class};
+
+    match ty.without_aliases() {
+        Type::Union(members) => members
+            .iter()
+            .any(generic_primitive_intersection_can_be_falsy),
+        Type::Intersection(members) => {
+            !matches!(
+                truthiness_class(ty),
+                TruthinessClass::AlwaysTruthy | TruthinessClass::Dynamic
+            ) && members
+                .iter()
+                .any(|member| matches!(member.peel(), Type::TypeVar(_) | Type::GenericParam { .. }))
+        }
+        _ => false,
+    }
 }
 
 /// A read typed `never` still yields what its binding, field or element
