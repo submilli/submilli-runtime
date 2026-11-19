@@ -1407,6 +1407,51 @@ fn run_network_test(project: &Path, home: &Path, skip: bool, setting: Option<&st
 }
 
 #[test]
+fn build_test_supports_git_in_packages() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        r#"[[package]]
+name = "@pied-piper/util"
+version = "0.1.0"
+description = "Test package."
+"#,
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        r#"import { writeText } from "submilli:fs";
+import { Repository } from "submilli:git";
+
+/** @returns The author and address recorded in a local test commit. */
+export function commitAndReadAuthor(): string {
+    const repo = Repository.init("/test-repo");
+    writeText("/test-repo/note.txt", "local");
+    repo.add(["note.txt"]);
+    repo.commit("Test commit");
+    const commit = repo.log({ limit: 1 }).commits[0];
+    return commit.authorName + " <" + commit.authorEmail + ">";
+}
+"#,
+    );
+    write_file(
+        &project.join("tests/git.test.ts"),
+        r#"import { commitAndReadAuthor } from "@pied-piper/util";
+function main(): void {
+    assert(commitAndReadAuthor() === "Submilli Package Tests <package-tests@example.invalid>");
+}
+"#,
+    );
+    let out = build_test(&project, tmp.path(), &["--skip-network", "--deny-warnings"]);
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+}
+
+#[test]
 fn build_test_compiles_doc_examples() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
