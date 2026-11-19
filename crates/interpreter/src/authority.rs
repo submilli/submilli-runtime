@@ -2053,8 +2053,8 @@ impl CallVisitor<'_, '_> {
 
     /// A call of an interface member: a named method, or a signature. A
     /// signature of a prelude or host binding (`Number(x)`, `new Map()`) runs
-    /// its host function; any other call signature runs the closure the
-    /// callee holds.
+    /// its host function. Other call signatures run the closure the callee
+    /// holds. A construct signature on Object selects a constructor at runtime.
     fn member_call(
         &mut self,
         receiver: ExprId,
@@ -2069,6 +2069,13 @@ impl CallVisitor<'_, '_> {
                 if !self.builder.is_static_value_binding(receiver)? =>
             {
                 self.call_signature_call(receiver, span)
+            }
+            crate::Member::ConstructSignature(_)
+                if *iface == crate::mangle::prelude("Object")
+                    && !self.builder.is_static_value_binding(receiver)? =>
+            {
+                self.builder
+                    .add_unresolved(self.caller, span, "dynamic constructor target")
             }
             crate::Member::CallSignature(_) | crate::Member::ConstructSignature(_) => {
                 self.direct_call(&member.symbol(iface), args, span)

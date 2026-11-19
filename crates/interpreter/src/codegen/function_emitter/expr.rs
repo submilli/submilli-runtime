@@ -6721,6 +6721,14 @@ fn emit_method_call_at(
     call_ret_ty: &Type,
     call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if member == crate::MemberKey::Construct
+        && *iface == crate::mangle::prelude("Object")
+        && is_static_binding_read(ctx, receiver)?
+    {
+        return Err(crate::codegen::internal_failure(
+            "a static constructor binding requires its declared construct interface",
+        ));
+    }
     let mut recv_ty = ctx
         .ta
         .source_type(receiver)
@@ -6837,7 +6845,11 @@ fn emit_method_call_with_receiver_on_stack(
         emit_live_member_call(emitter, ctx, iface, member, live_args)?;
         return cast::emit_cast_to(emitter, ctx, call_ret_ty);
     }
+    let direct_key = member.symbol(iface);
+    let direct_function = ctx.symbols.func_idx(&direct_key);
+    // The live signature fallback evaluates the authored arguments itself.
     if args.is_empty()
+        && (direct_function.is_some() || matches!(member, crate::MemberKey::Named(_)))
         && let Some(span) = call_span
     {
         emit_discarded_call_arguments(emitter, ctx, span)?;
@@ -6846,8 +6858,7 @@ fn emit_method_call_with_receiver_on_stack(
     if recv_ty.is_regexp_match_array() && *iface == crate::mangle::prelude("Array") {
         cast::emit_cast_to(emitter, ctx, &Type::Array(Box::new(Type::regexp_element())))?;
     }
-    let direct_key = member.symbol(iface);
-    if let Some(func_idx) = ctx.symbols.func_idx(&direct_key) {
+    if let Some(func_idx) = direct_function {
         if matches!(recv_ty.primitive_behavior(), Type::Number)
             && ctx.symbols.value_type(recv_ty)? != ValType::F64
         {
