@@ -298,7 +298,7 @@ cargo run -p submilli -- build test -p @submilli/salesforce --skip-network
 cargo test -p submilli --test package_policy
 ```
 
-`tests/lib.test.ts` runs offline: the org URL check, id normalization, SOQL
+`tests/lib.test.ts` runs offline: id normalization, SOQL
 and SOSL escaping, the query, aggregate and search builders, response mapping,
 the `convertLead` envelope and its parser, report flattening (tabular, summary
 and matrix), feed paging and email addresses, and input validation before any
@@ -314,8 +314,6 @@ restricted blueprints, without a token or network:
 - `assistant-scope.ts` shows email only within one domain, one flow, one
   report (by a 15-character id too), its own approvals queue, calls logged, and
   metadata read but not the org's limits.
-- `instance-url.ts` shows an org URL outside Salesforce refused before any
-  request.
 
 `salesforce_owner_rules_hold_against_a_fake_salesforce` and
 `salesforce_process_rules_hold_against_a_fake_salesforce` in
@@ -332,3 +330,24 @@ Salesforce on `127.0.0.1` and runs a script from `tests/fake-host/`:
   approved but not rejected, and a post without mentions.
 
 Both assert that only the allowed writes reach the fake.
+
+Live tests run only with a token, never under `--skip-network`, against the
+org the package is built for:
+
+```sh
+cargo run -p submilli -- build test -p @submilli/salesforce \
+  --config orgUrl=https://<org>.my.salesforce.com --env-file <file>
+```
+
+- `tests/network_read.test.ts` needs `SALESFORCE_ACCESS_TOKEN` and only reads.
+  It skips the steps that need data the org lacks (an account, a report it may
+  run, a dashboard).
+- `tests/network_mutation.test.ts` also needs `SALESFORCE_LIVE_MUTATIONS=true`.
+  It creates accounts, a contact, a case, a task, an event, a note, a file, a
+  Chatter post and a lead named with a run id, converts the lead, and deletes
+  them all at the end, also when a step fails. It sends no email, submits no
+  approval and runs no flow. The org needs Notes turned on (Setup, Notes
+  Settings).
+
+A client-credentials token works: an External Client App with the `api` scope
+and the client credentials flow, run as an admin user.

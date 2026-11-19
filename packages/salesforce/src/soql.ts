@@ -258,7 +258,9 @@ export function buildAggregate(spec: AggregateSpec): PreparedAggregate {
     let soql = "SELECT " + select.join(", ") + " FROM " + object.name + whereClause(where);
     if (groupExpressions.length > 0) soql += " GROUP BY " + groupExpressions.join(", ");
     if (order.length > 0) soql += " ORDER BY " + order.join(", ");
-    soql += " LIMIT " + (spec.limit === undefined ? MAX_AGGREGATE_LIMIT : limitOf(spec.limit, MAX_AGGREGATE_LIMIT)).toString();
+    const limit = spec.limit === undefined ? MAX_AGGREGATE_LIMIT : limitOf(spec.limit, MAX_AGGREGATE_LIMIT);
+    // Salesforce refuses LIMIT on an ungrouped aggregate, which has one row anyway.
+    if (groupExpressions.length > 0) soql += " LIMIT " + limit.toString();
     return { soql: soql, object: object.key, fields: sortedDistinct(keys), groups: groups, measures: measures };
 }
 

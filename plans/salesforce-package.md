@@ -123,7 +123,7 @@ loops inside the Package except `exportQuery`, which polls a bounded number of t
 
 | Operation | REST | Check fields |
 | --- | --- | --- |
-| `logActivity({whatId, whoId, type: call/email/meeting, subject, description, date})` | `sobjects/Task` | `accountId` (looked up from `whatId`), `type` |
+| `logActivity({whatId, whoId, type: call/email/task, subject, description, date})` | `sobjects/Task` | `accountId` (looked up from `whatId`), `type` |
 | `createEvent({…})` | `sobjects/Event` | `accountId` (looked up) |
 | `listActivities(recordId, page)` | `ActivityHistories`, `OpenActivities` | `accountId` (looked up) |
 | `createNote(recordId, title, body)` | `ContentNote` + `ContentDocumentLink` | `accountId` (looked up) |
@@ -242,9 +242,24 @@ Salesforce returns at most 2,000 detail rows per run; the result says when it wa
   filter by name and folder; `analytics/reports` lists only the 200 most recently viewed.
 - `runListView` runs the SOQL the view's describe gives, so its pages use query cursors.
 - The fake-host test serves XML for the SOAP call and accepts the token in its session header.
-- Not yet checked against a real org: the `emailSimple` inputs, `TargetObject.Type` on work items,
-  the activity subqueries, `ContentNote`, and the report and dashboard JSON shapes. The live
-  tests cover them.
+- Checked against a Developer Edition org (2026-11-19, `network_read` and `network_mutation`):
+  the activity subqueries, `ContentNote` and its link, file upload and download, the feed,
+  SOAP `convertLead`, `getUpdated`/`getDeleted`, the Bulk export, a summary report's and a
+  dashboard's JSON, and pending approvals. Not yet checked: the `emailSimple` inputs,
+  `TargetObject.Type` on a real work item, and flows; the live test sends no email, submits no
+  approval and runs no flow.
+
+## Found by the live tests
+
+- An ungrouped aggregate sent `LIMIT`, which Salesforce refuses; it now has none.
+- `logActivity` wrote `Task.Type`, which orgs hide by default (field-level security), so every
+  call failed. It now sets only `TaskSubtype`: `type` is `call`, `email` or `task`; a meeting
+  is an event (`createEvent`, past times too). Typed task and event reads already used
+  `FIELDS(STANDARD)`, so their `type` reads as null there.
+- `createNote` failed with a bare 404 in an org with Notes turned off; it now says so.
+- The standard library's `fs.remove`, `fs.mkdir`, `fs.list` and `isEmpty` tags bound a
+  `$recursive` parameter that does not exist, so any package calling `remove` warned under
+  `--deny-warnings`; the tags now type `recursive: boolean`.
 
 ## Decided
 

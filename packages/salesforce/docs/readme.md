@@ -342,7 +342,7 @@ its contacts and opportunities.
 <!-- submilli:endif -->
 
 <!-- submilli:if capability="salesforce.com/activities.log" -->
-- `logActivity({ type, subject, whatId, whoId, description, date })` logs a completed call, email, meeting or other activity (`type`: `call`, `email`, `meeting`, `other`) as a task. `whatId` is the record it is about, `whoId` the contact or lead; `date` is `YYYY-MM-DD`. Returns the task's id.
+- `logActivity({ type, subject, whatId, whoId, description, date })` logs a completed call, email or other task (`type`: `call`, `email`, `task`; it sets `TaskSubtype`). Log a meeting with `createEvent`, which takes past times too. `whatId` is the record it is about, `whoId` the contact or lead; `date` is `YYYY-MM-DD`. Returns the task's id.
 <!-- submilli:endif -->
 <!-- submilli:if capability="salesforce.com/activities.createEvent" -->
 - `createEvent({ subject, start, end, whatId, whoId, location, description })` puts a meeting on the calendar; `start` and `end` are date-times with a zone, such as `2026-11-20T15:00:00Z`.

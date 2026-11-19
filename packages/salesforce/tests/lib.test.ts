@@ -200,6 +200,8 @@ function main(): void {
     assert(JSON.stringify(pipeline.groups) === JSON.stringify(["StageName", "calendar_month(CloseDate)"]), "group labels");
     assert(JSON.stringify(pipeline.measures) === JSON.stringify(["count()", "sum(Amount)"]), "measure labels");
     assert(JSON.stringify(pipeline.fields) === JSON.stringify(["amount", "closedate", "isclosed", "stagename"]), JSON.stringify(pipeline.fields));
+    const overall = buildAggregate({ object: "Opportunity", measures: [{ fn: "count" }] });
+    assert(overall.soql === "SELECT COUNT(Id) m0 FROM Opportunity", "an ungrouped aggregate has no LIMIT: " + overall.soql);
     assert(codeOf(() => { buildAggregate({ object: "Opportunity", measures: [{ fn: "sum" }] }); }) === "invalid_input", "sum needs a field");
     assert(codeOf(() => { buildAggregate({ object: "Opportunity", measures: [{ fn: "count" }], orderBy: [{ by: "Amount" }] }); }) === "invalid_input", "unknown label");
     const rows = aggregateFrom(
@@ -269,8 +271,8 @@ function main(): void {
     assert(outcomes[0].success && outcomes[1].id === null && outcomes[1].errors[0].errorCode === "REQUIRED_FIELD_MISSING", "batch");
 
     label("collaboration requests and responses");
-    assert(activityFields("call")[0].value === "Call" && activityFields("meeting")[1].value === "Meeting", "activity types");
-    assert(codeOf(() => { activityFields("lunch"); }) === "invalid_input", "an unknown activity type");
+    assert(activityFields("call")[0].value === "Call" && activityFields("task")[0].value === "Task" && activityFields("email").length === 1, "activity types set only the subtype");
+    assert(codeOf(() => { activityFields("meeting"); }) === "invalid_input", "a meeting is an event, not an activity type");
     const history = activitySoql("Account", "001000000000001AAA", false, 50);
     assert(history.indexOf("FROM ActivityHistories ORDER BY ActivityDate DESC, LastModifiedDate DESC LIMIT 50) FROM Account WHERE Id = '001000000000001AAA'") > 0, history);
     assert(activitySoql("Contact", "003000000000001AAA", true, 5).indexOf("FROM OpenActivities ORDER BY ActivityDate ASC") > 0, "open activities");

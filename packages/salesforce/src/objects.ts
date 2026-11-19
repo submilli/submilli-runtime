@@ -304,7 +304,7 @@ export interface Task extends StandardRecord {
     isClosed: boolean;
     /** `Task`, `Email`, `Call` or `LinkedIn`. */
     taskSubtype: string | null;
-    /** `Type`. */
+    /** `Type`; null where the org hides the field, as it does by default. */
     type: string | null;
     /** `Description`. */
     description: string | null;
@@ -336,7 +336,7 @@ export interface Event extends StandardRecord {
     ownerId: string | null;
     /** `Owner.Name`. */
     ownerName: string | null;
-    /** `Type`. */
+    /** `Type`; null where the org hides the field, as it does by default. */
     type: string | null;
     /** `Description`. */
     description: string | null;

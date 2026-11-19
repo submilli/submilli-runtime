@@ -52,7 +52,7 @@ function main(): string {
 
     // Calls logged on nothing yet; metadata reads; not the org's limits.
     allowed(() => { logActivity({ type: "call", subject: "Intro call" }); });
-    deniedAt("salesforce.com/activities.log", "main", () => { logActivity({ type: "meeting", subject: "Lunch" }); });
+    deniedAt("salesforce.com/activities.log", "main", () => { logActivity({ type: "task", subject: "Lunch" }); });
     allowed(() => { describeObject("Opportunity"); });
     deniedAt("salesforce.com/org.limits", "main", () => { getLimits(); });
     return "the assistant's rules hold";

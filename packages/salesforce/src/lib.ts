@@ -1831,7 +1831,12 @@ export function createNote(recordId: string, title: string, body: string): strin
     const content = noteContent(body);
     const facts = recordFacts(id);
     check("salesforce.com/notes.create", { object: facts.key, accountId: facts.accountId, ownerId: facts.ownerId });
-    const noteId = createdId(sfPost("/sobjects/ContentNote", { Title: noteTitle, Content: content }));
+    const created = orgPost(dataPath() + "/sobjects/ContentNote", { Title: noteTitle, Content: content }, headers(0));
+    if (created.status === 404) {
+        // Salesforce answers a bare NOT_FOUND when the org has Notes turned off.
+        throw new SalesforceError("NOT_FOUND", "this org has Notes turned off: Setup, Notes Settings, Enable Notes", [], 404, false);
+    }
+    const noteId = createdId(requireOk(created));
     const linked = orgPost(dataPath() + "/sobjects/ContentDocumentLink", { ContentDocumentId: noteId, LinkedEntityId: id, ShareType: "I" }, headers(0));
     if (!linked.ok) {
         // A note on no record is not what was asked for: remove it, and report why.

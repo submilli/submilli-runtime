@@ -7,11 +7,15 @@ import { FieldWrite } from "./request";
 import { arrayAt, flagAt, numberAt, objectAt, textAt } from "./response";
 
 /** What kind of activity `logActivity` records. */
-export type ActivityType = "call" | "email" | "meeting" | "other";
+export type ActivityType = "call" | "email" | "task";
 
 /** A completed activity to log, such as a call. */
 export interface ActivityInput {
-    /** `call` and `email` set the task's subtype; `meeting` and `other` its `Type`. */
+    /**
+     * The task's subtype (`TaskSubtype`): `Call`, `Email` or `Task`. A meeting is
+     * an event: `createEvent` takes past times too. The task's `Type` picklist is
+     * not set, since orgs hide it by default; set it through `custom` where shown.
+     */
     type: ActivityType;
     /** One line, such as `Call with Dana about renewal`. */
     subject: string;
@@ -185,11 +189,10 @@ const MAX_FEED_CURSOR = 512;
 
 // The typed fields `logActivity` sets, by its type.
 export function activityFields(type: string): FieldWrite[] {
-    if (type === "call") return [{ field: "TaskSubtype", value: "Call" }, { field: "Type", value: "Call" }];
-    if (type === "email") return [{ field: "TaskSubtype", value: "Email" }, { field: "Type", value: "Email" }];
-    if (type === "meeting") return [{ field: "TaskSubtype", value: "Task" }, { field: "Type", value: "Meeting" }];
-    if (type === "other") return [{ field: "TaskSubtype", value: "Task" }, { field: "Type", value: "Other" }];
-    throw validationError("invalid_input", "type must be call, email, meeting or other, got " + JSON.stringify(type));
+    if (type === "call") return [{ field: "TaskSubtype", value: "Call" }];
+    if (type === "email") return [{ field: "TaskSubtype", value: "Email" }];
+    if (type === "task") return [{ field: "TaskSubtype", value: "Task" }];
+    throw validationError("invalid_input", "type must be call, email or task, got " + JSON.stringify(type));
 }
 
 // The SOQL that reads a record's activity history or open activities.
