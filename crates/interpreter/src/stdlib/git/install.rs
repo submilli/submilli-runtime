@@ -138,6 +138,29 @@ fn install_repository_reads(
     register_host_value_async(
         linker,
         MODULE_NAME,
+        crate::mangle::extend(&repository, "ls"),
+        FuncType::new(
+            engine,
+            [receiver.clone(), argument.clone(), argument.clone()],
+            [array.clone()],
+        ),
+        |caller, params| {
+            Box::pin(async move {
+                let call = GitCall::new(caller, "ls")?;
+                let arguments = super::ListArguments {
+                    revision: read_argument(caller, abi_arg(params, 1)?, None, &call).await?,
+                    path: read_argument(caller, abi_arg(params, 2)?, Some(String::new()), &call)
+                        .await?,
+                };
+                let path = repository_path(caller, abi_arg(params, 0)?)?;
+                let result = call.execute(caller, path, arguments, super::ls).await?;
+                encode_json(caller, &result, call.max_bytes)
+            })
+        },
+    )?;
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
         crate::mangle::extend(&repository, "branches"),
         FuncType::new(engine, [receiver.clone()], [array.clone()]),
         |caller, params| {

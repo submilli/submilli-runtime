@@ -112,6 +112,8 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             params: vec![options(&[
                 ("limit", Type::Number),
                 ("offset", Type::Number),
+                ("path", Type::String),
+                ("ref", Type::String),
             ])],
             ret: with_optional(
                 object(&[("commits", array(commit))], false),
@@ -119,7 +121,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 Type::Number,
             ),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Read history, default 50 commits; limit 1..1000, nonnegative integer offset. Traversal is resource-bounded. */"),
+            doc: crate::doc(FileId::GIT, "/** Read history, default 50 commits from HEAD; limit 1..1000, nonnegative integer offset; path keeps commits that changed that file and ref starts at that commit. Traversal is resource-bounded. */"),
         },
     );
     methods.insert(
@@ -141,6 +143,21 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             ),
             predicate: None,
             doc: crate::doc(FileId::GIT, "/** Compare working (default), staged, or refs (requires from and to). Bounded patches and binary path markers. */"),
+        },
+    );
+    methods.insert(
+        "ls".into(),
+        MethodSig {
+            overloads: Vec::new(),
+            optional: false,
+            generics: Default::default(),
+            params: vec![string("ref"), default_string("path", "")],
+            ret: array(object(
+                &[("path", Type::String), ("kind", Type::String)],
+                false,
+            )),
+            predicate: None,
+            doc: crate::doc(FileId::GIT, "/** List files and directories in a repository-relative directory at a commit. Omit path for the root. kind is file or directory; a file path can be passed to show. Working-tree and staged changes are not included. */"),
         },
     );
     methods.insert(

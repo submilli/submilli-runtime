@@ -770,6 +770,12 @@ async fn mount_read_only_refuses_repository_changes_but_not_reads() {
         &[json!(["note.txt"])],
     )
     .unwrap();
+    native(volume.path(), &["config", "user.name", "Agent"]);
+    native(
+        volume.path(),
+        &["config", "user.email", "agent@example.com"],
+    );
+    native(volume.path(), &["commit", "-m", "note"]);
     std::fs::write(volume.path().join("other.txt"), "other").unwrap();
     let before = storage::read_files(
         &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
@@ -810,6 +816,20 @@ async fn mount_read_only_refuses_repository_changes_but_not_reads() {
     );
     assert!(!volume.path().join("nested").exists());
     worker::run(&vfs, &job_at(&vfs, "status", "/memory"), "status", &[]).unwrap();
+    worker::run(
+        &vfs,
+        &job_at(&vfs, "ls", "/memory"),
+        "ls",
+        &[json!("HEAD"), json!("")],
+    )
+    .unwrap();
+    worker::run(
+        &vfs,
+        &job_at(&vfs, "log", "/memory"),
+        "log",
+        &[json!({"path": "note.txt", "ref": "HEAD", "limit": 1})],
+    )
+    .unwrap();
     let after = storage::read_files(
         &Dir::open_ambient_dir(volume.path(), cap_std::ambient_authority()).unwrap(),
         true,

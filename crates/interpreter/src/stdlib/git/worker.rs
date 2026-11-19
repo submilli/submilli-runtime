@@ -243,6 +243,15 @@ pub(super) fn run(vfs: &crate::runtime::Vfs, job: &Job, op: &str, args: &[Value]
         "remotes" => super::remotes(vfs, job, ()).map(|_| ()),
         "log" => super::log(vfs, job, args.first().cloned().unwrap_or(Value::Null)).map(|_| ()),
         "diff" => super::diff(vfs, job, args.first().cloned().unwrap_or(Value::Null)).map(|_| ()),
+        "ls" => super::ls(
+            vfs,
+            job,
+            super::ListArguments {
+                revision: text(0)?,
+                path: args.get(1).and_then(Value::as_str).unwrap_or("").to_owned(),
+            },
+        )
+        .map(|_| ()),
         "show" => super::show(
             vfs,
             job,

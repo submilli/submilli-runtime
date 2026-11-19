@@ -188,6 +188,11 @@ fn show(vfs: &Vfs, job: &Job, arguments: ShowArguments) -> Result<effects::Outco
     operations::show(&snapshot, &arguments.revision, &arguments.path).map(effects::OutcomeBytes)
 }
 
+fn ls(vfs: &Vfs, job: &Job, arguments: ListArguments) -> Result<Value> {
+    let (_permit, snapshot) = worker::open_repository(vfs, job)?;
+    operations::ls(&snapshot, &arguments.revision, &arguments.path)
+}
+
 fn init(vfs: &Vfs, job: &Job, arguments: Value) -> Result<()> {
     let branch = worker::requested_branch(&arguments, "main")?;
     job.check("git.init", serde_json::json!({"path":job.path}))?;
@@ -291,6 +296,11 @@ fn pull(vfs: &Vfs, job: &Job, arguments: FetchArguments) -> Result<Value> {
 
 #[derive(Serialize)]
 struct ShowArguments {
+    revision: String,
+    path: String,
+}
+#[derive(Serialize)]
+struct ListArguments {
     revision: String,
     path: String,
 }

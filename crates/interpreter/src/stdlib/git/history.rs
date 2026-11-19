@@ -201,6 +201,292 @@ impl<'a> Ancestors<'a> {
     }
 }
 
+/// One page of history starting at `start`, in the same newest-first order as
+/// `log`, without touching the store's HEAD cursor.
+pub(super) fn commit_page(
+    snapshot: &Snapshot,
+    start: gix::ObjectId,
+    offset: u64,
+    limit: u64,
+) -> Result<Vec<gix::ObjectId>> {
+    let mut walk = BoundedWalk::start(snapshot, start)?;
+    let wanted = page_span(offset, limit);
+    let mut order = Vec::new();
+    order
+        .try_reserve_exact(wanted)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    while order.len() < wanted {
+        let Some(id) = walk.pop()? else {
+            break;
+        };
+        if !walk.is_shallow_boundary(id) {
+            walk.enqueue_parents(id)?;
+        }
+        order.push(id);
+    }
+    let page = page_slice(&order, offset, limit)?;
+    snapshot.record_algorithm_fuel(crate::runtime::fuel::ELEM.cost(page.len() as u64))?;
+    Ok(page)
+}
+
+/// Commits that changed `entry_at`'s path, using `git log -- <path>`'s default
+/// simplification: a commit is kept when its entry differs from every parent,
+/// and a merge that matches one parent follows only that parent.
+///
+/// A shallow boundary is treated as a root: its missing parents are grafted
+/// away, so a file present there counts as introduced at that commit.
+pub(super) fn file_history_page(
+    snapshot: &Snapshot,
+    start: gix::ObjectId,
+    offset: u64,
+    limit: u64,
+    mut entry_at: impl FnMut(
+        &Snapshot,
+        gix::ObjectId,
+        u64,
+    ) -> Result<(Option<(u32, gix::ObjectId)>, u64)>,
+) -> Result<Vec<gix::ObjectId>> {
+    let mut walk = BoundedWalk::start(snapshot, start)?;
+    let wanted = page_span(offset, limit);
+    let mut matches = Vec::new();
+    matches
+        .try_reserve_exact(wanted)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    while matches.len() < wanted {
+        let Some(id) = walk.pop()? else {
+            break;
+        };
+        let decoded = walk.decode(id)?;
+        let tree = decoded.tree;
+        // A shallow boundary's parents are not in the repository. Git grafts
+        // them away, so the boundary is a root: the file's presence is a change.
+        let parents = if walk.is_shallow_boundary(id) {
+            Vec::new()
+        } else {
+            decoded.parents
+        };
+        let (entry, bytes) = entry_at(
+            snapshot,
+            tree,
+            snapshot.max_bytes.saturating_sub(walk.bytes),
+        )?;
+        walk.add_bytes(bytes)?;
+        if parents.is_empty() {
+            if entry.is_some() {
+                matches.push(id);
+            }
+            continue;
+        }
+        let mut matching_parent = None;
+        for parent in &parents {
+            let parent_tree = walk.decode(*parent)?.tree;
+            let parent_entry = if parent_tree == tree {
+                entry
+            } else {
+                let (parent_entry, bytes) = entry_at(
+                    snapshot,
+                    parent_tree,
+                    snapshot.max_bytes.saturating_sub(walk.bytes),
+                )?;
+                walk.add_bytes(bytes)?;
+                parent_entry
+            };
+            if parent_entry == entry {
+                matching_parent = Some(*parent);
+                break;
+            }
+        }
+        if let Some(parent) = matching_parent {
+            walk.enqueue(parent)?;
+        } else {
+            matches.push(id);
+            for parent in parents {
+                walk.enqueue(parent)?;
+            }
+        }
+    }
+    let page = page_slice(&matches, offset, limit)?;
+    snapshot.record_algorithm_fuel(crate::runtime::fuel::ELEM.cost(page.len() as u64))?;
+    Ok(page)
+}
+
+fn page_span(offset: u64, limit: u64) -> usize {
+    offset
+        .saturating_add(limit)
+        .saturating_add(1)
+        .min((super::log_cache::MAX_ENTRIES + 1) as u64) as usize
+}
+
+fn page_slice(order: &[gix::ObjectId], offset: u64, limit: u64) -> Result<Vec<gix::ObjectId>> {
+    let start = usize::try_from(offset)
+        .unwrap_or(usize::MAX)
+        .min(order.len());
+    let end = start
+        .saturating_add(limit as usize)
+        .saturating_add(1)
+        .min(order.len());
+    let mut page = Vec::new();
+    page.try_reserve_exact(end - start)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    page.extend_from_slice(&order[start..end]);
+    Ok(page)
+}
+
+fn parent_ids(snapshot: &Snapshot, commit: &gix::Commit<'_>) -> Result<Vec<gix::ObjectId>> {
+    let mut parents = Vec::new();
+    for token in commit.iter() {
+        snapshot.check_cancelled()?;
+        match token? {
+            gix::objs::commit::ref_iter::Token::Tree { .. } => {}
+            gix::objs::commit::ref_iter::Token::Parent { id } => parents.push(id),
+            _ => break,
+        }
+    }
+    Ok(parents)
+}
+
+#[derive(Clone)]
+struct DecodedCommit {
+    tree: gix::ObjectId,
+    parents: Vec<gix::ObjectId>,
+}
+
+struct BoundedWalk<'a> {
+    snapshot: &'a Snapshot,
+    pending: VecDeque<gix::ObjectId>,
+    seen: HashSet<gix::ObjectId>,
+    /// Commit headers already decoded and charged. A parent compared before it
+    /// is visited must not be decoded, or counted, a second time.
+    decoded: std::collections::HashMap<gix::ObjectId, DecodedCommit>,
+    bytes: u64,
+    visited: usize,
+    shallow: Option<gix::shallow::Commits>,
+}
+
+impl<'a> BoundedWalk<'a> {
+    fn start(snapshot: &'a Snapshot, head: gix::ObjectId) -> Result<Self> {
+        snapshot.check_cancelled()?;
+        snapshot.record_algorithm_fuel(crate::runtime::fuel::SYSCALL.cost(1))?;
+        let shallow_path = snapshot.repo.shallow_file();
+        match std::fs::metadata(&shallow_path) {
+            Ok(metadata) => {
+                if metadata.len() > snapshot.max_bytes {
+                    bail!("git: shallow history resource limit exceeded");
+                }
+                snapshot.record_algorithm_fuel(crate::runtime::fuel::PARSE.cost(metadata.len()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let shallow = snapshot.repo.shallow_commits()?;
+        if shallow
+            .as_ref()
+            .is_some_and(|entries| entries.len() > super::log_cache::MAX_ENTRIES)
+        {
+            bail!("git: history resource limit exceeded");
+        }
+        let bytes = 128 * shallow.as_ref().map_or(0, |entries| entries.len()) as u64;
+        if bytes > snapshot.max_bytes {
+            return Err(super::storage::memory_limit("history resource"));
+        }
+        let mut walk = Self {
+            snapshot,
+            pending: VecDeque::new(),
+            seen: HashSet::new(),
+            decoded: std::collections::HashMap::new(),
+            bytes,
+            visited: 0,
+            shallow,
+        };
+        // Grow with the frontier. A full 16,384-slot reservation belongs to the
+        // HEAD cache, which admits it; this one-shot walk must not allocate it
+        // before the byte cap can refuse.
+        walk.enqueue(head)?;
+        Ok(walk)
+    }
+
+    fn is_shallow_boundary(&self, id: gix::ObjectId) -> bool {
+        self.shallow
+            .as_ref()
+            .is_some_and(|boundary| boundary.binary_search(&id).is_ok())
+    }
+
+    fn pop(&mut self) -> Result<Option<gix::ObjectId>> {
+        self.snapshot.check_cancelled()?;
+        let Some(id) = self.pending.pop_front() else {
+            return Ok(None);
+        };
+        if self.visited == super::log_cache::MAX_ENTRIES {
+            bail!("git: history resource limit exceeded");
+        }
+        self.visited += 1;
+        self.decode(id)?;
+        Ok(Some(id))
+    }
+
+    /// The commit's tree and parents. A repeated id returns the first decode.
+    fn decode(&mut self, id: gix::ObjectId) -> Result<DecodedCommit> {
+        if let Some(decoded) = self.decoded.get(&id) {
+            return Ok(decoded.clone());
+        }
+        if self.decoded.len() == super::log_cache::MAX_ENTRIES {
+            bail!("git: history resource limit exceeded");
+        }
+        let commit = super::object::commit(
+            self.snapshot,
+            id,
+            self.snapshot.max_bytes.saturating_sub(self.bytes),
+        )?;
+        self.add_bytes(commit.data.len() as u64)?;
+        let decoded = DecodedCommit {
+            tree: commit.tree_id()?.detach(),
+            parents: parent_ids(self.snapshot, &commit)?,
+        };
+        self.decoded
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        self.decoded.insert(id, decoded.clone());
+        Ok(decoded)
+    }
+
+    fn enqueue_parents(&mut self, id: gix::ObjectId) -> Result<()> {
+        let parents = self.decode(id)?.parents.clone();
+        for parent in parents {
+            self.enqueue(parent)?;
+        }
+        Ok(())
+    }
+
+    fn enqueue(&mut self, id: gix::ObjectId) -> Result<()> {
+        self.snapshot
+            .record_algorithm_fuel(crate::runtime::fuel::ELEM.cost(1))?;
+        if self.seen.contains(&id) {
+            return Ok(());
+        }
+        if self.seen.len() == super::log_cache::MAX_ENTRIES {
+            bail!("git: history resource limit exceeded");
+        }
+        self.add_bytes(128)?;
+        self.seen
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        self.pending
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        self.seen.insert(id);
+        self.pending.push_back(id);
+        Ok(())
+    }
+
+    fn add_bytes(&mut self, bytes: u64) -> Result<()> {
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.bytes > self.snapshot.max_bytes {
+            return Err(super::storage::memory_limit("history resource"));
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn is_ancestor(
     snapshot: &Snapshot,
     ancestor: gix::ObjectId,
