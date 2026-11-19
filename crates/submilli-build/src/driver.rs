@@ -118,12 +118,15 @@ fn build_with_inputs(
         .map_err(|error| DriverError::ConfigurationInput(error.to_string()))?;
     let mut configuration = BTreeMap::new();
     for package in package_build_scope(manifest, only)? {
+        // The selected package takes the command's inputs; every other package, in a
+        // repository-wide build too, its installed overrides, as installs do.
         let overrides = if only == Some(&package.name) {
             inputs.values.clone()
-        } else if only.is_some() {
+        } else {
             match externals.load(package.name.as_str()) {
                 Ok(artifact) => artifact.metadata.config.overrides,
                 Err(PackageStoreError::MissingPackage { .. }) => BTreeMap::new(),
+                Err(error) if error.is_incomplete_artifact() => BTreeMap::new(),
                 Err(PackageStoreError::Unavailable { .. }) => {
                     crate::package_store::saved_overrides(externals, package.name.as_str())
                 }
@@ -134,8 +137,6 @@ fn build_with_inputs(
                     });
                 }
             }
-        } else {
-            BTreeMap::new()
         };
         configuration.insert(package.name.clone(), overrides);
     }

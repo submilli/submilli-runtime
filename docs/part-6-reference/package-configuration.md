@@ -76,6 +76,7 @@ submilli server packages install OWNER/REPOSITORY @OWNER/search --config baseUrl
 | Invalid inputs | Unknown/duplicate names, malformed assignments, incompatible types, and missing required parameters fail the command |
 | Local builds | Source defaults plus explicit inputs. The selected Package's installed overrides are not inherited |
 | Local dependencies | Their own installed overrides may satisfy required parameters |
+| Repository-wide builds | Without `-p`, every Package uses its installed overrides. Install a Package with required parameters first: `build publish-local -p … --config …` |
 | Reset | Install commands accept repeatable `--reset-config NAME` to remove a saved override and restore the source default |
 | Reset errors | Unknown saved overrides, duplicate resets, overlap with `--config`, and required values left without a default are refused |
 
