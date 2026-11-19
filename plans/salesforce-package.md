@@ -260,6 +260,12 @@ Salesforce returns at most 2,000 detail rows per run; the result says when it wa
 - The standard library's `fs.remove`, `fs.mkdir`, `fs.list` and `isEmpty` tags bound a
   `$recursive` parameter that does not exist, so any package calling `remove` warned under
   `--deny-warnings`; the tags now type `recursive: boolean`.
+- `sendEmail` with a contact as `relatedTo` failed: Salesforce logs the email as a task on the
+  record (its `WhatId`), which a contact, lead or user cannot be. It now refuses those before
+  the check. The 400 an invocable action answers with also lost Salesforce's message; errors
+  inside an action's or approval's result are now read.
+- Approvals, flows, upsert, email and the typed reads of every object passed against the org
+  once `tests/org/` was deployed.
 
 ## Decided
 

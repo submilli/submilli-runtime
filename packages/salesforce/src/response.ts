@@ -303,9 +303,14 @@ export function failureFrom(status: number, statusText: string, body: string): F
     }
     let first: unknown = parsed;
     if (Array.isArray(parsed)) first = parsed.length > 0 ? parsed[0] : null;
+    // An invocable action's or approval's failure: its result, with the errors inside.
+    if (first !== null && typeof first === "object" && !Array.isArray(first)) {
+        const errors = (first as Record<string, unknown>)["errors"];
+        if (Array.isArray(errors) && errors.length > 0) first = errors[0];
+    }
     if (first !== null && typeof first === "object" && !Array.isArray(first)) {
         const error = first as Record<string, unknown>;
-        const errorCode = error["errorCode"] ?? error["error"];
+        const errorCode = error["errorCode"] ?? error["statusCode"] ?? error["error"];
         const message = error["message"] ?? error["error_description"];
         if (typeof errorCode === "string") code = errorCode;
         if (typeof message === "string") detail = message;

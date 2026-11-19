@@ -366,7 +366,7 @@ its contacts and opportunities.
 - `readFeed(recordId, { pageSize, cursor })` returns `{ posts, nextCursor }`, newest first, 1 to 100 per page (default 25).
 <!-- submilli:endif -->
 <!-- submilli:if capability="salesforce.com/email.send" -->
-- `sendEmail({ to, subject, body, relatedTo })` sends a plain-text email as this user to 1 to 5 bare addresses (`dana@example.com`), logged on `relatedTo` when given.
+- `sendEmail({ to, subject, body, relatedTo })` sends a plain-text email as this user to 1 to 5 bare addresses (`dana@example.com`), logged as a task on `relatedTo` when given (an account, opportunity or case; not a contact or lead).
 <!-- submilli:endif -->
 
 <!-- submilli:if any="salesforce.com/approvals.submit salesforce.com/approvals.approve salesforce.com/approvals.reject salesforce.com/approvals.listPending salesforce.com/flows.run salesforce.com/leads.convert salesforce.com/records.changeOwner" -->

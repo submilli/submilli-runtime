@@ -350,11 +350,18 @@ cargo run -p submilli -- build test -p @submilli/salesforce \
   It skips the steps that need data the org lacks (an account, a report it may
   run, a dashboard).
 - `tests/network_mutation.test.ts` also needs `SALESFORCE_LIVE_MUTATIONS=true`.
-  It creates accounts, a contact, a case, a task, an event, a note, a file, a
-  Chatter post and a lead named with a run id, converts the lead, and deletes
-  them all at the end, also when a step fails. It sends no email, submits no
-  approval and runs no flow. The org needs Notes turned on (Setup, Notes
-  Settings).
+  It creates accounts, contacts, cases, activities, a note, a file, a Chatter
+  post, a lead it converts, a product and line item, a campaign and member, a
+  contract and an order, all named with a run id, and deletes them at the end,
+  also when a step fails. With the metadata in `tests/org/` deployed (an
+  external id field on Account, an approval process and a flow, plus a
+  permission set to assign to the token's user) it also upserts, approves,
+  rejects and runs the flow; without it those steps are skipped. It sends one
+  email, logged on an account, only when `SALESFORCE_LIVE_EMAIL_TO` names the
+  address to send it to.
+
+The org needs Notes turned on (Setup, Notes Settings), the token's user to be a
+Marketing User (for campaigns), and the standard price book active.
 
 A client-credentials token works: an External Client App with the `api` scope
 and the client credentials flow, run as an admin user.

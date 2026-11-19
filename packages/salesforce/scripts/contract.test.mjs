@@ -424,18 +424,23 @@ test('postToFeed sends text then each mention, and checks the mentions', () => {
 
 test('sendEmail runs emailSimple as the user and checks the recipients and their domain', () => {
     reset();
-    record('Contact', CONTACT, { OwnerId: OWNER, AccountId: ACCOUNT });
+    record('Opportunity', OPPORTUNITY, { OwnerId: OWNER, AccountId: ACCOUNT });
     on('POST', '/actions/standard/emailSimple', reply(200, [{ isSuccess: true, outputValues: {} }]));
-    sf.sendEmail({ to: ['Dana@Acme.com', 'lee@acme.com'], subject: 'Terms', body: 'Attached.', relatedTo: CONTACT });
+    sf.sendEmail({ to: ['Dana@Acme.com', 'lee@acme.com'], subject: 'Terms', body: 'Attached.', relatedTo: OPPORTUNITY });
     assert.deepEqual(requests.at(-1).body, { inputs: [{
         emailAddresses: 'dana@acme.com,lee@acme.com', emailSubject: 'Terms', emailBody: 'Attached.', senderType: 'CurrentUser',
-        relatedRecordId: CONTACT, logEmailOnSend: true,
+        relatedRecordId: OPPORTUNITY, logEmailOnSend: true,
     }] });
-    assert.deepEqual(lastCheck().context, { to: ['dana@acme.com', 'lee@acme.com'], domains: ['acme.com'], domain: 'acme.com', object: 'contact', accountId: ACCOUNT });
+    assert.deepEqual(lastCheck().context, { to: ['dana@acme.com', 'lee@acme.com'], domains: ['acme.com'], domain: 'acme.com', object: 'opportunity', accountId: ACCOUNT });
+    assert.throws(() => sf.sendEmail({ to: ['a@b.com'], subject: 'S', body: 'B', relatedTo: CONTACT }), /a contact, lead or user cannot be/);
 
     reset();
     on('POST', '/actions/standard/emailSimple', reply(200, [{ isSuccess: false, errors: [{ statusCode: 'NO_MASS_MAIL_PERMISSION', message: 'not allowed' }] }]));
     assert.throws(() => sf.sendEmail({ to: ['a@b.com'], subject: 'S', body: 'B' }), (error) => error.errorCode === 'NO_MASS_MAIL_PERMISSION');
+    // A refused action answers 400 with the same result shape.
+    reset();
+    on('POST', '/actions/standard/emailSimple', reply(400, [{ isSuccess: false, errors: [{ statusCode: 'UNKNOWN_EXCEPTION', message: 'SaveAsActivity is not allowed', fields: [] }] }]));
+    assert.throws(() => sf.sendEmail({ to: ['a@b.com'], subject: 'S', body: 'B' }), (error) => error.errorCode === 'UNKNOWN_EXCEPTION' && /SaveAsActivity is not allowed/.test(error.message));
     assert.throws(() => sf.sendEmail({ to: ['a@b.com', 'c@d.com', 'e@f.com', 'g@h.com', 'i@j.com', 'k@l.com'], subject: 'S', body: 'B' }), /1 to 5/);
 });
 

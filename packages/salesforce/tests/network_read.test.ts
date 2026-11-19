@@ -9,13 +9,18 @@ import {
     describeObject,
     describeReport,
     findAccounts,
+    findCases,
     findContacts,
+    findLeads,
     findOpportunities,
+    findPricebooks,
     findUsers,
     getAccount,
+    getContact,
     getCurrentUser,
     getDashboard,
     getLimits,
+    getPricebook,
     getRecord,
     getRelated,
     getUser,
@@ -32,9 +37,12 @@ import {
     SalesforceError,
     search,
     soql,
+    sosl,
 } from "@submilli/salesforce";
 
 const ABSENT_ACCOUNT = "001000000000000AAA";
+// Characters SOSL reserves in a FIND clause.
+const RESERVED = "?&|!{}[]()^~*:\\\"'+-";
 
 function main(): void {
     if (secrets.get("SALESFORCE_ACCESS_TOKEN") === undefined) {
@@ -102,6 +110,12 @@ function main(): void {
         }
         const typed = findContacts({ accountId: first.id });
         assert(typed.totalSize === related.totalSize, "findContacts and getRelated agree");
+        if (typed.records.length > 0) {
+            const contact = getContact(typed.records[0].id);
+            assert(contact !== null && contact.accountId === first.id && contact.name === typed.records[0].name, "getContact reads a listed contact");
+        }
+        const cases = findCases({ accountId: first.id }, { pageSize: 200 });
+        for (const kase of cases.records) assert(kase.accountId === first.id && kase.caseNumber !== null, "findCases keeps to the account");
 
         label("activities and feed of an account");
         for (const activity of listActivities(first.id, { limit: 20 })) {
@@ -122,6 +136,14 @@ function main(): void {
                 if (record.id === first.id) hit = true;
             }
             assert(hit, "search finds the account (" + name + ")");
+            let escaped = "";
+            for (const c of name) escaped += (RESERVED.indexOf(c) >= 0 ? "\\" : "") + c;
+            const raw = sosl("FIND {" + escaped + "} IN NAME FIELDS RETURNING Account(Id, Name)");
+            let rawHit = false;
+            for (const record of raw) {
+                if (record.id === first.id) rawHit = record.object === "Account";
+            }
+            assert(rawHit, "raw SOSL finds the account");
         }
     }
 
@@ -147,6 +169,13 @@ function main(): void {
     for (const deal of open.records) assert(deal.stage !== null, "open opportunities have a stage");
     const text = soql("SELECT Id, Name FROM Account ORDER BY Name LIMIT 5");
     assert(text.records.length <= 5, "raw SOQL keeps its limit");
+
+    label("leads and price books");
+    for (const lead of findLeads({ isConverted: false }, { pageSize: 200 }).records) assert(!lead.isConverted, "unconverted leads are unconverted");
+    const standard = findPricebooks({ isStandard: true });
+    assert(standard.records.length === 1, "the org has one standard price book");
+    const pricebook = getPricebook(standard.records[0].id);
+    assert(pricebook !== null && pricebook.isStandard, "getPricebook reads it");
 
     label("list views");
     const views = listListViews("Account");

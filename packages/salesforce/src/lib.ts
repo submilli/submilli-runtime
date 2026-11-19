@@ -1964,6 +1964,10 @@ export function sendEmail(input: EmailInput): void {
     const emailSubject = requireText(subject, "subject");
     const emailBody = requireText(body, "body");
     const relatedId = optionalId(relatedTo, "relatedTo");
+    // Salesforce logs the email as a task on the record (its WhatId), which a person cannot be.
+    if (PERSON_PREFIXES.includes(relatedId.slice(0, 3))) {
+        throw validationError("invalid_input", "relatedTo must be a record a task can be on, such as an account, opportunity or case; a contact, lead or user cannot be");
+    }
     const facts = relatedId.length > 0 ? recordFacts(relatedId) : NO_RECORD;
     const distinctDomains = sortedDistinct(domains);
     check("salesforce.com/email.send", {
@@ -2487,6 +2491,9 @@ interface RecordFacts {
     accountId: string;
     exists: boolean;
 }
+
+// Contacts, leads and users: what a task's WhoId names, never its WhatId.
+const PERSON_PREFIXES = ["003", "00Q", "005"];
 
 const NO_RECORD: RecordFacts = { object: "", key: "", ownerId: "", accountId: "", exists: false };
 

@@ -175,7 +175,7 @@ export interface EmailInput {
     subject: string;
     /** Plain-text body. */
     body: string;
-    /** A record to log the email on, such as a contact, lead or opportunity. */
+    /** A record to log the email on as a task: an account, opportunity, case or other record a task can be on, not a contact, lead or user. */
     relatedTo?: string;
 }
 
