@@ -2141,42 +2141,52 @@ fn render_ts_type(
                 extends.unwrap_or_default()
             );
             for (fname, field) in static_fields {
-                if field.visibility == crate::Visibility::Private {
+                let Some(modifier) = exported_member_modifier(field.visibility) else {
                     continue;
-                }
+                };
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let fname = member_name(fname);
-                let _ = writeln!(out, "{inner}static {ro}{fname}: {};", ts_type(&field.ty));
+                let _ = writeln!(
+                    out,
+                    "{inner}{modifier}static {ro}{fname}: {};",
+                    ts_type(&field.ty)
+                );
             }
             for (mname, m) in statics {
+                let visibility = static_visibility.get(mname).copied().unwrap_or_default();
+                let Some(modifier) = exported_member_modifier(visibility) else {
+                    continue;
+                };
                 for m in m.signatures() {
-                    if static_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                        continue;
-                    }
                     push_doc(out, &m.doc, &inner);
                     let ret =
                         ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
                     let mname = member_name(mname);
                     let _ = writeln!(
                         out,
-                        "{inner}static {mname}{}({}): {ret};",
+                        "{inner}{modifier}static {mname}{}({}): {ret};",
                         generics_str(&m.generics),
                         ts_params_str(&m.params, m.doc.as_ref())
                     );
                 }
             }
             for (fname, field) in fields {
-                if field.visibility == crate::Visibility::Private
-                    || accessors.iter().any(|a| a.name() == fname)
-                {
+                let Some(modifier) = exported_member_modifier(field.visibility) else {
+                    continue;
+                };
+                if accessors.iter().any(|a| a.name() == fname) {
                     continue;
                 }
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
                 let fname = member_name(fname);
-                let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", ts_type(&field.ty));
+                let _ = writeln!(
+                    out,
+                    "{inner}{modifier}{ro}{fname}{opt}: {};",
+                    ts_type(&field.ty)
+                );
             }
             render_class_accessors(out, fields, accessors, &inner, ts_type);
             // A private constructor still renders, so a TypeScript consumer can't
@@ -2184,20 +2194,22 @@ fn render_ts_type(
             // class's own module is legal here, and tsc rejects `extends` of a
             // class whose constructor is `private`. Its parameters stay hidden. The
             // cost: tsc lets a consumer extend it, which Submilli rejects.
-            if *constructor_visibility == crate::Visibility::Private {
-                let _ = writeln!(out, "{inner}protected constructor();");
-            } else {
-                let _ = writeln!(
-                    out,
-                    "{inner}constructor({});",
-                    ts_params_str(constructor, None)
-                );
-            }
+            let (modifier, params) = match constructor_visibility {
+                crate::Visibility::Public => ("", constructor.as_slice()),
+                crate::Visibility::Private => ("protected ", &[][..]),
+                crate::Visibility::Protected => ("protected ", constructor.as_slice()),
+            };
+            let _ = writeln!(
+                out,
+                "{inner}{modifier}constructor({});",
+                ts_params_str(params, None)
+            );
             for (mname, m) in methods {
+                let visibility = method_visibility.get(mname).copied().unwrap_or_default();
+                let Some(modifier) = exported_member_modifier(visibility) else {
+                    continue;
+                };
                 for m in m.signatures() {
-                    if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                        continue;
-                    }
                     push_doc(out, &m.doc, &inner);
                     let ret =
                         ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
@@ -2205,7 +2217,7 @@ fn render_ts_type(
                     let mname = member_name(mname);
                     let _ = writeln!(
                         out,
-                        "{inner}{mname}{optional}{}({}): {ret};",
+                        "{inner}{modifier}{mname}{optional}{}({}): {ret};",
                         generics_str(&m.generics),
                         ts_params_str(&m.params, m.doc.as_ref())
                     );
@@ -2216,10 +2228,17 @@ fn render_ts_type(
     }
 }
 
+fn exported_member_modifier(visibility: crate::Visibility) -> Option<&'static str> {
+    match visibility {
+        crate::Visibility::Public => Some(""),
+        crate::Visibility::Private => None,
+        crate::Visibility::Protected => Some("protected "),
+    }
+}
+
 /// Render a class's accessor properties for the public surface (docs / `.d.ts`).
-/// Same-typed get+set renders as a writable property, get-only as `readonly`,
-/// and a write-only or differently-typed pair as explicit `get`/`set` lines.
-/// Private accessors (visibility lives on the property's `FieldSig`) are skipped.
+/// Public accessors can render as properties. Protected accessors retain their
+/// `get` and `set` declarations so TypeScript checks overrides in subclasses.
 fn render_class_accessors(
     out: &mut String,
     fields: &std::collections::BTreeMap<String, crate::FieldSig>,
@@ -2238,25 +2257,33 @@ fn render_class_accessors(
         }
     }
     for (name, (get, set)) in by_name {
-        if fields.get(name).map(|f| f.visibility) == Some(crate::Visibility::Private) {
+        let visibility = fields
+            .get(name)
+            .map_or_else(Default::default, |field| field.visibility);
+        let Some(modifier) = exported_member_modifier(visibility) else {
             continue;
-        }
+        };
         let name = member_name(name);
         match (get, set) {
-            (Some(r), Some(p)) if r == &p.ty => {
+            (Some(r), Some(p)) if visibility.is_public() && r == &p.ty => {
                 let _ = writeln!(out, "{inner}{name}: {};", fmt_ty(r));
             }
-            (Some(r), Some(p)) => {
-                let _ = writeln!(out, "{inner}get {name}(): {};", fmt_ty(r));
-                let _ = writeln!(out, "{inner}set {name}({}: {});", p.name, fmt_ty(&p.ty));
-            }
-            (Some(r), None) => {
+            (Some(r), None) if visibility.is_public() => {
                 let _ = writeln!(out, "{inner}readonly {name}: {};", fmt_ty(r));
             }
-            (None, Some(p)) => {
-                let _ = writeln!(out, "{inner}set {name}({}: {});", p.name, fmt_ty(&p.ty));
+            (get, set) => {
+                if let Some(r) = get {
+                    let _ = writeln!(out, "{inner}{modifier}get {name}(): {};", fmt_ty(r));
+                }
+                if let Some(p) = set {
+                    let _ = writeln!(
+                        out,
+                        "{inner}{modifier}set {name}({}: {});",
+                        p.name,
+                        fmt_ty(&p.ty)
+                    );
+                }
             }
-            (None, None) => {}
         }
     }
 }
@@ -2777,24 +2804,25 @@ fn render_type_for(
             // keeps private names/types out of the agent-facing docs.
             let _ = writeln!(out, "{indent}class {name}{} {{", generics_str(generics));
             for (fname, field) in static_fields {
-                if field.visibility == crate::Visibility::Private {
+                let Some(modifier) = exported_member_modifier(field.visibility) else {
                     continue;
-                }
+                };
                 push_doc_for(out, &field.doc, &inner, audience);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let fname = member_name(fname);
-                let _ = writeln!(out, "{inner}static {ro}{fname}: {};", field.ty);
+                let _ = writeln!(out, "{inner}{modifier}static {ro}{fname}: {};", field.ty);
             }
             for (mname, m) in statics {
+                let visibility = static_visibility.get(mname).copied().unwrap_or_default();
+                let Some(modifier) = exported_member_modifier(visibility) else {
+                    continue;
+                };
                 for m in m.signatures() {
-                    if static_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                        continue;
-                    }
                     push_doc_for(out, &m.doc, &inner, audience);
                     let mname = member_name(mname);
                     let _ = writeln!(
                         out,
-                        "{inner}static {mname}{}({}): {};",
+                        "{inner}{modifier}static {mname}{}({}): {};",
                         generics_str(&m.generics),
                         params_str(&m.params, m.doc.as_ref()),
                         m.ret
@@ -2802,35 +2830,37 @@ fn render_type_for(
                 }
             }
             for (fname, field) in fields {
-                if field.visibility == crate::Visibility::Private
-                    || accessors.iter().any(|a| a.name() == fname)
-                {
+                let Some(modifier) = exported_member_modifier(field.visibility) else {
+                    continue;
+                };
+                if accessors.iter().any(|a| a.name() == fname) {
                     continue;
                 }
                 push_doc_for(out, &field.doc, &inner, audience);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
                 let fname = member_name(fname);
-                let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", field.ty);
+                let _ = writeln!(out, "{inner}{modifier}{ro}{fname}{opt}: {};", field.ty);
             }
             render_class_accessors(out, fields, accessors, &inner, ToString::to_string);
-            if *constructor_visibility != crate::Visibility::Private {
+            if let Some(modifier) = exported_member_modifier(*constructor_visibility) {
                 let _ = writeln!(
                     out,
-                    "{inner}constructor({});",
+                    "{inner}{modifier}constructor({});",
                     params_str(constructor, None)
                 );
             }
             for (mname, m) in methods {
+                let visibility = method_visibility.get(mname).copied().unwrap_or_default();
+                let Some(modifier) = exported_member_modifier(visibility) else {
+                    continue;
+                };
                 for m in m.signatures() {
-                    if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                        continue;
-                    }
                     push_doc_for(out, &m.doc, &inner, audience);
                     let mname = member_name(mname);
                     let _ = writeln!(
                         out,
-                        "{inner}{mname}{}{}({}): {};",
+                        "{inner}{modifier}{mname}{}{}({}): {};",
                         if m.optional { "?" } else { "" },
                         generics_str(&m.generics),
                         params_str(&m.params, m.doc.as_ref()),
@@ -5432,7 +5462,11 @@ mod tests {
     #[test]
     fn constructor_visibility_round_trips_and_a_public_one_is_not_written() {
         let package = "@pied-piper/shapes";
-        for visibility in [crate::Visibility::Private, crate::Visibility::Public] {
+        for visibility in [
+            crate::Visibility::Private,
+            crate::Visibility::Public,
+            crate::Visibility::Protected,
+        ] {
             let symbol = class_with_constructor(package, "Point", Vec::new(), visibility, None);
             let json = serde_json::to_string(&symbol.kind).unwrap();
             assert_eq!(
@@ -5447,6 +5481,99 @@ mod tests {
                 panic!("not a class: {json}");
             };
             assert_eq!(constructor_visibility, visibility);
+        }
+    }
+
+    #[test]
+    fn protected_class_members_round_trip_and_render_in_both_surfaces() {
+        use crate::{AccessorSig, FieldSig, MethodSig, Visibility};
+
+        let package = "@pied-piper/shapes";
+        let protected = Visibility::Protected;
+        let mut point = class_with_constructor(
+            package,
+            "Point",
+            vec![Param::new("size", Type::Number)],
+            protected,
+            None,
+        );
+        let TypeKind::Class {
+            fields,
+            methods,
+            method_visibility,
+            accessors,
+            statics,
+            static_visibility,
+            static_fields,
+            ..
+        } = &mut point.kind
+        else {
+            panic!("expected a class");
+        };
+        let field = FieldSig {
+            ty: Type::Number,
+            visibility: protected,
+            readonly: true,
+            optional: false,
+            method: false,
+            doc: None,
+        };
+        fields.insert("size".into(), field.clone());
+        fields.insert("value".into(), field.clone());
+        fields.insert(
+            "adjustment".into(),
+            FieldSig {
+                readonly: false,
+                ..field.clone()
+            },
+        );
+        static_fields.insert("limit".into(), field);
+        accessors.push(AccessorSig::Getter {
+            name: "value".into(),
+            ret_ty: Type::Number,
+        });
+        accessors.push(AccessorSig::Getter {
+            name: "adjustment".into(),
+            ret_ty: Type::Number,
+        });
+        accessors.push(AccessorSig::Setter {
+            name: "adjustment".into(),
+            param: Param::new("next", Type::Number),
+        });
+        let method = MethodSig {
+            overloads: Vec::new(),
+            optional: false,
+            generics: Default::default(),
+            params: Vec::new(),
+            ret: Type::Number,
+            predicate: None,
+            doc: None,
+        };
+        methods.insert("area".into(), method.clone());
+        method_visibility.insert("area".into(), protected);
+        statics.insert("capacity".into(), method);
+        static_visibility.insert("capacity".into(), protected);
+
+        let mut defs = PackageDeclaration::with_package(package);
+        defs.types.insert("Point".into(), point);
+        let json = serde_json::to_string(&defs).unwrap();
+        let decoded: PackageDeclaration = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.types["Point"].kind, defs.types["Point"].kind);
+        let docs = render_declarations(&decoded);
+        let d_ts = render_packages_d_ts(&[&decoded], &[]);
+        for rendered in [&docs, &d_ts] {
+            for member in [
+                "protected constructor(size: number);",
+                "protected readonly size: number;",
+                "protected get value(): number;",
+                "protected get adjustment(): number;",
+                "protected set adjustment(next: number);",
+                "protected static readonly limit: number;",
+                "protected area(): number;",
+                "protected static capacity(): number;",
+            ] {
+                assert!(rendered.contains(member), "missing {member} in {rendered}");
+            }
         }
     }
 

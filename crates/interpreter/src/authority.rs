@@ -81,6 +81,8 @@ pub enum AuthorityCallableKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthorityExposure {
+    /// Reachable from outside the package, including through a subclass of
+    /// an exported class.
     Public,
     Private,
     Initialization,
@@ -377,7 +379,7 @@ impl<'a> Builder<'a> {
                     AuthorityCallableKind::Method,
                     format!("{}.{}", class.name.name, method.name.name),
                     method.name.span,
-                    if class_public && method.visibility == Visibility::Public {
+                    if class_public && method.visibility != Visibility::Private {
                         AuthorityExposure::Public
                     } else {
                         AuthorityExposure::Private
@@ -403,7 +405,7 @@ impl<'a> Builder<'a> {
                     },
                     format!("{}.{}", class.name.name, accessor.name().name),
                     accessor.name().span,
-                    if class_public && accessor.visibility() == Visibility::Public {
+                    if class_public && accessor.visibility() != Visibility::Private {
                         AuthorityExposure::Public
                     } else {
                         AuthorityExposure::Private
@@ -707,7 +709,7 @@ impl<'a> Builder<'a> {
                     .as_deref_mut()
                     .is_none_or(|seen| seen.insert(field.name.name.clone()));
                 (newly_visible
-                    && field.visibility == Visibility::Public
+                    && field.visibility != Visibility::Private
                     && may_be_callable(&field.ty, &self.callable_interfaces))
                 .then_some((
                     field.name.name.clone(),
@@ -754,7 +756,7 @@ impl<'a> Builder<'a> {
         seen: &mut BTreeSet<String>,
     ) {
         for method in &class.methods {
-            if method.visibility == Visibility::Public
+            if method.visibility != Visibility::Private
                 && seen.insert(method.name.name.clone())
                 && let Some(target) = self.methods.get(&(owner.clone(), method.name.name.clone()))
             {
@@ -772,7 +774,7 @@ impl<'a> Builder<'a> {
         for accessor in &class.accessors {
             let setter = matches!(accessor, TypedClassAccessor::Setter { .. });
             let key = (accessor.name().name.clone(), setter);
-            if accessor.visibility() == Visibility::Public
+            if accessor.visibility() != Visibility::Private
                 && seen.insert(key.clone())
                 && let Some(target) = self.accessors.get(&(owner.clone(), key.0, setter))
             {
@@ -802,7 +804,7 @@ impl<'a> Builder<'a> {
             .iter()
             .filter(|(name, field)| {
                 !seen.contains(*name)
-                    && field.visibility == Visibility::Public
+                    && field.visibility != Visibility::Private
                     && may_be_callable(&field.ty, &self.callable_interfaces)
             })
             .map(|(name, _)| name.clone())
@@ -843,7 +845,7 @@ impl<'a> Builder<'a> {
             .static_fields
             .iter()
             .filter(|(_, field)| {
-                field.visibility == Visibility::Public
+                field.visibility != Visibility::Private
                     && may_be_callable(&field.ty, &self.callable_interfaces)
             })
             .map(|(name, _)| name.clone())
@@ -1678,7 +1680,7 @@ impl<'a> Builder<'a> {
         };
         fields
             .get(name)
-            .is_none_or(|field| field.visibility == Visibility::Public)
+            .is_none_or(|field| field.visibility != Visibility::Private)
             && accessors.iter().any(|accessor| match accessor {
                 crate::AccessorSig::Getter {
                     name: candidate, ..
@@ -2292,7 +2294,7 @@ fn external_class_surface(
                 };
                 fields
                     .get(name)
-                    .is_none_or(|field| field.visibility == Visibility::Public)
+                    .is_none_or(|field| field.visibility != Visibility::Private)
             })
             .map(|accessor| match accessor {
                 crate::AccessorSig::Getter { name, .. } => (name.clone(), false),
@@ -2302,7 +2304,7 @@ fn external_class_surface(
         function_fields: fields
             .iter()
             .filter(|(_, field)| {
-                field.visibility == Visibility::Public
+                field.visibility != Visibility::Private
                     && may_be_callable(&field.ty, callable_interfaces)
             })
             .map(|(name, _)| name.clone())
@@ -2315,7 +2317,7 @@ fn external_class_surface(
         static_function_fields: static_fields
             .iter()
             .filter(|(_, field)| {
-                field.visibility == Visibility::Public
+                field.visibility != Visibility::Private
                     && may_be_callable(&field.ty, callable_interfaces)
             })
             .map(|(name, _)| name.clone())

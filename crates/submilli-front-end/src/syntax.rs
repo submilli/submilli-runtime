@@ -79,15 +79,19 @@ pub enum BindingKind {
     Const,
 }
 
-/// Member visibility. No `protected` — it is rejected at parse time.
+/// Source-level visibility of a class member.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Visibility {
     #[default]
     Public,
     Private,
+    /// TypeScript access rules apply in the front end. The engine uses the same
+    /// storage, dispatch, and enumeration as for a public member.
+    Protected,
 }
 
 impl Visibility {
+    /// Whether the member has the default visibility in package declarations.
     pub fn is_public(&self) -> bool {
         *self == Visibility::Public
     }

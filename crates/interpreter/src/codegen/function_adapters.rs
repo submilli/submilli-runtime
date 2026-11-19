@@ -46,7 +46,7 @@ pub fn exported_closure_caches(ta: &TypedAst) -> BTreeMap<MangledName, MangledNa
         class
             .static_methods
             .iter()
-            .filter(|(_, visibility)| **visibility == crate::Visibility::Public)
+            .filter(|(_, visibility)| **visibility != crate::Visibility::Private)
             .map(|(name, _)| {
                 let method = crate::mangle::static_member(&class.mangled_name, name);
                 (method.clone(), method)
