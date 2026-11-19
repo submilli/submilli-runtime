@@ -27,6 +27,7 @@ import {
     sendEmail,
     submitForApproval,
     uploadFile,
+    createContact,
     createRecord,
     createRecords,
     exportQuery,
@@ -49,6 +50,8 @@ import {
     normalizePath,
     pageWindow,
     prepareValues,
+    refuseActivityLinks,
+    refuseScopeChange,
 } from "../src/request";
 import {
     buildAggregate,
@@ -64,7 +67,7 @@ import { extraFields, opportunityFrom, typedSoql, Writes } from "../src/objects"
 import { aggregateFrom, batchFrom, cursorFrom, failureFrom, fieldsOf, recordFrom } from "../src/response";
 import {
     activitiesFrom,
-    activityFields,
+    taskSubtype,
     activitySoql,
     emailAddress,
     escapeHtml,
@@ -107,22 +110,30 @@ function main(): void {
         assert(codeOf(() => { normalizePath(bad, "f"); }) === "invalid_name", "refused " + JSON.stringify(bad));
     }
 
-    label("values: names checked, Id and duplicates refused, OwnerId refused in updates");
-    const values = prepareValues([{ field: "StageName", value: "Closed Won" }, { field: "Amount", value: 1200 }, { field: "Region__c", value: null }], "values", true);
+    label("values: names checked, Id and duplicates refused");
+    const values = prepareValues([{ field: "StageName", value: "Closed Won" }, { field: "Amount", value: 1200 }, { field: "Region__c", value: null }], "values");
     assert(JSON.stringify(values.keys) === JSON.stringify(["amount", "region__c", "stagename"]), "sorted keys " + JSON.stringify(values.keys));
     assert(JSON.stringify(values.body) === JSON.stringify({ StageName: "Closed Won", Amount: 1200, Region__c: null }), "body");
-    assert(codeOf(() => { prepareValues([{ field: "ownerid", value: "005000000000001" }], "values", true); }) === "owner_field", "owner refused");
-    assert(prepareValues([{ field: "OwnerId", value: "005000000000001" }], "values", false).keys[0] === "ownerid", "owner allowed on create");
-    assert(codeOf(() => { prepareValues([{ field: "Id", value: "x" }], "values", false); }) === "invalid_input", "Id refused");
-    assert(codeOf(() => { prepareValues([{ field: "Name", value: "a" }, { field: "NAME", value: "b" }], "values", false); }) === "duplicate_field", "duplicate in another case");
-    assert(codeOf(() => { prepareValues([{ field: "Amount", value: 1 / 0 }], "values", false); }) === "invalid_input", "infinity");
+    assert(prepareValues([{ field: "OwnerId", value: "005000000000001" }], "values").keys[0] === "ownerid", "owner allowed on create");
+    label("updates may not move a record out of its owner's or account's scope");
+    assert(codeOf(() => { refuseScopeChange(["ownerid"], "opportunity", "values"); }) === "owner_field", "owner refused");
+    assert(codeOf(() => { refuseScopeChange(["accountid", "name"], "contact", "values"); }) === "account_field", "account refused");
+    assert(codeOf(() => { refuseScopeChange(["whatid"], "task", "values"); }) === "account_field", "a task's record refused");
+    refuseScopeChange(["whatid", "name"], "custom__c", "values");
+    assert(codeOf(() => { refuseActivityLinks(["whoid"], "event", "values"); }) === "account_field", "a new event's contact refused");
+    refuseActivityLinks(["accountid"], "contact", "values");
+    assert(codeOf(() => { prepareValues([{ field: "Id", value: "x" }], "values"); }) === "invalid_input", "Id refused");
+    assert(codeOf(() => { prepareValues([{ field: "Name", value: "a" }, { field: "NAME", value: "b" }], "values"); }) === "duplicate_field", "duplicate in another case");
+    assert(codeOf(() => { prepareValues([{ field: "Amount", value: 1 / 0 }], "values"); }) === "invalid_input", "infinity");
     assert(idAmong([{ field: "accountid", value: "001D000000IqhSL" }], "accountid", "values") === "001D000000IqhSLIAZ", "an id among values");
     assert(idAmong([{ field: "Name", value: "x" }], "accountid", "values") === "", "absent");
 
-    label("typed writes refuse a custom field that repeats a typed one");
+    label("typed writes refuse a custom field a typed argument owns, given or not");
     const writes = new Writes();
     writes.set("StageName", "Prospecting");
-    assert(codeOf(() => { writes.prepare([{ field: "stagename", value: "Closed Won" }], "changes"); }) === "duplicate_field", "repeat");
+    writes.setId("AccountId", undefined, "accountId");
+    assert(codeOf(() => { writes.prepare([{ field: "stagename", value: "Closed Won" }], "changes"); }) === "typed_field", "a given typed field");
+    assert(codeOf(() => { writes.prepare([{ field: "AccountId", value: "001000000000001" }], "changes"); }) === "typed_field", "a typed field not given");
     assert(codeOf(() => { writes.prepare([{ field: "OwnerId", value: "005000000000001" }], "changes"); }) === "owner_field", "owner in custom");
     assert(codeOf(() => { new Writes().prepare([], "changes"); }) === "invalid_input", "nothing to change");
 
@@ -271,8 +282,8 @@ function main(): void {
     assert(outcomes[0].success && outcomes[1].id === null && outcomes[1].errors[0].errorCode === "REQUIRED_FIELD_MISSING", "batch");
 
     label("collaboration requests and responses");
-    assert(activityFields("call")[0].value === "Call" && activityFields("task")[0].value === "Task" && activityFields("email").length === 1, "activity types set only the subtype");
-    assert(codeOf(() => { activityFields("meeting"); }) === "invalid_input", "a meeting is an event, not an activity type");
+    assert(taskSubtype("call") === "Call" && taskSubtype("task") === "Task" && taskSubtype("email") === "Email", "activity types set only the subtype");
+    assert(codeOf(() => { taskSubtype("meeting"); }) === "invalid_input", "a meeting is an event, not an activity type");
     const history = activitySoql("Account", "001000000000001AAA", false, 50);
     assert(history.indexOf("FROM ActivityHistories ORDER BY ActivityDate DESC, LastModifiedDate DESC LIMIT 50) FROM Account WHERE Id = '001000000000001AAA'") > 0, history);
     assert(activitySoql("Contact", "003000000000001AAA", true, 5).indexOf("FROM OpenActivities ORDER BY ActivityDate ASC") > 0, "open activities");
@@ -429,6 +440,13 @@ function main(): void {
     assert(codeOf(() => { createRecord("Account", []); }) === "invalid_input", "empty create");
     assert(codeOf(() => { updateRecord("Opportunity", id, [{ field: "OwnerId", value: "005000000000001" }]); }) === "owner_field", "owner change");
     assert(codeOf(() => { upsertRecord("Account", "Ext__c", "1", [{ field: "Ext__c", value: "2" }]); }) === "invalid_input", "upsert sets its key");
+    assert(codeOf(() => { updateRecord("Contact", "003000000000001", [{ field: "AccountId", value: "001000000000001" }]); }) === "account_field", "an account change");
+    assert(codeOf(() => { upsertRecord("Contact", "Ext__c", "1", [{ field: "AccountId", value: "001000000000001" }]); }) === "account_field", "an upsert's account");
+    assert(codeOf(() => { createRecord("Task", [{ field: "WhatId", value: "006000000000001" }]); }) === "account_field", "a generic task's record");
+    assert(codeOf(() => { updateOpportunity(id, { custom: [{ field: "StageName", value: "Closed Won" }] }); }) === "typed_field", "a stage through custom");
+    assert(codeOf(() => { updateOpportunity(id, { custom: [{ field: "AccountId", value: "001000000000001AAA" }] }); }) === "typed_field", "a deal's account through custom");
+    assert(codeOf(() => { createContact({ lastName: "Lee", custom: [{ field: "AccountId", value: "001000000000001" }] }); }) === "typed_field", "a contact's account through custom");
+    assert(codeOf(() => { logActivity({ type: "call", subject: "Call", whoId: "003000000000001", custom: [{ field: "WhatId", value: "006000000000001" }] }); }) === "typed_field", "an activity's record through custom");
     assert(codeOf(() => { createRecords("Account", []); }) === "invalid_input", "empty batch");
     assert(codeOf(() => { updateRecords("Account", [{ id: id, values: [{ field: "Name", value: "a" }] }, { id: id, values: [{ field: "Name", value: "b" }] }]); }) === "invalid_input", "a repeated id");
     assert(codeOf(() => { findOpportunities({ closeAfter: "next week" }); }) === "invalid_date", "a filter");

@@ -11,9 +11,16 @@
 // exactly those values. Facts a check needs that the caller does not supply (a
 // record's owner and account) are read from Salesforce first, never taken from
 // the caller; a record that does not exist is checked with "" for them, so a
-// denial does not reveal whether it exists. `OwnerId` is refused in updates: an
-// owner-scoped rule cannot be bypassed by reassigning a record, and
-// `changeOwner` is the one checked way to reassign.
+// denial does not reveal whether it exists. Updates refuse `OwnerId` and the
+// fields a record's account comes from, so an owner- or account-scoped rule
+// cannot be bypassed by moving the record (`changeOwner` is the one checked way
+// to reassign), and typed operations refuse `custom` fields their typed
+// arguments own, so a check's facts are those of the request sent.
+//
+// Operations copy caller values (field lists, values, conditions) inline before
+// their check, element by element: the compiler's check discipline refuses
+// passing a caller's value to a helper that runs before `check()`, so these
+// copies cannot be shared.
 
 import { delete as httpDelete, download, get, patch, post, Response } from "submilli:http";
 import { appendText, exists, read, remove, stat, writeText } from "submilli:fs";
@@ -34,6 +41,8 @@ import {
     pageWindow,
     FieldWrite,
     prepareValues,
+    refuseActivityLinks,
+    refuseScopeChange,
     requireDateTime,
     requireText,
     sortedDistinct,
@@ -111,6 +120,7 @@ import {
     UserFilters,
     userFrom,
     Writes,
+    customOf,
 } from "./objects";
 import {
     aggregateFrom,
@@ -144,7 +154,7 @@ import {
 import {
     Activity,
     activitiesFrom,
-    activityFields,
+    taskSubtype,
     activityLimit,
     ActivityInput,
     ActivityOptions,
@@ -168,7 +178,6 @@ import {
     UploadOptions,
 } from "./activity";
 import {
-    approvalBody,
     approvalFrom,
     ApprovalResult,
     ConvertedLead,
@@ -404,28 +413,26 @@ export interface ExportResult {
  * @param id Record id (15 or 18 characters).
  * @param options `fields` to return; default every field the user may read.
  * @returns The record, or null.
- * @capability salesforce.com/records.get { object: string, ownerId: string, accountId: string }
+ * @capability salesforce.com/records.get { object: string, fields: string[], ownerId: string, accountId: string }
  */
 export function getRecord(object: string, id: string, options: GetRecordOptions = {}): SalesforceRecord | null {
     const name = normalizeName(object, "object");
     const recordId = normalizeId(id, "id");
-    const fields: string[] = [];
-    for (const field of options.fields ?? []) fields.push(normalizeName(field, "fields").name);
+    const fields: ApiName[] = [];
+    const keys: string[] = [];
+    for (const field of options.fields ?? []) {
+        const normalized = normalizeName(field, "fields");
+        fields.push(normalized);
+        keys.push(normalized.key);
+    }
     const raw = fetchRecord(name.name, recordId);
-    check("salesforce.com/records.get", { object: name.key, ownerId: ownerOf(raw), accountId: accountOf(name.key, recordId, raw) });
+    check("salesforce.com/records.get", {
+        object: name.key, fields: sortedDistinct(keys), ownerId: ownerOf(raw), accountId: accountOf(name.key, recordId, raw),
+    });
     if (raw === null) return null;
     const record = recordFrom(raw);
     if (fields.length === 0) return record;
-    const projected: Record<string, FieldValue> = {};
-    const keys = Object.keys(record.fields);
-    for (const field of fields) {
-        let value: FieldValue = null;
-        for (const key of keys) {
-            if (key.toLowerCase() === field.toLowerCase()) value = record.fields[key];
-        }
-        projected[field] = value;
-    }
-    return { object: record.object, id: record.id, fields: projected };
+    return { object: record.object, id: record.id, fields: customOf(record.fields, fields) };
 }
 
 /**
@@ -442,8 +449,9 @@ export function createRecord(object: string, values: FieldWrite[]): string {
         const { field, value } = write;
         given.push({ field: field, value: value });
     }
-    const prepared = prepareValues(given, "values", false);
+    const prepared = prepareValues(given, "values");
     if (prepared.keys.length === 0) throw validationError("invalid_input", "values cannot be empty");
+    refuseActivityLinks(prepared.keys, name.key, "values");
     const ownerId = idAmong(given, "ownerid", "values");
     const accountId = name.key === "account" ? "" : idAmong(given, "accountid", "values");
     check("salesforce.com/records.create", { object: name.key, fields: prepared.keys, ownerId: ownerId, accountId: accountId });
@@ -452,7 +460,8 @@ export function createRecord(object: string, values: FieldWrite[]): string {
 
 /**
  * Update a record of any object. Only the fields given change; `null` clears a
- * field. `OwnerId` is refused.
+ * field. `OwnerId` and the fields its account comes from (`AccountId`; on tasks
+ * and events also `WhatId` and `WhoId`) are refused, so the check's facts stay the record's.
  * @param object Object API name.
  * @param id Record id.
  * @param values The fields to write, by API name.
@@ -466,8 +475,9 @@ export function updateRecord(object: string, id: string, values: FieldWrite[]): 
         const { field, value } = write;
         given.push({ field: field, value: value });
     }
-    const prepared = prepareValues(given, "values", true);
+    const prepared = prepareValues(given, "values");
     if (prepared.keys.length === 0) throw validationError("invalid_input", "values cannot be empty");
+    refuseScopeChange(prepared.keys, name.key, "values");
     const raw = fetchRecord(name.name, recordId);
     check("salesforce.com/records.update", {
         object: name.key, fields: prepared.keys, ownerId: ownerOf(raw), accountId: accountOf(name.key, recordId, raw),
@@ -497,13 +507,15 @@ export function deleteRecord(object: string, id: string): boolean {
 
 /**
  * Create a record, or update the one whose external id field has this value.
- * The fields given replace an existing record's values; `OwnerId` is refused.
+ * The fields given replace an existing record's values; `OwnerId` and the
+ * fields its account comes from are refused, as in `updateRecord`. The check
+ * has the existing record's owner and account, or "" when there is none yet.
  * @param object Object API name.
  * @param externalIdField An external id field, such as `Customer_Number__c`.
  * @param externalId Its value.
  * @param values The fields to write, by API name.
  * @returns The record's id and whether it was created.
- * @capability salesforce.com/records.upsert { object: string, externalIdField: string, externalId: string, fields: string[] }
+ * @capability salesforce.com/records.upsert { object: string, externalIdField: string, externalId: string, fields: string[], ownerId: string, accountId: string }
  */
 export function upsertRecord(object: string, externalIdField: string, externalId: string, values: FieldWrite[]): UpsertResult {
     const name = normalizeName(object, "object");
@@ -515,13 +527,29 @@ export function upsertRecord(object: string, externalIdField: string, externalId
         const { field, value } = write;
         given.push({ field: field, value: value });
     }
-    const prepared = prepareValues(given, "values", true);
+    const prepared = prepareValues(given, "values");
     if (prepared.keys.includes(field.key)) throw validationError("invalid_input", "values cannot set the external id field");
-    check("salesforce.com/records.upsert", { object: name.key, externalIdField: field.key, externalId: key, fields: prepared.keys });
-    const response = sfPatch("/sobjects/" + name.name + "/" + field.name + "/" + encodeComponent(key), prepared.body);
+    refuseScopeChange(prepared.keys, name.key, "values");
+    const existing = queryGet("SELECT FIELDS(STANDARD) FROM " + name.name + " WHERE " + field.name + " = " + quote(key) + " LIMIT 1", 200);
+    const raw = existing.records.length === 0 ? null : existing.records[0];
+    check("salesforce.com/records.upsert", {
+        object: name.key, externalIdField: field.key, externalId: key, fields: prepared.keys,
+        ownerId: ownerOf(raw), accountId: raw === null ? "" : accountOf(name.key, textField(raw, "Id"), raw),
+    });
+    let response: Response;
+    try {
+        response = sfPatch("/sobjects/" + name.name + "/" + field.name + "/" + encodeComponent(key), prepared.body);
+    } catch (error) {
+        // 300 Multiple Choices: its body lists the matching records' URLs.
+        if (error instanceof SalesforceError && error.status === 300) {
+            throw new SalesforceError("MULTIPLE_RECORDS", "more than one " + name.name + " has " + field.name + " " + JSON.stringify(key), [field.name], 300, false);
+        }
+        throw error;
+    }
     if (response.body.trim().length === 0) {
-        // An update answered with no body names no id, so read it back.
-        return { id: lookupByExternalId(name.name, field.name, key), created: false };
+        // An update answered with no body names no id: it is the record read for the check,
+        // or, if one was created meanwhile, read back.
+        return { id: raw === null ? lookupByExternalId(name.name, field.name, key) : textField(raw, "Id"), created: false };
     }
     const result = response.json<ApiSaveResult>();
     return { id: result.id ?? "", created: result.created === true || response.status === 201 };
@@ -551,8 +579,9 @@ export function createRecords(object: string, records: FieldWrite[][]): BatchOut
     const accounts: string[] = [];
     const body: Record<string, unknown>[] = [];
     for (const values of copies) {
-        const prepared = prepareValues(values, "records", false);
+        const prepared = prepareValues(values, "records");
         if (prepared.keys.length === 0) throw validationError("invalid_input", "a record's values cannot be empty");
+        refuseActivityLinks(prepared.keys, name.key, "records");
         for (const key of prepared.keys) keys.push(key);
         owners.push(idAmong(values, "ownerid", "records"));
         accounts.push(name.key === "account" ? "" : idAmong(values, "accountid", "records"));
@@ -567,7 +596,8 @@ export function createRecords(object: string, records: FieldWrite[][]): BatchOut
 
 /**
  * Update up to 200 records of one object in one request, all or none.
- * `OwnerId` is refused.
+ * `OwnerId` and the fields an account comes from are refused, as in `updateRecord`.
+ * A record that does not exist adds "" to `ownerIds` and `accountIds`.
  * @param object Object API name.
  * @param updates Each record's id and values.
  * @returns Each record's outcome, in order.
@@ -594,8 +624,9 @@ export function updateRecords(object: string, updates: RecordUpdate[]): BatchOut
     for (let i = 0; i < givenIds.length; i += 1) {
         const id = normalizeId(givenIds[i], "updates id");
         if (ids.includes(id)) throw validationError("invalid_input", "updates repeats " + id);
-        const prepared = prepareValues(givenValues[i], "updates values", true);
+        const prepared = prepareValues(givenValues[i], "updates values");
         if (prepared.keys.length === 0) throw validationError("invalid_input", "a record's values cannot be empty");
+        refuseScopeChange(prepared.keys, name.key, "updates values");
         for (const key of prepared.keys) keys.push(key);
         ids.push(id);
         const record = withType(name.name, prepared.body);
@@ -607,9 +638,20 @@ export function updateRecords(object: string, updates: RecordUpdate[]): BatchOut
     const quoted: string[] = [];
     for (const id of ids) quoted.push("'" + id + "'");
     const found = queryGet("SELECT FIELDS(STANDARD) FROM " + name.name + " WHERE Id IN (" + quoted.join(", ") + ")", 200);
+    if (!found.done) throw new SalesforceError("INCOMPLETE", "Salesforce returned only part of the records to check", [], 200, true);
+    const seen: string[] = [];
     for (const raw of found.records) {
+        const id = textField(raw, "Id");
+        seen.push(id);
         owners.push(ownerOf(raw));
-        accounts.push(accountOf(name.key, textField(raw, "Id"), raw));
+        accounts.push(accountOf(name.key, id, raw));
+    }
+    // A record not read back is checked as one that does not exist, as a single update is.
+    for (const id of ids) {
+        if (!seen.includes(id)) {
+            owners.push("");
+            accounts.push("");
+        }
     }
     check("salesforce.com/records.updateMany", {
         object: name.key, fields: sortedDistinct(keys), count: givenIds.length,
@@ -644,7 +686,7 @@ export function getRelated(object: string, id: string, relationship: string, opt
     if (window.cursor !== null) return pageFrom(cursorGet(window.cursor, window.pageSize), recordFrom);
     let path = "/sobjects/" + name.name + "/" + recordId + "/" + related.name;
     if (fields.length > 0) path += "?fields=" + encodeComponent(fields.join(","));
-    const response = sfGetNullable(path, window.pageSize);
+    const response = okOrNull(orgGet(path, pageHeaders(window.pageSize)));
     if (response === null) return { records: [], totalSize: 0, done: true, nextCursor: null };
     const body = response.json<Record<string, unknown>>();
     if (Array.isArray(body["records"])) return pageFrom(response.json<ApiQueryResult>(), recordFrom);
@@ -664,7 +706,7 @@ export function getUpdated(object: string, start: string, end: string): UpdatedR
     const name = normalizeName(object, "object");
     const window = changeWindow(start, end);
     check("salesforce.com/records.updated", { object: name.key });
-    const result = sfGet("/sobjects/" + name.name + "/updated/" + window, 0).json<ApiUpdated>();
+    const result = sfGet("/sobjects/" + name.name + "/updated/" + window).json<ApiUpdated>();
     return { ids: result.ids, latestDateCovered: result.latestDateCovered };
 }
 
@@ -681,7 +723,7 @@ export function getDeleted(object: string, start: string, end: string): DeletedR
     const name = normalizeName(object, "object");
     const window = changeWindow(start, end);
     check("salesforce.com/records.deleted", { object: name.key });
-    const result = sfGet("/sobjects/" + name.name + "/deleted/" + window, 0).json<ApiDeleted>();
+    const result = sfGet("/sobjects/" + name.name + "/deleted/" + window).json<ApiDeleted>();
     const records: DeletedRecord[] = [];
     for (const record of result.deletedRecords) records.push({ id: record.id, deletedDate: record.deletedDate });
     return { records: records, earliestDateAvailable: result.earliestDateAvailable, latestDateCovered: result.latestDateCovered };
@@ -696,7 +738,7 @@ export function getDeleted(object: string, start: string, end: string): DeletedR
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of accounts.
- * @capability salesforce.com/accounts.find { ownerId: string }
+ * @capability salesforce.com/accounts.find { fields: string[], ownerId: string }
  */
 export function findAccounts(filters: AccountFilters = {}, options: FindOptions = {}): Page<Account> {
     const where = new Filters();
@@ -710,7 +752,7 @@ export function findAccounts(filters: AccountFilters = {}, options: FindOptions 
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/accounts.find", { ownerId: ownerId });
+    check("salesforce.com/accounts.find", { fields: extra.keys, ownerId: ownerId });
     return findTyped("Account", where.conditions, extra, window, accountFrom);
 }
 
@@ -719,7 +761,7 @@ export function findAccounts(filters: AccountFilters = {}, options: FindOptions 
  * @param id Account id.
  * @param options Extra `fields`.
  * @returns The account, or null.
- * @capability salesforce.com/accounts.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/accounts.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getAccount(id: string, options: ReadOptions = {}): Account | null {
     const recordId = normalizeId(id, "id");
@@ -728,7 +770,7 @@ export function getAccount(id: string, options: ReadOptions = {}): Account | nul
     const extra = extraFields(requested);
     const fields = readOne("Account", recordId, extra);
     const account = fields === null ? null : accountFrom(fields, extra.requested);
-    check("salesforce.com/accounts.get", { ownerId: account === null ? "" : account.ownerId ?? "", accountId: recordId });
+    check("salesforce.com/accounts.get", { fields: extra.keys, ownerId: account === null ? "" : account.ownerId ?? "", accountId: recordId });
     return account;
 }
 
@@ -737,7 +779,7 @@ export function getAccount(id: string, options: ReadOptions = {}): Account | nul
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of contacts.
- * @capability salesforce.com/contacts.find { accountId: string }
+ * @capability salesforce.com/contacts.find { fields: string[], accountId: string }
  */
 export function findContacts(filters: ContactFilters = {}, options: FindOptions = {}): Page<Contact> {
     const where = new Filters();
@@ -749,7 +791,7 @@ export function findContacts(filters: ContactFilters = {}, options: FindOptions 
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/contacts.find", { accountId: accountId });
+    check("salesforce.com/contacts.find", { fields: extra.keys, accountId: accountId });
     return findTyped("Contact", where.conditions, extra, window, contactFrom);
 }
 
@@ -758,7 +800,7 @@ export function findContacts(filters: ContactFilters = {}, options: FindOptions 
  * @param id Contact id.
  * @param options Extra `fields`.
  * @returns The contact, or null.
- * @capability salesforce.com/contacts.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/contacts.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getContact(id: string, options: ReadOptions = {}): Contact | null {
     const recordId = normalizeId(id, "id");
@@ -768,7 +810,7 @@ export function getContact(id: string, options: ReadOptions = {}): Contact | nul
     const fields = readOne("Contact", recordId, extra);
     const contact = fields === null ? null : contactFrom(fields, extra.requested);
     check("salesforce.com/contacts.get", {
-        ownerId: contact === null ? "" : contact.ownerId ?? "", accountId: contact === null ? "" : contact.accountId ?? "",
+        fields: extra.keys, ownerId: contact === null ? "" : contact.ownerId ?? "", accountId: contact === null ? "" : contact.accountId ?? "",
     });
     return contact;
 }
@@ -794,7 +836,7 @@ export function createContact(input: ContactInput): string {
     const writes = new Writes();
     writes.set("LastName", requireText(lastName, "lastName"));
     writes.set("FirstName", firstName);
-    if (accountId.length > 0) writes.set("AccountId", accountId);
+    writes.set("AccountId", accountId.length > 0 ? accountId : undefined);
     writes.set("Email", email);
     writes.set("Phone", phone);
     writes.set("MobilePhone", mobilePhone);
@@ -802,7 +844,7 @@ export function createContact(input: ContactInput): string {
     writes.set("Department", department);
     writes.set("LeadSource", leadSource);
     writes.set("Description", description);
-    if (ownerId.length > 0) writes.set("OwnerId", ownerId);
+    writes.set("OwnerId", ownerId.length > 0 ? ownerId : undefined);
     const prepared = writes.prepare(extra, "input");
     check("salesforce.com/contacts.create", { accountId: accountId, ownerId: ownerId, fields: prepared.keys });
     return createdId(sfPost("/sobjects/Contact", prepared.body));
@@ -813,7 +855,7 @@ export function createContact(input: ContactInput): string {
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of leads.
- * @capability salesforce.com/leads.find { ownerId: string }
+ * @capability salesforce.com/leads.find { fields: string[], ownerId: string }
  */
 export function findLeads(filters: LeadFilters = {}, options: FindOptions = {}): Page<Lead> {
     const where = new Filters();
@@ -827,7 +869,7 @@ export function findLeads(filters: LeadFilters = {}, options: FindOptions = {}):
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/leads.find", { ownerId: ownerId });
+    check("salesforce.com/leads.find", { fields: extra.keys, ownerId: ownerId });
     return findTyped("Lead", where.conditions, extra, window, leadFrom);
 }
 
@@ -836,7 +878,7 @@ export function findLeads(filters: LeadFilters = {}, options: FindOptions = {}):
  * @param id Lead id.
  * @param options Extra `fields`.
  * @returns The lead, or null.
- * @capability salesforce.com/leads.get { ownerId: string }
+ * @capability salesforce.com/leads.get { fields: string[], ownerId: string }
  */
 export function getLead(id: string, options: ReadOptions = {}): Lead | null {
     const recordId = normalizeId(id, "id");
@@ -845,7 +887,7 @@ export function getLead(id: string, options: ReadOptions = {}): Lead | null {
     const extra = extraFields(requested);
     const fields = readOne("Lead", recordId, extra);
     const lead = fields === null ? null : leadFrom(fields, extra.requested);
-    check("salesforce.com/leads.get", { ownerId: lead === null ? "" : lead.ownerId ?? "" });
+    check("salesforce.com/leads.get", { fields: extra.keys, ownerId: lead === null ? "" : lead.ownerId ?? "" });
     return lead;
 }
 
@@ -874,12 +916,12 @@ export function createLead(input: LeadInput): string {
     writes.set("Email", email);
     writes.set("Phone", phone);
     writes.set("Title", title);
-    if (status.length > 0) writes.set("Status", status);
+    writes.set("Status", status.length > 0 ? status : undefined);
     writes.set("LeadSource", leadSource);
     writes.set("Industry", industry);
     writes.set("Rating", rating);
     writes.set("Description", description);
-    if (ownerId.length > 0) writes.set("OwnerId", ownerId);
+    writes.set("OwnerId", ownerId.length > 0 ? ownerId : undefined);
     const prepared = writes.prepare(extra, "input");
     check("salesforce.com/leads.create", { ownerId: ownerId, status: status, fields: prepared.keys });
     return createdId(sfPost("/sobjects/Lead", prepared.body));
@@ -909,7 +951,7 @@ export function updateLead(id: string, changes: LeadUpdate): void {
     writes.set("Email", email);
     writes.set("Phone", phone);
     writes.set("Title", title);
-    if (status.length > 0) writes.set("Status", status);
+    writes.set("Status", status.length > 0 ? status : undefined);
     writes.set("LeadSource", leadSource);
     writes.set("Industry", industry);
     writes.set("Rating", rating);
@@ -927,7 +969,7 @@ export function updateLead(id: string, changes: LeadUpdate): void {
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of opportunities.
- * @capability salesforce.com/opportunities.find { accountId: string, ownerId: string }
+ * @capability salesforce.com/opportunities.find { fields: string[], accountId: string, ownerId: string }
  */
 export function findOpportunities(filters: OpportunityFilters = {}, options: FindOptions = {}): Page<Opportunity> {
     const where = new Filters();
@@ -944,7 +986,7 @@ export function findOpportunities(filters: OpportunityFilters = {}, options: Fin
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/opportunities.find", { accountId: accountId, ownerId: ownerId });
+    check("salesforce.com/opportunities.find", { fields: extra.keys, accountId: accountId, ownerId: ownerId });
     return findTyped("Opportunity", where.conditions, extra, window, opportunityFrom);
 }
 
@@ -953,7 +995,7 @@ export function findOpportunities(filters: OpportunityFilters = {}, options: Fin
  * @param id Opportunity id.
  * @param options Extra `fields`.
  * @returns The opportunity, or null.
- * @capability salesforce.com/opportunities.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/opportunities.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getOpportunity(id: string, options: ReadOptions = {}): Opportunity | null {
     const recordId = normalizeId(id, "id");
@@ -963,7 +1005,7 @@ export function getOpportunity(id: string, options: ReadOptions = {}): Opportuni
     const fields = readOne("Opportunity", recordId, extra);
     const opportunity = fields === null ? null : opportunityFrom(fields, extra.requested);
     check("salesforce.com/opportunities.get", {
-        ownerId: opportunity === null ? "" : opportunity.ownerId ?? "",
+        fields: extra.keys, ownerId: opportunity === null ? "" : opportunity.ownerId ?? "",
         accountId: opportunity === null ? "" : opportunity.accountId ?? "",
     });
     return opportunity;
@@ -987,7 +1029,7 @@ export function updateOpportunity(id: string, changes: OpportunityUpdate): void 
     const stage = givenStage === undefined ? "" : requireText(givenStage, "stage");
     const writes = new Writes();
     writes.set("Name", name === undefined ? undefined : requireText(name, "name"));
-    if (stage.length > 0) writes.set("StageName", stage);
+    writes.set("StageName", stage.length > 0 ? stage : undefined);
     writes.setDate("CloseDate", closeDate, "closeDate");
     writes.set("Amount", amount);
     writes.set("Probability", probability);
@@ -995,6 +1037,8 @@ export function updateOpportunity(id: string, changes: OpportunityUpdate): void 
     writes.set("Type", type);
     writes.set("LeadSource", leadSource);
     writes.set("Description", description);
+    // The check's accountId is the deal's current account; it never moves here.
+    writes.set("AccountId", undefined);
     const prepared = writes.prepare(extra, "changes");
     const current = lookup("SELECT Id, OwnerId, AccountId, StageName FROM Opportunity", recordId);
     check("salesforce.com/opportunities.update", {
@@ -1009,7 +1053,7 @@ export function updateOpportunity(id: string, changes: OpportunityUpdate): void 
  * @param filters The opportunity.
  * @param options Extra `fields` and the page.
  * @returns One page of line items.
- * @capability salesforce.com/opportunityLineItems.find { opportunityId: string }
+ * @capability salesforce.com/opportunityLineItems.find { fields: string[], opportunityId: string }
  */
 export function findOpportunityLineItems(filters: OpportunityLineItemFilters, options: FindOptions = {}): Page<OpportunityLineItem> {
     const where = new Filters();
@@ -1019,7 +1063,7 @@ export function findOpportunityLineItems(filters: OpportunityLineItemFilters, op
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/opportunityLineItems.find", { opportunityId: opportunityId });
+    check("salesforce.com/opportunityLineItems.find", { fields: extra.keys, opportunityId: opportunityId });
     return findTyped("OpportunityLineItem", where.conditions, extra, window, lineItemFrom);
 }
 
@@ -1028,7 +1072,7 @@ export function findOpportunityLineItems(filters: OpportunityLineItemFilters, op
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/opportunityLineItems.get { opportunityId: string }
+ * @capability salesforce.com/opportunityLineItems.get { fields: string[], opportunityId: string }
  */
 export function getOpportunityLineItem(id: string, options: ReadOptions = {}): OpportunityLineItem | null {
     const recordId = normalizeId(id, "id");
@@ -1037,7 +1081,7 @@ export function getOpportunityLineItem(id: string, options: ReadOptions = {}): O
     const extra = extraFields(requested);
     const fields = readOne("OpportunityLineItem", recordId, extra);
     const found = fields === null ? null : lineItemFrom(fields, extra.requested);
-    check("salesforce.com/opportunityLineItems.get", { opportunityId: found === null ? "" : found.opportunityId ?? "" });
+    check("salesforce.com/opportunityLineItems.get", { fields: extra.keys, opportunityId: found === null ? "" : found.opportunityId ?? "" });
     return found;
 }
 
@@ -1046,7 +1090,7 @@ export function getOpportunityLineItem(id: string, options: ReadOptions = {}): O
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of products.
- * @capability salesforce.com/products.find {}
+ * @capability salesforce.com/products.find { fields: string[] }
  */
 export function findProducts(filters: ProductFilters = {}, options: FindOptions = {}): Page<Product> {
     const where = new Filters();
@@ -1058,7 +1102,7 @@ export function findProducts(filters: ProductFilters = {}, options: FindOptions 
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/products.find", {});
+    check("salesforce.com/products.find", { fields: extra.keys });
     return findTyped("Product2", where.conditions, extra, window, productFrom);
 }
 
@@ -1067,7 +1111,7 @@ export function findProducts(filters: ProductFilters = {}, options: FindOptions 
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/products.get {}
+ * @capability salesforce.com/products.get { fields: string[] }
  */
 export function getProduct(id: string, options: ReadOptions = {}): Product | null {
     const recordId = normalizeId(id, "id");
@@ -1076,7 +1120,7 @@ export function getProduct(id: string, options: ReadOptions = {}): Product | nul
     const extra = extraFields(requested);
     const fields = readOne("Product2", recordId, extra);
     const found = fields === null ? null : productFrom(fields, extra.requested);
-    check("salesforce.com/products.get", {});
+    check("salesforce.com/products.get", { fields: extra.keys });
     return found;
 }
 
@@ -1085,7 +1129,7 @@ export function getProduct(id: string, options: ReadOptions = {}): Product | nul
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of price books.
- * @capability salesforce.com/pricebooks.find {}
+ * @capability salesforce.com/pricebooks.find { fields: string[] }
  */
 export function findPricebooks(filters: PricebookFilters = {}, options: FindOptions = {}): Page<Pricebook> {
     const where = new Filters();
@@ -1096,7 +1140,7 @@ export function findPricebooks(filters: PricebookFilters = {}, options: FindOpti
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/pricebooks.find", {});
+    check("salesforce.com/pricebooks.find", { fields: extra.keys });
     return findTyped("Pricebook2", where.conditions, extra, window, pricebookFrom);
 }
 
@@ -1105,7 +1149,7 @@ export function findPricebooks(filters: PricebookFilters = {}, options: FindOpti
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/pricebooks.get {}
+ * @capability salesforce.com/pricebooks.get { fields: string[] }
  */
 export function getPricebook(id: string, options: ReadOptions = {}): Pricebook | null {
     const recordId = normalizeId(id, "id");
@@ -1114,7 +1158,7 @@ export function getPricebook(id: string, options: ReadOptions = {}): Pricebook |
     const extra = extraFields(requested);
     const fields = readOne("Pricebook2", recordId, extra);
     const found = fields === null ? null : pricebookFrom(fields, extra.requested);
-    check("salesforce.com/pricebooks.get", {});
+    check("salesforce.com/pricebooks.get", { fields: extra.keys });
     return found;
 }
 
@@ -1123,7 +1167,7 @@ export function getPricebook(id: string, options: ReadOptions = {}): Pricebook |
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of cases.
- * @capability salesforce.com/cases.find { accountId: string, ownerId: string }
+ * @capability salesforce.com/cases.find { fields: string[], accountId: string, ownerId: string }
  */
 export function findCases(filters: CaseFilters = {}, options: FindOptions = {}): Page<Case> {
     const where = new Filters();
@@ -1139,7 +1183,7 @@ export function findCases(filters: CaseFilters = {}, options: FindOptions = {}):
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/cases.find", { accountId: accountId, ownerId: ownerId });
+    check("salesforce.com/cases.find", { fields: extra.keys, accountId: accountId, ownerId: ownerId });
     return findTyped("Case", where.conditions, extra, window, caseFrom);
 }
 
@@ -1148,7 +1192,7 @@ export function findCases(filters: CaseFilters = {}, options: FindOptions = {}):
  * @param id Case id.
  * @param options Extra `fields`.
  * @returns The case, or null.
- * @capability salesforce.com/cases.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/cases.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getCase(id: string, options: ReadOptions = {}): Case | null {
     const recordId = normalizeId(id, "id");
@@ -1158,7 +1202,7 @@ export function getCase(id: string, options: ReadOptions = {}): Case | null {
     const fields = readOne("Case", recordId, extra);
     const found = fields === null ? null : caseFrom(fields, extra.requested);
     check("salesforce.com/cases.get", {
-        ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "",
+        fields: extra.keys, ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "",
     });
     return found;
 }
@@ -1188,9 +1232,9 @@ export function createCase(input: CaseInput): string {
     writes.set("Origin", origin);
     writes.set("Type", type);
     writes.set("Reason", reason);
-    if (accountId.length > 0) writes.set("AccountId", accountId);
+    writes.set("AccountId", accountId.length > 0 ? accountId : undefined);
     writes.setId("ContactId", contactId, "contactId");
-    if (ownerId.length > 0) writes.set("OwnerId", ownerId);
+    writes.set("OwnerId", ownerId.length > 0 ? ownerId : undefined);
     const prepared = writes.prepare(extra, "input");
     check("salesforce.com/cases.create", { accountId: accountId, ownerId: ownerId, fields: prepared.keys });
     return createdId(sfPost("/sobjects/Case", prepared.body));
@@ -1214,12 +1258,14 @@ export function updateCase(id: string, changes: CaseUpdate): void {
     const writes = new Writes();
     writes.set("Subject", subject);
     writes.set("Description", description);
-    if (status.length > 0) writes.set("Status", status);
+    writes.set("Status", status.length > 0 ? status : undefined);
     writes.set("Priority", priority);
     writes.set("Origin", origin);
     writes.set("Type", type);
     writes.set("Reason", reason);
     writes.setId("ContactId", contactId, "contactId");
+    // The check's accountId is the case's current account; it never moves here.
+    writes.set("AccountId", undefined);
     const prepared = writes.prepare(extra, "changes");
     const current = lookup("SELECT Id, OwnerId, AccountId, Status FROM Case", recordId);
     check("salesforce.com/cases.update", {
@@ -1234,7 +1280,7 @@ export function updateCase(id: string, changes: CaseUpdate): void {
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of tasks.
- * @capability salesforce.com/tasks.find { ownerId: string, whatId: string }
+ * @capability salesforce.com/tasks.find { fields: string[], ownerId: string, whatId: string }
  */
 export function findTasks(filters: TaskFilters = {}, options: FindOptions = {}): Page<Task> {
     const where = new Filters();
@@ -1250,7 +1296,7 @@ export function findTasks(filters: TaskFilters = {}, options: FindOptions = {}):
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/tasks.find", { ownerId: ownerId, whatId: whatId });
+    check("salesforce.com/tasks.find", { fields: extra.keys, ownerId: ownerId, whatId: whatId });
     return findTyped("Task", where.conditions, extra, window, taskFrom);
 }
 
@@ -1259,7 +1305,7 @@ export function findTasks(filters: TaskFilters = {}, options: FindOptions = {}):
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/tasks.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/tasks.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getTask(id: string, options: ReadOptions = {}): Task | null {
     const recordId = normalizeId(id, "id");
@@ -1268,7 +1314,7 @@ export function getTask(id: string, options: ReadOptions = {}): Task | null {
     const extra = extraFields(requested);
     const fields = readOne("Task", recordId, extra);
     const found = fields === null ? null : taskFrom(fields, extra.requested);
-    check("salesforce.com/tasks.get", { ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
+    check("salesforce.com/tasks.get", { fields: extra.keys, ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
     return found;
 }
 
@@ -1277,7 +1323,7 @@ export function getTask(id: string, options: ReadOptions = {}): Task | null {
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of events.
- * @capability salesforce.com/events.find { ownerId: string, whatId: string }
+ * @capability salesforce.com/events.find { fields: string[], ownerId: string, whatId: string }
  */
 export function findEvents(filters: EventFilters = {}, options: FindOptions = {}): Page<Event> {
     const where = new Filters();
@@ -1291,7 +1337,7 @@ export function findEvents(filters: EventFilters = {}, options: FindOptions = {}
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/events.find", { ownerId: ownerId, whatId: whatId });
+    check("salesforce.com/events.find", { fields: extra.keys, ownerId: ownerId, whatId: whatId });
     return findTyped("Event", where.conditions, extra, window, eventFrom);
 }
 
@@ -1300,7 +1346,7 @@ export function findEvents(filters: EventFilters = {}, options: FindOptions = {}
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/events.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/events.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getEvent(id: string, options: ReadOptions = {}): Event | null {
     const recordId = normalizeId(id, "id");
@@ -1309,7 +1355,7 @@ export function getEvent(id: string, options: ReadOptions = {}): Event | null {
     const extra = extraFields(requested);
     const fields = readOne("Event", recordId, extra);
     const found = fields === null ? null : eventFrom(fields, extra.requested);
-    check("salesforce.com/events.get", { ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
+    check("salesforce.com/events.get", { fields: extra.keys, ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
     return found;
 }
 
@@ -1318,7 +1364,7 @@ export function getEvent(id: string, options: ReadOptions = {}): Event | null {
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of users.
- * @capability salesforce.com/users.find {}
+ * @capability salesforce.com/users.find { fields: string[] }
  */
 export function findUsers(filters: UserFilters = {}, options: FindOptions = {}): Page<User> {
     const where = new Filters();
@@ -1330,7 +1376,7 @@ export function findUsers(filters: UserFilters = {}, options: FindOptions = {}):
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/users.find", {});
+    check("salesforce.com/users.find", { fields: extra.keys });
     return findTyped("User", where.conditions, extra, window, userFrom);
 }
 
@@ -1339,7 +1385,7 @@ export function findUsers(filters: UserFilters = {}, options: FindOptions = {}):
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/users.get {}
+ * @capability salesforce.com/users.get { fields: string[] }
  */
 export function getUser(id: string, options: ReadOptions = {}): User | null {
     const recordId = normalizeId(id, "id");
@@ -1348,7 +1394,7 @@ export function getUser(id: string, options: ReadOptions = {}): User | null {
     const extra = extraFields(requested);
     const fields = readOne("User", recordId, extra);
     const found = fields === null ? null : userFrom(fields, extra.requested);
-    check("salesforce.com/users.get", {});
+    check("salesforce.com/users.get", { fields: extra.keys });
     return found;
 }
 
@@ -1357,7 +1403,7 @@ export function getUser(id: string, options: ReadOptions = {}): User | null {
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of campaigns.
- * @capability salesforce.com/campaigns.find { ownerId: string }
+ * @capability salesforce.com/campaigns.find { fields: string[], ownerId: string }
  */
 export function findCampaigns(filters: CampaignFilters = {}, options: FindOptions = {}): Page<Campaign> {
     const where = new Filters();
@@ -1371,7 +1417,7 @@ export function findCampaigns(filters: CampaignFilters = {}, options: FindOption
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/campaigns.find", { ownerId: ownerId });
+    check("salesforce.com/campaigns.find", { fields: extra.keys, ownerId: ownerId });
     return findTyped("Campaign", where.conditions, extra, window, campaignFrom);
 }
 
@@ -1380,7 +1426,7 @@ export function findCampaigns(filters: CampaignFilters = {}, options: FindOption
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/campaigns.get { ownerId: string }
+ * @capability salesforce.com/campaigns.get { fields: string[], ownerId: string }
  */
 export function getCampaign(id: string, options: ReadOptions = {}): Campaign | null {
     const recordId = normalizeId(id, "id");
@@ -1389,7 +1435,7 @@ export function getCampaign(id: string, options: ReadOptions = {}): Campaign | n
     const extra = extraFields(requested);
     const fields = readOne("Campaign", recordId, extra);
     const found = fields === null ? null : campaignFrom(fields, extra.requested);
-    check("salesforce.com/campaigns.get", { ownerId: found === null ? "" : found.ownerId ?? "" });
+    check("salesforce.com/campaigns.get", { fields: extra.keys, ownerId: found === null ? "" : found.ownerId ?? "" });
     return found;
 }
 
@@ -1398,7 +1444,7 @@ export function getCampaign(id: string, options: ReadOptions = {}): Campaign | n
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of campaign members.
- * @capability salesforce.com/campaignMembers.find { campaignId: string }
+ * @capability salesforce.com/campaignMembers.find { fields: string[], campaignId: string }
  */
 export function findCampaignMembers(filters: CampaignMemberFilters = {}, options: FindOptions = {}): Page<CampaignMember> {
     const where = new Filters();
@@ -1410,7 +1456,7 @@ export function findCampaignMembers(filters: CampaignMemberFilters = {}, options
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/campaignMembers.find", { campaignId: campaignId });
+    check("salesforce.com/campaignMembers.find", { fields: extra.keys, campaignId: campaignId });
     return findTyped("CampaignMember", where.conditions, extra, window, campaignMemberFrom);
 }
 
@@ -1419,7 +1465,7 @@ export function findCampaignMembers(filters: CampaignMemberFilters = {}, options
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/campaignMembers.get { campaignId: string }
+ * @capability salesforce.com/campaignMembers.get { fields: string[], campaignId: string }
  */
 export function getCampaignMember(id: string, options: ReadOptions = {}): CampaignMember | null {
     const recordId = normalizeId(id, "id");
@@ -1428,7 +1474,7 @@ export function getCampaignMember(id: string, options: ReadOptions = {}): Campai
     const extra = extraFields(requested);
     const fields = readOne("CampaignMember", recordId, extra);
     const found = fields === null ? null : campaignMemberFrom(fields, extra.requested);
-    check("salesforce.com/campaignMembers.get", { campaignId: found === null ? "" : found.campaignId ?? "" });
+    check("salesforce.com/campaignMembers.get", { fields: extra.keys, campaignId: found === null ? "" : found.campaignId ?? "" });
     return found;
 }
 
@@ -1437,7 +1483,7 @@ export function getCampaignMember(id: string, options: ReadOptions = {}): Campai
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of contracts.
- * @capability salesforce.com/contracts.find { accountId: string, ownerId: string }
+ * @capability salesforce.com/contracts.find { fields: string[], accountId: string, ownerId: string }
  */
 export function findContracts(filters: AccountRecordFilters = {}, options: FindOptions = {}): Page<Contract> {
     const where = new Filters();
@@ -1449,7 +1495,7 @@ export function findContracts(filters: AccountRecordFilters = {}, options: FindO
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/contracts.find", { accountId: accountId, ownerId: ownerId });
+    check("salesforce.com/contracts.find", { fields: extra.keys, accountId: accountId, ownerId: ownerId });
     return findTyped("Contract", where.conditions, extra, window, contractFrom);
 }
 
@@ -1458,7 +1504,7 @@ export function findContracts(filters: AccountRecordFilters = {}, options: FindO
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/contracts.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/contracts.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getContract(id: string, options: ReadOptions = {}): Contract | null {
     const recordId = normalizeId(id, "id");
@@ -1467,7 +1513,7 @@ export function getContract(id: string, options: ReadOptions = {}): Contract | n
     const extra = extraFields(requested);
     const fields = readOne("Contract", recordId, extra);
     const found = fields === null ? null : contractFrom(fields, extra.requested);
-    check("salesforce.com/contracts.get", { ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
+    check("salesforce.com/contracts.get", { fields: extra.keys, ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
     return found;
 }
 
@@ -1476,7 +1522,7 @@ export function getContract(id: string, options: ReadOptions = {}): Contract | n
  * @param filters Every filter given must match.
  * @param options Extra `fields` and the page.
  * @returns One page of orders.
- * @capability salesforce.com/orders.find { accountId: string, ownerId: string }
+ * @capability salesforce.com/orders.find { fields: string[], accountId: string, ownerId: string }
  */
 export function findOrders(filters: AccountRecordFilters = {}, options: FindOptions = {}): Page<Order> {
     const where = new Filters();
@@ -1488,7 +1534,7 @@ export function findOrders(filters: AccountRecordFilters = {}, options: FindOpti
     for (const field of fields ?? []) requested.push(field);
     const extra = extraFields(requested);
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
-    check("salesforce.com/orders.find", { accountId: accountId, ownerId: ownerId });
+    check("salesforce.com/orders.find", { fields: extra.keys, accountId: accountId, ownerId: ownerId });
     return findTyped("Order", where.conditions, extra, window, orderFrom);
 }
 
@@ -1497,7 +1543,7 @@ export function findOrders(filters: AccountRecordFilters = {}, options: FindOpti
  * @param id Record id.
  * @param options Extra `fields`.
  * @returns The record, or null.
- * @capability salesforce.com/orders.get { ownerId: string, accountId: string }
+ * @capability salesforce.com/orders.get { fields: string[], ownerId: string, accountId: string }
  */
 export function getOrder(id: string, options: ReadOptions = {}): Order | null {
     const recordId = normalizeId(id, "id");
@@ -1506,7 +1552,7 @@ export function getOrder(id: string, options: ReadOptions = {}): Order | null {
     const extra = extraFields(requested);
     const fields = readOne("Order", recordId, extra);
     const found = fields === null ? null : orderFrom(fields, extra.requested);
-    check("salesforce.com/orders.get", { ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
+    check("salesforce.com/orders.get", { fields: extra.keys, ownerId: found === null ? "" : found.ownerId ?? "", accountId: found === null ? "" : found.accountId ?? "" });
     return found;
 }
 
@@ -1547,7 +1593,7 @@ export function query(spec: QuerySpec, page: PageOptions = {}): Page<SalesforceR
     const { pageSize, cursor } = page;
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
     check("salesforce.com/query.run", { object: prepared.object, fields: prepared.fields });
-    const result = window.cursor === null ? queryGet(prepared.soql, window.pageSize) : cursorGet(window.cursor, window.pageSize);
+    const result = queryPage(prepared.soql, window);
     return pageFrom(result, recordFrom);
 }
 
@@ -1668,7 +1714,12 @@ export function exportQuery(spec: QuerySpec, path: string, options: ExportOption
     }
     let state = "";
     for (let poll = 0; poll < EXPORT_POLLS; poll += 1) {
-        state = textField(sfGet("/jobs/query/" + id, 0).json<Record<string, unknown>>(), "state");
+        const job = sfGet("/jobs/query/" + id).json<Record<string, unknown>>();
+        // A job given back must be this spec's: its results are read under this check.
+        if (jobId.length > 0 && poll === 0 && !exportsSpec(job, prepared.object, prepared.soql)) {
+            throw validationError("invalid_input", "jobId " + id + " is not an export of this query");
+        }
+        state = textField(job, "state");
         if (state !== "UploadComplete" && state !== "InProgress") break;
     }
     if (state === "Failed" || state === "Aborted") {
@@ -1680,7 +1731,7 @@ export function exportQuery(spec: QuerySpec, path: string, options: ExportOption
     for (let chunk = 0; chunk < EXPORT_MAX_CHUNKS; chunk += 1) {
         let resultPath = "/jobs/query/" + id + "/results?maxRecords=" + EXPORT_CHUNK_RECORDS.toString();
         if (locator.length > 0) resultPath += "&locator=" + encodeComponent(locator);
-        const response = sfGet(resultPath, 0);
+        const response = sfGet(resultPath);
         let text = response.body;
         if (chunk > 0) {
             // Every chunk repeats the header row; keep the first one only.
@@ -1714,7 +1765,7 @@ export function soql(text: string, page: PageOptions = {}): Page<SalesforceRecor
     const { pageSize, cursor } = page;
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
     check("salesforce.com/query.soql", {});
-    const result = window.cursor === null ? queryGet(query, window.pageSize) : cursorGet(window.cursor, window.pageSize);
+    const result = queryPage(query, window);
     return pageFrom(result, recordFrom);
 }
 
@@ -1728,7 +1779,7 @@ export function soql(text: string, page: PageOptions = {}): Page<SalesforceRecor
 export function sosl(text: string): SalesforceRecord[] {
     const search = requireText(text, "text");
     check("salesforce.com/query.sosl", {});
-    const result = sfGet("/search/?q=" + encodeComponent(search), 0).json<ApiSearchResult>();
+    const result = sfGet("/search/?q=" + encodeComponent(search)).json<ApiSearchResult>();
     const records: SalesforceRecord[] = [];
     for (const raw of result.searchRecords) records.push(recordFrom(raw));
     return records;
@@ -1751,15 +1802,15 @@ export function logActivity(input: ActivityInput): string {
         const { field, value } = write;
         extra.push({ field: field, value: value });
     }
-    const typed = activityFields(type);
+    const subtype = taskSubtype(type);
     const whatId = optionalId(what, "whatId");
     const whoId = optionalId(who, "whoId");
     const writes = new Writes();
-    for (const write of typed) writes.set(write.field, write.value);
+    writes.set("TaskSubtype", subtype);
     writes.set("Subject", requireText(subject, "subject"));
     writes.set("Status", "Completed");
-    if (whatId.length > 0) writes.set("WhatId", whatId);
-    if (whoId.length > 0) writes.set("WhoId", whoId);
+    writes.set("WhatId", whatId.length > 0 ? whatId : undefined);
+    writes.set("WhoId", whoId.length > 0 ? whoId : undefined);
     writes.set("Description", description);
     writes.setDate("ActivityDate", date, "date");
     const prepared = writes.prepare(extra, "input");
@@ -1787,8 +1838,8 @@ export function createEvent(input: EventInput): string {
     writes.set("Subject", requireText(subject, "subject"));
     writes.set("StartDateTime", requireDateTime(start, "start"));
     writes.set("EndDateTime", requireDateTime(end, "end"));
-    if (whatId.length > 0) writes.set("WhatId", whatId);
-    if (whoId.length > 0) writes.set("WhoId", whoId);
+    writes.set("WhatId", whatId.length > 0 ? whatId : undefined);
+    writes.set("WhoId", whoId.length > 0 ? whoId : undefined);
     writes.set("Location", location);
     writes.set("Description", description);
     const prepared = writes.prepare(extra, "input");
@@ -1831,13 +1882,13 @@ export function createNote(recordId: string, title: string, body: string): strin
     const content = noteContent(body);
     const facts = recordFacts(id);
     check("salesforce.com/notes.create", { object: facts.key, accountId: facts.accountId, ownerId: facts.ownerId });
-    const created = orgPost(dataPath() + "/sobjects/ContentNote", { Title: noteTitle, Content: content }, headers(0));
+    const created = orgPost(dataPath() + "/sobjects/ContentNote", { Title: noteTitle, Content: content }, headers());
     if (created.status === 404) {
         // Salesforce answers a bare NOT_FOUND when the org has Notes turned off.
         throw new SalesforceError("NOT_FOUND", "this org has Notes turned off: Setup, Notes Settings, Enable Notes", [], 404, false);
     }
     const noteId = createdId(requireOk(created));
-    const linked = orgPost(dataPath() + "/sobjects/ContentDocumentLink", { ContentDocumentId: noteId, LinkedEntityId: id, ShareType: "I" }, headers(0));
+    const linked = orgPost(dataPath() + "/sobjects/ContentDocumentLink", { ContentDocumentId: noteId, LinkedEntityId: id, ShareType: "I" }, headers());
     if (!linked.ok) {
         // A note on no record is not what was asked for: remove it, and report why.
         orgDelete("/sobjects/ContentNote/" + noteId);
@@ -1891,7 +1942,7 @@ export function downloadFile(contentDocumentId: string, path: string, options: F
     if (document === null) throw new SalesforceError("NOT_FOUND", "Salesforce file " + id + " was not found", [], 404, false);
     const versionId = normalizeId(textOf(document, "LatestPublishedVersionId"), "LatestPublishedVersionId");
     const result = download(ORG + dataPath() + "/sobjects/ContentVersion/" + versionId + "/VersionData", file, {
-        headers: headers(0), overwrite: overwrite === true,
+        headers: headers(), overwrite: overwrite === true,
     });
     if (result.status < 200 || result.status >= 300) {
         // The body written is Salesforce's error, not the file.
@@ -1944,7 +1995,7 @@ export function readFeed(recordId: string, options: FeedOptions = {}): FeedPage 
     if (!facts.exists) return { posts: [], nextCursor: null };
     let path = "/chatter/feeds/record/" + id + "/feed-elements?pageSize=" + size.toString();
     if (token.length > 0) path += "&page=" + encodeComponent(token);
-    return feedPageFrom(sfGet(path, 0).json<Record<string, unknown>>());
+    return feedPageFrom(sfGet(path).json<Record<string, unknown>>());
 }
 
 /**
@@ -2060,7 +2111,7 @@ export function listPendingApprovals(options: PendingOptions = {}): Page<Pending
     let soql = "SELECT " + PENDING_FIELDS + " FROM ProcessInstanceWorkitem";
     if (actorId.length > 0) soql += " WHERE ActorId = '" + actorId + "'";
     soql += " ORDER BY CreatedDate DESC";
-    const result = window.cursor === null ? queryGet(soql, window.pageSize) : cursorGet(window.cursor, window.pageSize);
+    const result = queryPage(soql, window);
     return pageFrom(result, pendingFrom);
 }
 
@@ -2073,13 +2124,11 @@ export function listPendingApprovals(options: PendingOptions = {}): Page<Pending
  */
 export function runFlow(name: string, inputs: FlowInput[] = []): FlowResult {
     const flow = normalizeName(name, "name");
-    if (flow.name.indexOf(".") >= 0) throw validationError("invalid_name", "name must be a flow's API name, got " + JSON.stringify(name));
     const values: Record<string, unknown> = {};
     const keys: string[] = [];
     for (const input of inputs) {
         const { name: variable, value } = input;
         const key = normalizeName(variable, "inputs");
-        if (key.name.indexOf(".") >= 0) throw validationError("invalid_name", "an input must be a variable name, got " + JSON.stringify(variable));
         if (keys.includes(key.key)) throw validationError("duplicate_field", "inputs repeats " + key.name);
         if (typeof value === "number" && !Number.isFinite(value)) throw validationError("invalid_input", "an input value must be finite");
         keys.push(key.key);
@@ -2170,7 +2219,7 @@ export function listReports(options: ListOptions = {}): Page<ReportSummary> {
     let soql = "SELECT Id, Name, DeveloperName, FolderName, Format, Description, LastRunDate FROM Report";
     if (where.length > 0) soql += " WHERE " + where.join(" AND ");
     soql += " ORDER BY Name";
-    const result = window.cursor === null ? queryGet(soql, window.pageSize) : cursorGet(window.cursor, window.pageSize);
+    const result = queryPage(soql, window);
     return pageFrom(result, (raw: Record<string, unknown>): ReportSummary => ({
         id: textField(raw, "Id"), name: textAt(raw, "Name"), developerName: textAt(raw, "DeveloperName"),
         folderName: textAt(raw, "FolderName"), format: textAt(raw, "Format"), description: textAt(raw, "Description"),
@@ -2187,7 +2236,7 @@ export function listReports(options: ListOptions = {}): Page<ReportSummary> {
 export function describeReport(reportId: string): ReportDescription | null {
     const id = normalizeId(reportId, "reportId");
     check("salesforce.com/reports.describe", { reportId: id });
-    const response = sfGetNullable("/analytics/reports/" + id + "/describe", 0);
+    const response = sfGetNullable("/analytics/reports/" + id + "/describe");
     return response === null ? null : reportDescriptionFrom(response.json<Record<string, unknown>>());
 }
 
@@ -2212,9 +2261,9 @@ export function runReport(reportId: string, options: RunReportOptions = {}): Rep
     const path = "/analytics/reports/" + id + "?includeDetails=" + (details ? "true" : "false");
     let response: Response;
     if (added.length === 0) {
-        response = sfGet(path, 0);
+        response = sfGet(path);
     } else {
-        const describe = sfGet("/analytics/reports/" + id + "/describe", 0).json<Record<string, unknown>>();
+        const describe = sfGet("/analytics/reports/" + id + "/describe").json<Record<string, unknown>>();
         response = sfPost(path, { reportMetadata: withFilters(objectAt(describe, "reportMetadata"), added) });
     }
     const result = reportFrom(response.json<Record<string, unknown>>(), details);
@@ -2238,7 +2287,7 @@ export function listDashboards(options: ListOptions = {}): Page<DashboardSummary
     let soql = "SELECT Id, Title, DeveloperName, FolderName, Description, LastModifiedDate FROM Dashboard";
     if (where.length > 0) soql += " WHERE " + where.join(" AND ");
     soql += " ORDER BY Title";
-    const result = window.cursor === null ? queryGet(soql, window.pageSize) : cursorGet(window.cursor, window.pageSize);
+    const result = queryPage(soql, window);
     return pageFrom(result, (raw: Record<string, unknown>): DashboardSummary => ({
         id: textField(raw, "Id"), title: textAt(raw, "Title"), developerName: textAt(raw, "DeveloperName"),
         folderName: textAt(raw, "FolderName"), description: textAt(raw, "Description"), lastModifiedDate: textAt(raw, "LastModifiedDate"),
@@ -2254,7 +2303,7 @@ export function listDashboards(options: ListOptions = {}): Page<DashboardSummary
 export function getDashboard(dashboardId: string): Dashboard | null {
     const id = normalizeId(dashboardId, "dashboardId");
     check("salesforce.com/dashboards.get", { dashboardId: id });
-    const response = sfGetNullable("/analytics/dashboards/" + id, 0);
+    const response = sfGetNullable("/analytics/dashboards/" + id);
     return response === null ? null : dashboardFrom(response.json<Record<string, unknown>>());
 }
 
@@ -2267,7 +2316,7 @@ export function getDashboard(dashboardId: string): Dashboard | null {
 export function listListViews(object: string): ListView[] {
     const name = normalizeName(object, "object");
     check("salesforce.com/listViews.list", { object: name.key });
-    return listViewsFrom(sfGet("/sobjects/" + name.name + "/listviews", 0).json<Record<string, unknown>>());
+    return listViewsFrom(sfGet("/sobjects/" + name.name + "/listviews").json<Record<string, unknown>>());
 }
 
 /**
@@ -2285,7 +2334,7 @@ export function runListView(object: string, listViewId: string, page: PageOption
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
     check("salesforce.com/listViews.run", { object: name.key, listViewId: id });
     if (window.cursor !== null) return pageFrom(cursorGet(window.cursor, window.pageSize), recordFrom);
-    const describe = sfGet("/sobjects/" + name.name + "/listviews/" + id + "/describe", 0).json<Record<string, unknown>>();
+    const describe = sfGet("/sobjects/" + name.name + "/listviews/" + id + "/describe").json<Record<string, unknown>>();
     const soql = textAt(describe, "query");
     if (soql === null) throw new SalesforceError("LIST_VIEW_NOT_QUERYABLE", "list view " + id + " has no query", [], 0, false);
     return pageFrom(queryGet(soql, window.pageSize), recordFrom);
@@ -2298,7 +2347,7 @@ export function runListView(object: string, listViewId: string, page: PageOption
  */
 export function listObjects(): ObjectSummary[] {
     check("salesforce.com/objects.list", {});
-    return objectsFrom(sfGet("/sobjects", 0).json<Record<string, unknown>>());
+    return objectsFrom(sfGet("/sobjects").json<Record<string, unknown>>());
 }
 
 /**
@@ -2310,7 +2359,7 @@ export function listObjects(): ObjectSummary[] {
 export function describeObject(object: string): ObjectDescription | null {
     const name = normalizeName(object, "object");
     check("salesforce.com/objects.describe", { object: name.key });
-    const response = sfGetNullable("/sobjects/" + name.name + "/describe", 0);
+    const response = sfGetNullable("/sobjects/" + name.name + "/describe");
     return response === null ? null : objectDescriptionFrom(response.json<Record<string, unknown>>());
 }
 
@@ -2321,7 +2370,7 @@ export function describeObject(object: string): ObjectDescription | null {
  */
 export function getLimits(): OrgLimit[] {
     check("salesforce.com/org.limits", {});
-    return limitsFrom(sfGet("/limits", 0).json<Record<string, unknown>>());
+    return limitsFrom(sfGet("/limits").json<Record<string, unknown>>());
 }
 
 /**
@@ -2331,7 +2380,7 @@ export function getLimits(): OrgLimit[] {
  */
 export function getCurrentUser(): CurrentUser {
     check("salesforce.com/org.currentUser", {});
-    return currentUserFrom(sfGet("/chatter/users/me", 0).json<Record<string, unknown>>());
+    return currentUserFrom(sfGet("/chatter/users/me").json<Record<string, unknown>>());
 }
 
 // ---------------------------------------------------------------------------
@@ -2345,9 +2394,7 @@ function findTyped<T>(
     window: PageWindow,
     map: (fields: Record<string, FieldValue>, requested: ApiName[]) => T,
 ): Page<T> {
-    const result = window.cursor === null
-        ? queryGet(typedSoql(object, extra, conditions, "LastModifiedDate DESC"), window.pageSize)
-        : cursorGet(window.cursor, window.pageSize);
+    const result = queryPage(typedSoql(object, extra, conditions, "LastModifiedDate DESC"), window);
     return pageFrom(result, (raw: Record<string, unknown>): T => map(fieldsOf(raw), extra.requested));
 }
 
@@ -2368,7 +2415,7 @@ function lookupByExternalId(object: string, field: string, value: string): strin
 }
 
 function fetchRecord(object: string, id: string): Record<string, unknown> | null {
-    const response = sfGetNullable("/sobjects/" + object + "/" + id, 0);
+    const response = sfGetNullable("/sobjects/" + object + "/" + id);
     return response === null ? null : response.json<Record<string, unknown>>();
 }
 
@@ -2403,6 +2450,13 @@ function changeWindow(start: string, end: string): string {
     return "?start=" + encodeComponent(from) + "&end=" + encodeComponent(to);
 }
 
+// Whether a Bulk query job is the export of this query: its object, and its query when Salesforce returns it.
+function exportsSpec(job: Record<string, unknown>, objectKey: string, soql: string): boolean {
+    if (textField(job, "object").toLowerCase() !== objectKey) return false;
+    const query = textAt(job, "query");
+    return query === null || query === soql;
+}
+
 function countRows(text: string, withHeader: boolean): number {
     let lines = 0;
     for (const line of text.split("\n")) {
@@ -2416,11 +2470,16 @@ function createdId(response: Response): string {
 }
 
 function queryGet(soql: string, pageSize: number): ApiQueryResult {
-    return sfGet("/query/?q=" + encodeComponent(soql), pageSize).json<ApiQueryResult>();
+    return requireOk(orgGet("/query/?q=" + encodeComponent(soql), pageHeaders(pageSize))).json<ApiQueryResult>();
 }
 
 function cursorGet(cursor: string, pageSize: number): ApiQueryResult {
-    return sfGet("/query/" + cursor, pageSize).json<ApiQueryResult>();
+    return requireOk(orgGet("/query/" + cursor, pageHeaders(pageSize))).json<ApiQueryResult>();
+}
+
+// A page of a query: its first, or the one a cursor from an earlier page names.
+function queryPage(soql: string, window: PageWindow): ApiQueryResult {
+    return window.cursor === null ? queryGet(soql, window.pageSize) : cursorGet(window.cursor, window.pageSize);
 }
 
 // The REST API's path under the org's URL, without a leading slash.
@@ -2428,12 +2487,16 @@ function dataPath(): string {
     return "services/data/v" + apiVersion;
 }
 
-function sfGet(path: string, pageSize: number): Response {
-    return requireOk(orgGet(path, pageSize));
+function sfGet(path: string): Response {
+    return requireOk(orgGet(path, headers()));
 }
 
-function sfGetNullable(path: string, pageSize: number): Response | null {
-    const response = orgGet(path, pageSize);
+function sfGetNullable(path: string): Response | null {
+    return okOrNull(orgGet(path, headers()));
+}
+
+// A successful answer, or null for 404; any other error throws.
+function okOrNull(response: Response): Response | null {
     if (response.ok) return response;
     const error = errorOf(response);
     if (error.status === 404) return null;
@@ -2441,17 +2504,17 @@ function sfGetNullable(path: string, pageSize: number): Response | null {
 }
 
 function sfPost(path: string, body: Record<string, unknown>): Response {
-    return requireOk(orgPost(dataPath() + path, body, headers(0)));
+    return requireOk(orgPost(dataPath() + path, body, headers()));
 }
 
 function sfPatch(path: string, body: Record<string, unknown>): Response {
-    return requireOk(patch(ORG + dataPath() + path, body, headers(0)));
+    return requireOk(patch(ORG + dataPath() + path, body, headers()));
 }
 
 // One call site per verb, each under the org's URL: `ORG` and then a path
 // without a leading slash, so the compiler derives the org's host into the grants.
-function orgGet(path: string, pageSize: number): Response {
-    return get(ORG + dataPath() + path, headers(pageSize));
+function orgGet(path: string, sent: Map<string, string>): Response {
+    return get(ORG + dataPath() + path, sent);
 }
 
 function orgPost(path: string, body: string | Record<string, unknown>, sent: Map<string, string>): Response {
@@ -2459,15 +2522,21 @@ function orgPost(path: string, body: string | Record<string, unknown>, sent: Map
 }
 
 function orgDelete(path: string): Response {
-    return httpDelete(ORG + dataPath() + path, headers(0));
+    return httpDelete(ORG + dataPath() + path, headers());
 }
 
-function headers(pageSize: number): Map<string, string> {
+function headers(): Map<string, string> {
     const map = new Map<string, string>();
     map.set("Authorization", "Bearer " + accessToken());
     map.set("Accept", "application/json");
     map.set("User-Agent", USER_AGENT);
-    if (pageSize > 0) map.set("Sforce-Query-Options", "batchSize=" + pageSize.toString());
+    return map;
+}
+
+// The headers of a paged read: Salesforce's page size is a query option.
+function pageHeaders(pageSize: number): Map<string, string> {
+    const map = headers();
+    map.set("Sforce-Query-Options", "batchSize=" + pageSize.toString());
     return map;
 }
 
@@ -2477,8 +2546,7 @@ function requireOk(response: Response): Response {
 }
 
 function errorOf(response: Response): SalesforceError {
-    const failure = failureFrom(response.status, response.statusText, response.body);
-    return new SalesforceError(failure.errorCode, failure.message, failure.fields, response.status, failure.retryable);
+    return failureError(failureFrom(response.status, response.statusText, response.body), response.status);
 }
 
 // What a check needs to know about a record named only by its id.
@@ -2520,7 +2588,7 @@ function objectOfId(id: string): string {
     for (const known of KNOWN_PREFIXES) {
         if (known[0] === prefix) return known[1];
     }
-    for (const summary of objectsFrom(sfGet("/sobjects", 0).json<Record<string, unknown>>())) {
+    for (const summary of objectsFrom(sfGet("/sobjects").json<Record<string, unknown>>())) {
         if (summary.keyPrefix === prefix) return summary.name;
     }
     return "";
@@ -2567,7 +2635,7 @@ function decision(action: string, workItemId: string, comment: string | undefine
 }
 
 function approvalAction(request: Record<string, unknown>): ApprovalResult {
-    const results = sfPost("/process/approvals", approvalBody(request)).json<unknown[]>();
+    const results = sfPost("/process/approvals", { requests: [request] }).json<unknown[]>();
     const first = results.length > 0 ? results[0] : null;
     if (!flagAt(first, "success")) throw failureError(actionFailure(first, "approval"), 200);
     return approvalFrom(results);

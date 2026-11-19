@@ -177,18 +177,14 @@ export interface PreparedValues {
  * case, and every number finite.
  * @param values The values as given.
  * @param argument Argument name for the error message.
- * @param refuseOwner Refuse `OwnerId`, which changes only through `changeOwner`.
  * @returns The body and the sorted field keys.
  */
-export function prepareValues(values: FieldWrite[], argument: string, refuseOwner: boolean): PreparedValues {
+export function prepareValues(values: FieldWrite[], argument: string): PreparedValues {
     const body: Record<string, unknown> = {};
     const keys: string[] = [];
     for (const write of values) {
         const field = normalizeName(write.field, argument + " field");
         if (field.key === "id") throw validationError("invalid_input", argument + " cannot set Id; pass the record id as its own argument");
-        if (refuseOwner && field.key === "ownerid") {
-            throw validationError("owner_field", argument + " cannot set OwnerId; ownership changes only through changeOwner");
-        }
         if (keys.includes(field.key)) throw validationError("duplicate_field", argument + " sets " + field.name + " twice");
         const value = write.value;
         if (typeof value === "number" && !isFinite(value)) {
@@ -199,6 +195,49 @@ export function prepareValues(values: FieldWrite[], argument: string, refuseOwne
     }
     keys.sort();
     return { body: body, keys: keys };
+}
+
+/**
+ * Refuse a change to the fields a check's `ownerId` and `accountId` facts are
+ * read from, so a rule scoped to an owner or account cannot be bypassed by
+ * moving the record: `OwnerId` (changes only through `changeOwner`),
+ * `AccountId`, and on tasks and events the `WhatId` and `WhoId` Salesforce
+ * derives their account from.
+ * @param keys The written fields' keys.
+ * @param objectKey The object, lowercased.
+ * @param argument Argument name for the error message.
+ */
+export function refuseScopeChange(keys: string[], objectKey: string, argument: string): void {
+    if (keys.includes("ownerid")) {
+        throw validationError("owner_field", argument + " cannot set OwnerId; ownership changes only through changeOwner");
+    }
+    for (const key of scopeKeys(objectKey)) {
+        if (keys.includes(key)) {
+            throw validationError("account_field", argument + " cannot change " + key + ", which decides the record's account in checks");
+        }
+    }
+}
+
+/**
+ * Refuse, on a new task or event, the `WhatId` and `WhoId` its account is
+ * derived from: `logActivity` and `createEvent` check that account.
+ * @param keys The written fields' keys.
+ * @param objectKey The object, lowercased.
+ * @param argument Argument name for the error message.
+ */
+export function refuseActivityLinks(keys: string[], objectKey: string, argument: string): void {
+    if (objectKey !== "task" && objectKey !== "event") return;
+    for (const key of ["whatid", "whoid"]) {
+        if (keys.includes(key)) {
+            throw validationError("account_field", argument + " cannot set " + key + " on a " + objectKey + "; use logActivity or createEvent");
+        }
+    }
+}
+
+// The fields a record's account is read from, by object.
+function scopeKeys(objectKey: string): string[] {
+    if (objectKey === "task" || objectKey === "event") return ["accountid", "whatid", "whoid"];
+    return ["accountid"];
 }
 
 // An id given among the values (such as `AccountId`, in any case), normalized, or "" when absent or null.

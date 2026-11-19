@@ -8,7 +8,7 @@
 // than failing the query.
 
 import { validationError } from "./errors";
-import { containsLiteral, PreparedCondition, quote } from "./soql";
+import { containsLiteral, PreparedCondition, quote, whereClause } from "./soql";
 import {
     ApiName,
     FieldValue,
@@ -20,6 +20,7 @@ import {
     requireDate,
     requireDateTime,
     requireText,
+    sortedDistinct,
 } from "./request";
 
 /** Fields every typed record has. */
@@ -827,6 +828,8 @@ export interface ExtraFields {
     select: string[];
     /** Every field as asked for, read back into `custom`. */
     requested: ApiName[];
+    /** Their lowercased paths, sorted and distinct: the check's `fields`. */
+    keys: string[];
 }
 
 /**
@@ -844,7 +847,9 @@ export function extraFields(fields: string[]): ExtraFields {
             if (!select.includes(field.name)) select.push(field.name);
         }
     }
-    return { select: select, requested: requested };
+    const keys: string[] = [];
+    for (const field of requested) keys.push(field.key);
+    return { select: select, requested: requested, keys: sortedDistinct(keys) };
 }
 
 /**
@@ -861,10 +866,7 @@ export function typedSoql(object: string, extra: ExtraFields, where: PreparedCon
     for (const path of extra.select) {
         if (!select.includes(path)) select.push(path);
     }
-    const conditions: string[] = [];
-    for (const condition of where) conditions.push(condition.soql);
-    let soql = "SELECT " + select.join(", ") + " FROM " + object;
-    if (conditions.length > 0) soql += " WHERE " + conditions.join(" AND ");
+    let soql = "SELECT " + select.join(", ") + " FROM " + object + whereClause(where);
     if (order.length > 0) soql += " ORDER BY " + order;
     return soql;
 }
@@ -935,6 +937,9 @@ export class Filters {
 /** A typed write's body and fields, built from typed fields and `custom`. */
 export class Writes {
     private typed: FieldWrite[] = [];
+    // Every typed field the operation offers, given or not: its check reads
+    // their facts from the typed arguments, so `custom` may not write them.
+    private owned: string[] = [];
 
     /**
      * Set a typed field, left out when undefined.
@@ -942,6 +947,7 @@ export class Writes {
      * @param value Its value; null clears it.
      */
     set(field: string, value: FieldValue | undefined): void {
+        this.owned.push(field.toLowerCase());
         if (value !== undefined) this.typed.push({ field: field, value: value });
     }
 
@@ -952,6 +958,7 @@ export class Writes {
      * @param argument Argument name for the error message.
      */
     setId(field: string, value: string | null | undefined, argument: string): void {
+        this.owned.push(field.toLowerCase());
         if (value === undefined) return;
         this.typed.push({ field: field, value: value === null ? null : normalizeId(value, argument) });
     }
@@ -963,6 +970,7 @@ export class Writes {
      * @param argument Argument name for the error message.
      */
     setDate(field: string, value: string | undefined, argument: string): void {
+        this.owned.push(field.toLowerCase());
         if (value !== undefined) this.typed.push({ field: field, value: requireDate(value, argument) });
     }
 
@@ -973,16 +981,15 @@ export class Writes {
      * @returns The body and the sorted field keys.
      */
     prepare(custom: FieldWrite[], argument: string): PreparedValues {
-        const typedKeys: string[] = [];
-        for (const write of this.typed) typedKeys.push(write.field.toLowerCase());
-        const extra = prepareValues(custom, argument + " custom", true);
+        const extra = prepareValues(custom, argument + " custom");
         for (const key of extra.keys) {
-            if (typedKeys.includes(key)) throw validationError("duplicate_field", argument + " custom repeats a typed field: " + key);
+            if (key === "ownerid") throw validationError("owner_field", argument + " custom cannot set OwnerId; ownership changes only through changeOwner");
+            if (this.owned.includes(key)) throw validationError("typed_field", argument + " custom cannot set " + key + "; use the typed argument");
         }
         const all: FieldWrite[] = [];
         for (const write of this.typed) all.push(write);
         for (const write of custom) all.push(write);
-        const prepared = prepareValues(all, argument, false);
+        const prepared = prepareValues(all, argument);
         if (prepared.keys.length === 0) throw validationError("invalid_input", argument + " changes nothing");
         return prepared;
     }

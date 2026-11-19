@@ -104,55 +104,58 @@ Every check field is normalized before the check and sent exactly as checked:
   sets; on a query, every field it reads, filters on or sorts by.
 - A filter the caller leaves out is `""`, so a rule on it also refuses an
   unfiltered find.
+- Every typed find and get, and `getRecord`, also has `fields`: the extra
+  `fields` asked for, relationship paths such as `owner.email` included, so a
+  rule can limit reads across objects (`not (fields glob "*.*")`).
 
 | Capability | Operation | Fields |
 | --- | --- | --- |
-| `salesforce.com/records.get` | `getRecord` | `object`, `ownerId` and `accountId` (looked up) |
+| `salesforce.com/records.get` | `getRecord` | `object`, `fields`, `ownerId` and `accountId` (looked up) |
 | `salesforce.com/records.create` | `createRecord` | `object`, `fields`, `ownerId` and `accountId` (as given, or `""`) |
 | `salesforce.com/records.update` | `updateRecord` | `object`, `fields`, `ownerId` and `accountId` (looked up) |
 | `salesforce.com/records.delete` | `deleteRecord` | `object`, `ownerId` and `accountId` (looked up) |
-| `salesforce.com/records.upsert` | `upsertRecord` | `object`, `externalIdField`, `externalId`, `fields` |
+| `salesforce.com/records.upsert` | `upsertRecord` | `object`, `externalIdField`, `externalId`, `fields`, `ownerId` and `accountId` of the record it updates (looked up, `""` for a new one) |
 | `salesforce.com/records.createMany` | `createRecords` | `object`, `fields` (all records'), `count`, `ownerIds` and `accountIds` (as given) |
 | `salesforce.com/records.updateMany` | `updateRecords` | `object`, `fields`, `count`, `ownerIds` and `accountIds` (looked up) |
 | `salesforce.com/records.related` | `getRelated` | `object`, `relationship`, `ownerId` and `accountId` of the parent (looked up) |
 | `salesforce.com/records.updated` | `getUpdated` | `object` |
 | `salesforce.com/records.deleted` | `getDeleted` | `object` |
-| `salesforce.com/accounts.find` | `findAccounts` | `ownerId` |
-| `salesforce.com/accounts.get` | `getAccount` | `ownerId` (looked up), `accountId` (the id) |
-| `salesforce.com/contacts.find` | `findContacts` | `accountId` |
-| `salesforce.com/contacts.get` | `getContact` | `ownerId`, `accountId` (looked up) |
+| `salesforce.com/accounts.find` | `findAccounts` | `fields`, `ownerId` |
+| `salesforce.com/accounts.get` | `getAccount` | `fields`, `ownerId` (looked up), `accountId` (the id) |
+| `salesforce.com/contacts.find` | `findContacts` | `fields`, `accountId` |
+| `salesforce.com/contacts.get` | `getContact` | `fields`, `ownerId`, `accountId` (looked up) |
 | `salesforce.com/contacts.create` | `createContact` | `accountId`, `ownerId`, `fields` |
-| `salesforce.com/leads.find` | `findLeads` | `ownerId` |
-| `salesforce.com/leads.get` | `getLead` | `ownerId` (looked up) |
+| `salesforce.com/leads.find` | `findLeads` | `fields`, `ownerId` |
+| `salesforce.com/leads.get` | `getLead` | `fields`, `ownerId` (looked up) |
 | `salesforce.com/leads.create` | `createLead` | `ownerId`, `status`, `fields` |
 | `salesforce.com/leads.update` | `updateLead` | `ownerId` and `previousStatus` (looked up), `status`, `fields` |
-| `salesforce.com/opportunities.find` | `findOpportunities` | `accountId`, `ownerId` |
-| `salesforce.com/opportunities.get` | `getOpportunity` | `ownerId`, `accountId` (looked up) |
+| `salesforce.com/opportunities.find` | `findOpportunities` | `fields`, `accountId`, `ownerId` |
+| `salesforce.com/opportunities.get` | `getOpportunity` | `fields`, `ownerId`, `accountId` (looked up) |
 | `salesforce.com/opportunities.update` | `updateOpportunity` | `accountId`, `ownerId` and `previousStage` (looked up), `stage`, `fields` |
-| `salesforce.com/opportunityLineItems.find` | `findOpportunityLineItems` | `opportunityId` |
-| `salesforce.com/opportunityLineItems.get` | `getOpportunityLineItem` | `opportunityId` (looked up) |
-| `salesforce.com/products.find` | `findProducts` | none |
-| `salesforce.com/products.get` | `getProduct` | none |
-| `salesforce.com/pricebooks.find` | `findPricebooks` | none |
-| `salesforce.com/pricebooks.get` | `getPricebook` | none |
-| `salesforce.com/cases.find` | `findCases` | `accountId`, `ownerId` |
-| `salesforce.com/cases.get` | `getCase` | `ownerId`, `accountId` (looked up) |
+| `salesforce.com/opportunityLineItems.find` | `findOpportunityLineItems` | `fields`, `opportunityId` |
+| `salesforce.com/opportunityLineItems.get` | `getOpportunityLineItem` | `fields`, `opportunityId` (looked up) |
+| `salesforce.com/products.find` | `findProducts` | `fields` |
+| `salesforce.com/products.get` | `getProduct` | `fields` |
+| `salesforce.com/pricebooks.find` | `findPricebooks` | `fields` |
+| `salesforce.com/pricebooks.get` | `getPricebook` | `fields` |
+| `salesforce.com/cases.find` | `findCases` | `fields`, `accountId`, `ownerId` |
+| `salesforce.com/cases.get` | `getCase` | `fields`, `ownerId`, `accountId` (looked up) |
 | `salesforce.com/cases.create` | `createCase` | `accountId`, `ownerId`, `fields` |
 | `salesforce.com/cases.update` | `updateCase` | `accountId`, `ownerId` and `previousStatus` (looked up), `status`, `fields` |
-| `salesforce.com/tasks.find` | `findTasks` | `ownerId`, `whatId` |
-| `salesforce.com/tasks.get` | `getTask` | `ownerId`, `accountId` (looked up) |
-| `salesforce.com/events.find` | `findEvents` | `ownerId`, `whatId` |
-| `salesforce.com/events.get` | `getEvent` | `ownerId`, `accountId` (looked up) |
-| `salesforce.com/users.find` | `findUsers` | none |
-| `salesforce.com/users.get` | `getUser` | none |
-| `salesforce.com/campaigns.find` | `findCampaigns` | `ownerId` |
-| `salesforce.com/campaigns.get` | `getCampaign` | `ownerId` (looked up) |
-| `salesforce.com/campaignMembers.find` | `findCampaignMembers` | `campaignId` |
-| `salesforce.com/campaignMembers.get` | `getCampaignMember` | `campaignId` (looked up) |
-| `salesforce.com/contracts.find` | `findContracts` | `accountId`, `ownerId` |
-| `salesforce.com/contracts.get` | `getContract` | `ownerId`, `accountId` (looked up) |
-| `salesforce.com/orders.find` | `findOrders` | `accountId`, `ownerId` |
-| `salesforce.com/orders.get` | `getOrder` | `ownerId`, `accountId` (looked up) |
+| `salesforce.com/tasks.find` | `findTasks` | `fields`, `ownerId`, `whatId` |
+| `salesforce.com/tasks.get` | `getTask` | `fields`, `ownerId`, `accountId` (looked up) |
+| `salesforce.com/events.find` | `findEvents` | `fields`, `ownerId`, `whatId` |
+| `salesforce.com/events.get` | `getEvent` | `fields`, `ownerId`, `accountId` (looked up) |
+| `salesforce.com/users.find` | `findUsers` | `fields` |
+| `salesforce.com/users.get` | `getUser` | `fields` |
+| `salesforce.com/campaigns.find` | `findCampaigns` | `fields`, `ownerId` |
+| `salesforce.com/campaigns.get` | `getCampaign` | `fields`, `ownerId` (looked up) |
+| `salesforce.com/campaignMembers.find` | `findCampaignMembers` | `fields`, `campaignId` |
+| `salesforce.com/campaignMembers.get` | `getCampaignMember` | `fields`, `campaignId` (looked up) |
+| `salesforce.com/contracts.find` | `findContracts` | `fields`, `accountId`, `ownerId` |
+| `salesforce.com/contracts.get` | `getContract` | `fields`, `ownerId`, `accountId` (looked up) |
+| `salesforce.com/orders.find` | `findOrders` | `fields`, `accountId`, `ownerId` |
+| `salesforce.com/orders.get` | `getOrder` | `fields`, `ownerId`, `accountId` (looked up) |
 | `salesforce.com/query.run` | `query` | `object`, `fields` |
 | `salesforce.com/query.aggregate` | `aggregate` | `object`, `fields` |
 | `salesforce.com/query.search` | `search` | `objects`, `fields` |
@@ -195,6 +198,15 @@ Every check field is normalized before the check and sent exactly as checked:
   bypassed by reassigning a record; `changeOwner` is the one way to reassign,
   checked with the owner before and after. A create may set it, and the check
   sees it.
+- For the same reason the generic updates (`updateRecord`, `updateRecords`,
+  `upsertRecord`) refuse the fields a record's `accountId` comes from:
+  `AccountId`, and on tasks and events `WhatId` and `WhoId`. The generic creates
+  refuse `WhatId` and `WhoId` on tasks and events, whose account `logActivity`
+  and `createEvent` check.
+- A typed write's `custom` may not set a field one of its typed arguments
+  sets, given or not (`StageName` on `updateOpportunity`, `AccountId` on
+  `createContact`, `WhatId` on `logActivity`), so the check's `stage`,
+  `status` and `accountId` are those of the request sent.
 - Operations on a record named only by its id (activities, notes, files,
   Chatter, approvals) find its object from the id's prefix, and check `object`
   as a lowercased API name, `""` when no object has that prefix.
@@ -207,10 +219,13 @@ Every check field is normalized before the check and sent exactly as checked:
   caller's: `ownerIds.0 == "005…" and not (ownerIds.1 glob "*")`.
 - `soql` and `sosl` run text as written, so their checks have no fields: grant
   them only where a rule need not limit what the agent reads.
-- A cursor carries no check of its own: the next page is checked with the
-  arguments the program passes with it, and the program must pass the same
-  ones. A cursor is a Salesforce query locator, valid for the token's user and
-  only for a while.
+- A cursor carries no check of its own and is not tied to the query it came
+  from: the next page is read under the check of the call it is passed to.
+  Pass a cursor only back to the call, with the same arguments, that returned
+  it. A cursor is a Salesforce query locator, valid for the token's user and
+  only for a while, so one from another session of the same user reads that
+  session's query. `exportQuery`'s `jobId` is refused unless the job is an
+  export of the query given.
 - Some reads follow a passed check without one of their own: the owner and
   account lookups read the record, and a typed update reads its current stage
   or status. Their values reach only the check.

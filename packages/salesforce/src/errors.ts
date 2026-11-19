@@ -3,8 +3,8 @@
 
 /**
  * A Salesforce API error (the HTTP status of Salesforce's answer), or an error
- * the package raised itself (status 0): input refused before any request, a
- * missing credential, or an org URL that is not a Salesforce host.
+ * the package raised itself (status 0): input refused before any request, or a
+ * missing credential.
  */
 export class SalesforceError extends Error {
     /**
@@ -20,7 +20,8 @@ export class SalesforceError extends Error {
     status: number;
     /**
      * True when Salesforce did not apply the request and the same call may succeed
-     * later: `REQUEST_LIMIT_EXCEEDED`, `UNABLE_TO_LOCK_ROW` and HTTP 429. A program
+     * later: `REQUEST_LIMIT_EXCEEDED`, `UNABLE_TO_LOCK_ROW`, `SERVER_UNAVAILABLE`, and
+     * HTTP 429 and 503. A program
      * cannot sleep, so it should stop and report rather than retry at once.
      */
     retryable: boolean;

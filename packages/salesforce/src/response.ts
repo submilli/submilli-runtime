@@ -292,9 +292,6 @@ export interface FailureDetails {
  * @returns The error's code, message, fields and whether it is retryable.
  */
 export function failureFrom(status: number, statusText: string, body: string): FailureDetails {
-    let code = "";
-    let detail = "";
-    let fields: string[] = [];
     let parsed: unknown = null;
     try {
         parsed = JSON.parse(body);
@@ -304,29 +301,15 @@ export function failureFrom(status: number, statusText: string, body: string): F
     let first: unknown = parsed;
     if (Array.isArray(parsed)) first = parsed.length > 0 ? parsed[0] : null;
     // An invocable action's or approval's failure: its result, with the errors inside.
-    if (first !== null && typeof first === "object" && !Array.isArray(first)) {
-        const errors = (first as Record<string, unknown>)["errors"];
-        if (Array.isArray(errors) && errors.length > 0) first = errors[0];
-    }
-    if (first !== null && typeof first === "object" && !Array.isArray(first)) {
-        const error = first as Record<string, unknown>;
-        const errorCode = error["errorCode"] ?? error["statusCode"] ?? error["error"];
-        const message = error["message"] ?? error["error_description"];
-        if (typeof errorCode === "string") code = errorCode;
-        if (typeof message === "string") detail = message;
-        const named = error["fields"];
-        if (Array.isArray(named)) {
-            for (const field of named) {
-                if (typeof field === "string") fields.push(field);
-            }
-        }
-    }
-    if (code.length === 0) code = statusCode(status);
-    const message = detail.length > 0
-        ? "Salesforce " + status.toString() + " " + code + ": " + detail
+    if (arrayAt(first, "errors").length > 0) first = arrayAt(first, "errors")[0];
+    const error = errorDetails(first);
+    const code = error.code.length > 0 ? error.code : statusCode(status);
+    const message = error.detail.length > 0
+        ? "Salesforce " + status.toString() + " " + code + ": " + error.detail
         : "Salesforce request failed: HTTP " + status.toString() + " " + statusText;
-    const retryable = status === 429 || code === "REQUEST_LIMIT_EXCEEDED" || code === "UNABLE_TO_LOCK_ROW";
-    return { errorCode: code, message: message, fields: fields, retryable: retryable };
+    const retryable = status === 429 || status === 503
+        || code === "REQUEST_LIMIT_EXCEEDED" || code === "UNABLE_TO_LOCK_ROW" || code === "SERVER_UNAVAILABLE";
+    return { errorCode: code, message: message, fields: error.fields, retryable: retryable };
 }
 
 // A code for an error answer without one.
@@ -384,12 +367,20 @@ export function scalarOrJson(value: unknown): FieldValue {
 // The errors an action (`actions/...`, `process/approvals`) reported in a 200 answer, as a SalesforceError.
 export function actionFailure(result: unknown, what: string): FailureDetails {
     const errors = arrayAt(result, "errors");
-    const first = errors.length > 0 ? errors[0] : null;
-    const code = textAt(first, "statusCode") ?? textAt(first, "errorCode") ?? "ACTION_FAILED";
-    const detail = textAt(first, "message") ?? "";
+    const error = errorDetails(errors.length > 0 ? errors[0] : null);
+    const code = error.code.length > 0 ? error.code : "ACTION_FAILED";
+    return { errorCode: code, message: what + " failed: " + code + (error.detail.length > 0 ? ": " + error.detail : ""), fields: error.fields, retryable: false };
+}
+
+// One error object as Salesforce writes it: `{ errorCode, message, fields }`, an
+// action's `{ statusCode, message, fields }`, or OAuth's `{ error, error_description }`.
+// Absent parts are "" and [].
+function errorDetails(error: unknown): { code: string; detail: string; fields: string[] } {
+    const code = textAt(error, "errorCode") ?? textAt(error, "statusCode") ?? textAt(error, "error") ?? "";
+    const detail = textAt(error, "message") ?? textAt(error, "error_description") ?? "";
     const fields: string[] = [];
-    for (const field of arrayAt(first, "fields")) {
+    for (const field of arrayAt(error, "fields")) {
         if (typeof field === "string") fields.push(field);
     }
-    return { errorCode: code, message: what + " failed: " + code + (detail.length > 0 ? ": " + detail : ""), fields: fields, retryable: false };
+    return { code: code, detail: detail, fields: fields };
 }

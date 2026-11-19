@@ -168,7 +168,11 @@ test('every request goes to the org under its API version, with the token', () =
     assert.equal(sent.headers.Accept, 'application/json');
     assert.equal(sent.headers['Sforce-Query-Options'], 'batchSize=500');
     assert.match(soqlOf(sent), /^SELECT FIELDS\(STANDARD\), .* FROM Account WHERE Name LIKE '%Ac%' ORDER BY LastModifiedDate DESC$/);
-    assert.deepEqual(lastCheck(), { capability: 'accounts.find', context: { ownerId: '' } });
+    assert.deepEqual(lastCheck(), { capability: 'accounts.find', context: { fields: [], ownerId: '' } });
+
+    // Extra fields, relationship paths included, are in the check.
+    sf.findAccounts({}, { fields: ['Owner.Email', 'Region__c', 'owner.email'] });
+    assert.deepEqual(lastCheck().context, { fields: ['owner.email', 'region__c'], ownerId: '' });
 });
 
 test('a cursor reads the next page by its locator', () => {
@@ -219,7 +223,7 @@ test('Salesforce errors keep their code, fields and status; 404 reads as null', 
     on('GET', /^\/query\/\?q=.*Expired/, reply(401, [{ errorCode: 'INVALID_SESSION_ID', message: 'Session expired or invalid' }]));
 
     assert.equal(sf.getRecord('Account', ACCOUNT), null);
-    assert.deepEqual(lastCheck().context, { object: 'account', ownerId: '', accountId: '' });
+    assert.deepEqual(lastCheck().context, { object: 'account', fields: [], ownerId: '', accountId: '' });
     assert.throws(() => sf.soql('SELECT Bad__c FROM Account'), (error) =>
         error.name === 'SalesforceError' && error.errorCode === 'INVALID_FIELD' && error.status === 400 && error.fields[0] === 'Bad__c' && !error.retryable);
     assert.throws(() => sf.soql('SELECT Id FROM Limit'), (error) => error.errorCode === 'REQUEST_LIMIT_EXCEEDED' && error.retryable);
@@ -286,16 +290,20 @@ test('deleteRecord reports whether it deleted', () => {
 test('upsertRecord patches by external id and reads back an update without a body', () => {
     reset();
     on('PATCH', '/sobjects/Account/Erp_Id__c/A%2F1', reply(201, { id: ACCOUNT, success: true, created: true }));
+    soqlAnswer("WHERE Erp_Id__c = 'A/1'", []);
     assert.deepEqual(sf.upsertRecord('Account', 'Erp_Id__c', 'A/1', [{ field: 'Name', value: 'Acme' }]), { id: ACCOUNT, created: true });
     assert.deepEqual(lastCheck(), {
         capability: 'records.upsert',
-        context: { object: 'account', externalIdField: 'erp_id__c', externalId: 'A/1', fields: ['name'] },
+        context: { object: 'account', externalIdField: 'erp_id__c', externalId: 'A/1', fields: ['name'], ownerId: '', accountId: '' },
     });
 
+    // An existing record is checked with its owner and account.
     reset();
-    on('PATCH', '/sobjects/Account/Erp_Id__c/A1', reply(204));
-    soqlAnswer("WHERE Erp_Id__c = 'A1'", [{ attributes: { type: 'Account' }, Id: ACCOUNT }]);
-    assert.deepEqual(sf.upsertRecord('Account', 'Erp_Id__c', 'A1', [{ field: 'Name', value: 'Acme' }]), { id: ACCOUNT, created: false });
+    on('PATCH', '/sobjects/Contact/Erp_Id__c/A1', reply(204));
+    soqlAnswer("WHERE Erp_Id__c = 'A1'", [{ attributes: { type: 'Contact' }, Id: CONTACT, OwnerId: OWNER, AccountId: ACCOUNT }]);
+    assert.deepEqual(sf.upsertRecord('Contact', 'Erp_Id__c', 'A1', [{ field: 'LastName', value: 'Lee' }]), { id: CONTACT, created: false });
+    assert.deepEqual(lastCheck().context, { object: 'contact', externalIdField: 'erp_id__c', externalId: 'A1', fields: ['lastname'], ownerId: OWNER, accountId: ACCOUNT });
+    assert.throws(() => sf.upsertRecord('Contact', 'Erp_Id__c', 'A1', [{ field: 'AccountId', value: ACCOUNT }]), /cannot change accountid/);
     assert.throws(() => sf.upsertRecord('Account', 'Erp_Id__c', 'A1', [{ field: 'Erp_Id__c', value: 'B' }]), /external id/);
 });
 
@@ -324,6 +332,14 @@ test('batch writes are all or none, and check every owner and account', () => {
     assert.deepEqual(requests[1].body, { allOrNone: true, records: [{ attributes: { type: 'Contact' }, Title: 'CTO', Id: CONTACT }] });
     assert.deepEqual(lastCheck().context, { object: 'contact', fields: ['title'], count: 1, ownerIds: [OWNER], accountIds: [ACCOUNT] });
     assert.throws(() => sf.updateRecords('Contact', [{ id: CONTACT, values: [{ field: 'Title', value: 'A' }] }, { id: CONTACT, values: [{ field: 'Title', value: 'B' }] }]), /repeats/);
+
+    // A record not read back is checked as one that does not exist.
+    reset();
+    soqlAnswer('FROM Contact WHERE Id IN', [{ attributes: { type: 'Contact' }, Id: CONTACT, OwnerId: OWNER, AccountId: ACCOUNT }]);
+    on('PATCH', '/composite/sobjects', reply(200, [{ id: CONTACT, success: true, errors: [] }, { id: '003000000000002AAA', success: true, errors: [] }]));
+    sf.updateRecords('Contact', [{ id: CONTACT, values: [{ field: 'Title', value: 'CTO' }] }, { id: '003000000000002AAA', values: [{ field: 'Title', value: 'CFO' }] }]);
+    assert.deepEqual(lastCheck().context, { object: 'contact', fields: ['title'], count: 2, ownerIds: ['', OWNER], accountIds: ['', ACCOUNT] });
+    assert.throws(() => sf.updateRecords('Contact', [{ id: CONTACT, values: [{ field: 'AccountId', value: ACCOUNT }] }]), /cannot change accountid/);
 });
 
 test('changeOwner checks both owners and patches only OwnerId', () => {
@@ -554,9 +570,12 @@ test('exportQuery creates a Bulk job, polls it, and writes every chunk with one 
     assert.deepEqual(lastCheck().context, { object: 'account', fields: ['industry', 'name'], path: '/out/accounts.csv' });
 
     reset();
-    on('GET', `/jobs/query/${JOB}`, reply(200, { id: JOB, state: 'InProgress' }));
+    on('GET', `/jobs/query/${JOB}`, reply(200, { id: JOB, object: 'Account', query: 'SELECT Id, Name FROM Account', state: 'InProgress' }));
     const pending = sf.exportQuery({ object: 'Account', fields: ['Name'] }, '/out/accounts.csv', { jobId: JOB });
     assert.equal(pending.done, false);
     assert.deepEqual(writes(), [], 'continuing a job creates none');
+    // A job of another query is not read under this one's check.
+    assert.throws(() => sf.exportQuery({ object: 'Contact', fields: ['Name'] }, '/out/contacts.csv', { jobId: JOB }), /not an export of this query/);
+    assert.throws(() => sf.exportQuery({ object: 'Account', fields: ['Phone'] }, '/out/accounts.csv', { jobId: JOB }), /not an export of this query/);
     assert.throws(() => sf.exportQuery({ object: 'Account', fields: ['Name'], orderBy: [{ field: 'Name' }] }, '/x.csv'), /orderBy/);
 });

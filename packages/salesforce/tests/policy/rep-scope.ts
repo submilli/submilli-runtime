@@ -11,6 +11,7 @@ import {
     SalesforceError,
     search,
     soql,
+    updateOpportunity,
     updateRecord,
 } from "@submilli/salesforce";
 
@@ -87,5 +88,8 @@ function main(): string {
     // No raw SOQL, and no owner change through a plain update, whatever the blueprint allows.
     deniedAt("salesforce.com/query.soql", "main", () => { soql("SELECT Amount FROM Opportunity"); });
     rejectedAs("owner_field", () => { updateRecord("Opportunity", "006000000000001", [{ field: "OwnerId", value: ME }]); });
+    // A stage rule cannot be bypassed through custom, nor an account rule by moving the record.
+    rejectedAs("typed_field", () => { updateOpportunity("006000000000001", { custom: [{ field: "StageName", value: "Closed Won" }] }); });
+    rejectedAs("account_field", () => { updateRecord("Contact", "003000000000001", [{ field: "AccountId", value: "001000000000001" }]); });
     return "the rep's rules hold";
 }

@@ -118,10 +118,14 @@ fn build_with_inputs(
         .map_err(|error| DriverError::ConfigurationInput(error.to_string()))?;
     let mut configuration = BTreeMap::new();
     for package in package_build_scope(manifest, only)? {
-        // The selected package takes the command's inputs; every other package, in a
-        // repository-wide build too, its installed overrides, as installs do.
+        // The selected package takes the command's inputs; every other package its
+        // installed overrides, as installs do. A repository-wide build reads only the
+        // saved identity metadata: it rebuilds every package from source, so it neither
+        // loads (and possibly refreshes) installed copies nor fails on a broken one.
         let overrides = if only == Some(&package.name) {
             inputs.values.clone()
+        } else if only.is_none() {
+            crate::package_store::saved_overrides(externals, package.name.as_str())
         } else {
             match externals.load(package.name.as_str()) {
                 Ok(artifact) => artifact.metadata.config.overrides,

@@ -131,15 +131,6 @@ export interface LeadConvert {
 }
 
 /**
- * The body of `POST process/approvals`.
- * @param request One request: `actionType` and its fields.
- * @returns The body.
- */
-export function approvalBody(request: Record<string, unknown>): Record<string, unknown> {
-    return { requests: [request] };
-}
-
-/**
  * The outcome of one approval request.
  * @param results Salesforce's answer, one result per request.
  * @returns The outcome.

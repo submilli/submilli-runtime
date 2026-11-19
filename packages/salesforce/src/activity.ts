@@ -109,7 +109,11 @@ export interface UploadedFile {
 
 /** Options of `downloadFile`. */
 export interface FileDownloadOptions {
-    /** Replace a file already at the path; default false. */
+    /**
+     * Replace a file already at the path; default false. The download writes to the
+     * path as it arrives, so a failed one (an error answer) leaves no file there,
+     * the replaced one included.
+     */
     overwrite?: boolean;
 }
 
@@ -187,11 +191,11 @@ const MAX_FEED_PAGE = 100;
 const DEFAULT_FEED_PAGE = 25;
 const MAX_FEED_CURSOR = 512;
 
-// The typed fields `logActivity` sets, by its type.
-export function activityFields(type: string): FieldWrite[] {
-    if (type === "call") return [{ field: "TaskSubtype", value: "Call" }];
-    if (type === "email") return [{ field: "TaskSubtype", value: "Email" }];
-    if (type === "task") return [{ field: "TaskSubtype", value: "Task" }];
+// The `TaskSubtype` `logActivity` sets, by its type.
+export function taskSubtype(type: string): string {
+    if (type === "call") return "Call";
+    if (type === "email") return "Email";
+    if (type === "task") return "Task";
     throw validationError("invalid_input", "type must be call, email or task, got " + JSON.stringify(type));
 }
 

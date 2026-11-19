@@ -175,7 +175,9 @@ Salesforce returns at most 2,000 detail rows per run; the result says when it wa
   Attio.
 - A missing record returns `null`. Batch writes report each record's errors.
 - Pages are `{ records, totalSize, done, nextCursor }`. The next page is read by calling the same
-  operation with the same arguments and `{ cursor }`, so it is checked as the first page was.
+  operation with the same arguments and `{ cursor }`. The cursor is not tied to its query: the
+  page is read under the check of the call it is passed to, so a program must pass it only back
+  to the call that returned it. An export's `jobId` is checked against the query given.
 
 ## Verification
 

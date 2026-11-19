@@ -125,7 +125,7 @@ export interface SearchObject {
 
 /** A full-text search across objects. */
 export interface SearchSpec {
-    /** Words to find, at least two characters; searched as given, not as SOSL syntax. */
+    /** Words to find, at least two characters. SOSL's reserved characters are searched as given; the words AND, OR and NOT act as operators. */
     text: string;
     /** The objects to search, at least one. */
     objects: SearchObject[];
@@ -211,7 +211,7 @@ export function buildAggregate(spec: AggregateSpec): PreparedAggregate {
     const groupExpressions: string[] = [];
     const groups: string[] = [];
     const measures: string[] = [];
-    const expressions: string[] = [];
+    const measureExpressions: string[] = [];
     for (const group of spec.groupBy ?? []) {
         const field = normalizePath(group.field, "groupBy field");
         keys.push(field.key);
@@ -221,7 +221,6 @@ export function buildAggregate(spec: AggregateSpec): PreparedAggregate {
         select.push(expression + " g" + groups.length.toString());
         groupExpressions.push(expression);
         groups.push(label);
-        expressions.push(expression);
     }
     for (const measure of spec.measures) {
         const fn = measureFunction(measure.fn);
@@ -238,22 +237,20 @@ export function buildAggregate(spec: AggregateSpec): PreparedAggregate {
         if (measures.includes(label)) throw validationError("invalid_input", "measures repeat " + label);
         select.push(fn + "(" + argument + ") m" + measures.length.toString());
         measures.push(label);
-        expressions.push(fn + "(" + argument + ")");
+        measureExpressions.push(fn + "(" + argument + ")");
     }
     const where = prepareConditions(spec.where ?? []);
     for (const condition of where) keys.push(condition.key);
     const order: string[] = [];
     for (const sort of spec.orderBy ?? []) {
         const label = sort.by.trim();
-        let index = groups.indexOf(label);
-        if (index < 0) {
-            const measure = measures.indexOf(label);
-            if (measure < 0) {
-                throw validationError("invalid_input", "orderBy " + JSON.stringify(sort.by) + " must be a group or measure label: " + groups.concat(measures).join(", "));
-            }
-            index = groups.length + measure;
+        const group = groups.indexOf(label);
+        const measure = measures.indexOf(label);
+        if (group < 0 && measure < 0) {
+            throw validationError("invalid_input", "orderBy " + JSON.stringify(sort.by) + " must be a group or measure label: " + groups.concat(measures).join(", "));
         }
-        order.push(expressions[index] + orderSuffix(sort.direction, undefined));
+        const expression = group >= 0 ? groupExpressions[group] : measureExpressions[measure];
+        order.push(expression + orderSuffix(sort.direction, undefined));
     }
     let soql = "SELECT " + select.join(", ") + " FROM " + object.name + whereClause(where);
     if (groupExpressions.length > 0) soql += " GROUP BY " + groupExpressions.join(", ");
@@ -265,8 +262,8 @@ export function buildAggregate(spec: AggregateSpec): PreparedAggregate {
 }
 
 /**
- * Build a `parameterizedSearch` body. The text is searched literally: SOSL's
- * reserved characters are escaped.
+ * Build a `parameterizedSearch` body. SOSL's reserved characters in the text are
+ * escaped; its words `AND`, `OR` and `NOT` still act as operators.
  * @param spec The search as given.
  * @returns The body and the check's objects and fields.
  */

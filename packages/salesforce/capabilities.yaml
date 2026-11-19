@@ -3,6 +3,8 @@ provides:
 - name: salesforce.com/accounts.find
   description: Find accounts, most recently changed first.
   fields:
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/accounts.get
@@ -10,6 +12,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/activities.createEvent
@@ -80,19 +84,27 @@ provides:
   fields:
     campaignId:
       type: string
+    fields:
+      type: string[]
 - name: salesforce.com/campaignMembers.get
   description: Get a campaign member; null when it does not exist.
   fields:
     campaignId:
       type: string
+    fields:
+      type: string[]
 - name: salesforce.com/campaigns.find
   description: Find campaigns, most recently changed first.
   fields:
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/campaigns.get
   description: Get a campaign; null when it does not exist.
   fields:
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/cases.create
@@ -109,6 +121,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/cases.get
@@ -116,6 +130,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/cases.update
@@ -145,11 +161,15 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
 - name: salesforce.com/contacts.get
   description: Get a contact; null when it does not exist.
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/contracts.find
@@ -157,6 +177,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/contracts.get
@@ -164,6 +186,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/dashboards.get
@@ -190,6 +214,8 @@ provides:
 - name: salesforce.com/events.find
   description: Find events, most recently changed first.
   fields:
+    fields:
+      type: string[]
     ownerId:
       type: string
     whatId:
@@ -199,6 +225,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/feed.post
@@ -269,11 +297,15 @@ provides:
 - name: salesforce.com/leads.find
   description: Find leads, most recently changed first.
   fields:
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/leads.get
   description: Get a lead; null when it does not exist.
   fields:
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/leads.update
@@ -321,6 +353,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/opportunities.get
@@ -328,6 +362,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/opportunities.update
@@ -346,11 +382,15 @@ provides:
 - name: salesforce.com/opportunityLineItems.find
   description: Find an opportunity's products.
   fields:
+    fields:
+      type: string[]
     opportunityId:
       type: string
 - name: salesforce.com/opportunityLineItems.get
   description: Get an opportunity's product; null when it does not exist.
   fields:
+    fields:
+      type: string[]
     opportunityId:
       type: string
 - name: salesforce.com/orders.find
@@ -358,6 +398,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/orders.get
@@ -365,6 +407,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/org.currentUser
@@ -375,16 +419,24 @@ provides:
   fields: {}
 - name: salesforce.com/pricebooks.find
   description: Find price books.
-  fields: {}
+  fields:
+    fields:
+      type: string[]
 - name: salesforce.com/pricebooks.get
   description: Get a price book; null when it does not exist.
-  fields: {}
+  fields:
+    fields:
+      type: string[]
 - name: salesforce.com/products.find
   description: Find products.
-  fields: {}
+  fields:
+    fields:
+      type: string[]
 - name: salesforce.com/products.get
   description: Get a product; null when it does not exist.
-  fields: {}
+  fields:
+    fields:
+      type: string[]
 - name: salesforce.com/query.aggregate
   description: Count, sum, average, or find the minimum or maximum of records' fields, optionally grouped, such as the pipeline's amount by stage or by close month.
   fields:
@@ -475,6 +527,8 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     object:
       type: string
     ownerId:
@@ -491,7 +545,7 @@ provides:
     relationship:
       type: string
 - name: salesforce.com/records.update
-  description: Update a record of any object. Only the fields given change; `null` clears a field. `OwnerId` is refused.
+  description: Update a record of any object. Only the fields given change; `null` clears a field. `OwnerId` and the fields its account comes from (`AccountId`; on tasks and events also `WhatId` and `WhoId`) are refused, so the check's facts stay the record's.
   fields:
     accountId:
       type: string
@@ -502,7 +556,7 @@ provides:
     ownerId:
       type: string
 - name: salesforce.com/records.updateMany
-  description: Update up to 200 records of one object in one request, all or none. `OwnerId` is refused.
+  description: Update up to 200 records of one object in one request, all or none. `OwnerId` and the fields an account comes from are refused, as in `updateRecord`. A record that does not exist adds "" to `ownerIds` and `accountIds`.
   fields:
     accountIds:
       type: string[]
@@ -520,8 +574,10 @@ provides:
     object:
       type: string
 - name: salesforce.com/records.upsert
-  description: Create a record, or update the one whose external id field has this value. The fields given replace an existing record's values; `OwnerId` is refused.
+  description: Create a record, or update the one whose external id field has this value. The fields given replace an existing record's values; `OwnerId` and the fields its account comes from are refused, as in `updateRecord`. The check has the existing record's owner and account, or "" when there is none yet.
   fields:
+    accountId:
+      type: string
     externalId:
       type: string
     externalIdField:
@@ -529,6 +585,8 @@ provides:
     fields:
       type: string[]
     object:
+      type: string
+    ownerId:
       type: string
 - name: salesforce.com/reports.describe
   description: A report's columns, groupings, aggregates and saved filters, to choose `runReport` filters.
@@ -546,6 +604,8 @@ provides:
 - name: salesforce.com/tasks.find
   description: Find tasks, most recently changed first.
   fields:
+    fields:
+      type: string[]
     ownerId:
       type: string
     whatId:
@@ -555,14 +615,20 @@ provides:
   fields:
     accountId:
       type: string
+    fields:
+      type: string[]
     ownerId:
       type: string
 - name: salesforce.com/users.find
   description: Find users of the org.
-  fields: {}
+  fields:
+    fields:
+      type: string[]
 - name: salesforce.com/users.get
   description: Get a user; null when it does not exist.
-  fields: {}
+  fields:
+    fields:
+      type: string[]
 requires:
 - capability: fs.read
 - capability: fs.remove
