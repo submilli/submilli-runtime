@@ -145,3 +145,10 @@ version = "0.1.0"
 description = "PostHog Cloud (US) client for bounded event queries with keyset pages, event and property schema, cohort state, and event capture."
 keywords = ["posthog", "analytics", "events", "hogql", "cohorts", "capture"]
 path = "packages/posthog"
+
+[[package]]
+name = "@submilli/salesforce"
+version = "0.1.0"
+description = "Salesforce client for records of any object, typed standard objects (accounts, contacts, leads, opportunities, cases and more), SOQL queries built from typed conditions, aggregates and search."
+keywords = ["salesforce", "crm", "soql", "records", "opportunities", "accounts", "cases", "leads", "api"]
+path = "packages/salesforce"

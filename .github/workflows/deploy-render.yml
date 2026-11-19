@@ -131,7 +131,14 @@ jobs:
       # Into `dist/packages/`, which the Dockerfile's `render` stage bakes into the
       # image, so the server starts with every package in this repository.
       - name: Compile the repository's packages
+        # @submilli/salesforce needs its org, a required build setting; the
+        # repository-wide build then uses it. `.invalid` never resolves, so the
+        # baked package reaches no org until the server reinstalls it with
+        # `submilli server packages install … --config orgUrl=…`.
         run: |
+          SUBMILLI_HOME="$RUNNER_TEMP/submilli-home" \
+            "target/$TARGET/release/submilli" build publish-local \
+            -p @submilli/salesforce --config orgUrl=https://unconfigured.invalid
           SUBMILLI_HOME="$RUNNER_TEMP/submilli-home" \
             "target/$TARGET/release/submilli" build publish-local
           cp -R "$RUNNER_TEMP/submilli-home/packages" dist/packages

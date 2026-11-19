@@ -1,0 +1,582 @@
+namespace: submilli
+provides:
+- name: salesforce.com/accounts.find
+  description: Find accounts, most recently changed first.
+  fields:
+    ownerId:
+      type: string
+- name: salesforce.com/accounts.get
+  description: Get an account; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/activities.createEvent
+  description: Create a calendar event, such as a meeting, on a record.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    object:
+      type: string
+- name: salesforce.com/activities.list
+  description: A record's activity history (completed tasks and past events, newest first), or its open activities (upcoming first). An account's include those of its contacts and opportunities.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/activities.log
+  description: Log a completed activity, such as a call or email, as a task on a record.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    object:
+      type: string
+    type:
+      type: string
+- name: salesforce.com/approvals.approve
+  description: Approve a pending approval.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    processName:
+      type: string
+- name: salesforce.com/approvals.listPending
+  description: List approvals waiting for a decision that the user can see, newest first.
+  fields:
+    actorId:
+      type: string
+- name: salesforce.com/approvals.reject
+  description: Reject a pending approval.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    processName:
+      type: string
+- name: salesforce.com/approvals.submit
+  description: Submit a record for approval.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+    processName:
+      type: string
+- name: salesforce.com/campaignMembers.find
+  description: Find campaign members.
+  fields:
+    campaignId:
+      type: string
+- name: salesforce.com/campaignMembers.get
+  description: Get a campaign member; null when it does not exist.
+  fields:
+    campaignId:
+      type: string
+- name: salesforce.com/campaigns.find
+  description: Find campaigns, most recently changed first.
+  fields:
+    ownerId:
+      type: string
+- name: salesforce.com/campaigns.get
+  description: Get a campaign; null when it does not exist.
+  fields:
+    ownerId:
+      type: string
+- name: salesforce.com/cases.create
+  description: Create a case.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    ownerId:
+      type: string
+- name: salesforce.com/cases.find
+  description: Find cases, most recently changed first.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/cases.get
+  description: Get a case; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/cases.update
+  description: Update a case. A field left out keeps its value; `null` clears it.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    ownerId:
+      type: string
+    previousStatus:
+      type: string
+    status:
+      type: string
+- name: salesforce.com/contacts.create
+  description: Create a contact.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    ownerId:
+      type: string
+- name: salesforce.com/contacts.find
+  description: Find contacts, most recently changed first.
+  fields:
+    accountId:
+      type: string
+- name: salesforce.com/contacts.get
+  description: Get a contact; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/contracts.find
+  description: Find contracts, most recently changed first.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/contracts.get
+  description: Get a contract; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/dashboards.get
+  description: A dashboard and the totals each component shows, from its last refresh.
+  fields:
+    dashboardId:
+      type: string
+- name: salesforce.com/dashboards.list
+  description: List the dashboards the user can see, by title.
+  fields: {}
+- name: salesforce.com/email.send
+  description: 'Send a plain-text email as the token''s user, logged on a record when `relatedTo` is given. The check has every recipient''s address and domain, and `domain`: the one domain all recipients share, or "" when they are at several.'
+  fields:
+    accountId:
+      type: string
+    domain:
+      type: string
+    domains:
+      type: string[]
+    object:
+      type: string
+    to:
+      type: string[]
+- name: salesforce.com/events.find
+  description: Find events, most recently changed first.
+  fields:
+    ownerId:
+      type: string
+    whatId:
+      type: string
+- name: salesforce.com/events.get
+  description: Get an event; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/feed.post
+  description: Post to a record's Chatter feed, optionally mentioning users.
+  fields:
+    accountId:
+      type: string
+    mentions:
+      type: string[]
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/feed.read
+  description: Read a record's Chatter feed, newest first.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/files.download
+  description: Download a file's latest version to the VFS.
+  fields:
+    path:
+      type: string
+- name: salesforce.com/files.upload
+  description: Upload a file from the VFS and attach it to a record.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+    path:
+      type: string
+- name: salesforce.com/flows.run
+  description: Run an autolaunched flow by its API name, with its input variables.
+  fields:
+    flow:
+      type: string
+    inputs:
+      type: string[]
+- name: salesforce.com/leads.convert
+  description: Convert a lead into an account, a contact and, by default, an opportunity, or merge it into an existing account and contact.
+  fields:
+    accountId:
+      type: string
+    contactId:
+      type: string
+    createOpportunity:
+      type: boolean
+    ownerId:
+      type: string
+    toOwnerId:
+      type: string
+- name: salesforce.com/leads.create
+  description: Create a lead.
+  fields:
+    fields:
+      type: string[]
+    ownerId:
+      type: string
+    status:
+      type: string
+- name: salesforce.com/leads.find
+  description: Find leads, most recently changed first.
+  fields:
+    ownerId:
+      type: string
+- name: salesforce.com/leads.get
+  description: Get a lead; null when it does not exist.
+  fields:
+    ownerId:
+      type: string
+- name: salesforce.com/leads.update
+  description: Update a lead. A field left out keeps its value; `null` clears it.
+  fields:
+    fields:
+      type: string[]
+    ownerId:
+      type: string
+    previousStatus:
+      type: string
+    status:
+      type: string
+- name: salesforce.com/listViews.list
+  description: List an object's list views, such as `My Opportunities`.
+  fields:
+    object:
+      type: string
+- name: salesforce.com/listViews.run
+  description: Read a list view's records, with its columns, filters and sort.
+  fields:
+    listViewId:
+      type: string
+    object:
+      type: string
+- name: salesforce.com/notes.create
+  description: Add a note to a record.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/objects.describe
+  description: An object's fields (with picklist values and lookups), relationships and record types.
+  fields:
+    object:
+      type: string
+- name: salesforce.com/objects.list
+  description: List the org's objects the user can see, standard and custom.
+  fields: {}
+- name: salesforce.com/opportunities.find
+  description: Find opportunities, most recently changed first.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/opportunities.get
+  description: Get an opportunity; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/opportunities.update
+  description: Update an opportunity, such as its stage, close date or amount. A field left out keeps its value; `null` clears it.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    ownerId:
+      type: string
+    previousStage:
+      type: string
+    stage:
+      type: string
+- name: salesforce.com/opportunityLineItems.find
+  description: Find an opportunity's products.
+  fields:
+    opportunityId:
+      type: string
+- name: salesforce.com/opportunityLineItems.get
+  description: Get an opportunity's product; null when it does not exist.
+  fields:
+    opportunityId:
+      type: string
+- name: salesforce.com/orders.find
+  description: Find orders, most recently changed first.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/orders.get
+  description: Get an order; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/org.currentUser
+  description: The user the token acts as.
+  fields: {}
+- name: salesforce.com/org.limits
+  description: The org's API limits and what is left of them, such as `DailyApiRequests`.
+  fields: {}
+- name: salesforce.com/pricebooks.find
+  description: Find price books.
+  fields: {}
+- name: salesforce.com/pricebooks.get
+  description: Get a price book; null when it does not exist.
+  fields: {}
+- name: salesforce.com/products.find
+  description: Find products.
+  fields: {}
+- name: salesforce.com/products.get
+  description: Get a product; null when it does not exist.
+  fields: {}
+- name: salesforce.com/query.aggregate
+  description: Count, sum, average, or find the minimum or maximum of records' fields, optionally grouped, such as the pipeline's amount by stage or by close month.
+  fields:
+    fields:
+      type: string[]
+    object:
+      type: string
+- name: salesforce.com/query.export
+  description: 'Export every record a query matches to a CSV file through the Bulk API, for more records than pages can carry. Salesforce runs the job in the background: while `done` is false, call again with the same query and path and `{ jobId }`.'
+  fields:
+    fields:
+      type: string[]
+    object:
+      type: string
+    path:
+      type: string
+- name: salesforce.com/query.run
+  description: 'Query one object''s records. The package writes the SOQL: names are checked and every value is encoded, so `where` values never need escaping.'
+  fields:
+    fields:
+      type: string[]
+    object:
+      type: string
+- name: salesforce.com/query.search
+  description: Search text across objects, such as a name, email or phone number in accounts, contacts and leads.
+  fields:
+    fields:
+      type: string[]
+    objects:
+      type: string[]
+- name: salesforce.com/query.soql
+  description: 'Run a SOQL query as written. Meant for administrators: its capability has no fields, so a rule cannot limit what it reads.'
+  fields: {}
+- name: salesforce.com/query.sosl
+  description: 'Run a SOSL search as written, such as `FIND {Acme} IN NAME FIELDS RETURNING Account(Id, Name)`. Meant for administrators: its capability has no fields.'
+  fields: {}
+- name: salesforce.com/records.changeOwner
+  description: Give a record to another user or queue. The only operation that changes `OwnerId`, so a rule on owners governs every reassignment.
+  fields:
+    accountId:
+      type: string
+    fromOwnerId:
+      type: string
+    object:
+      type: string
+    toOwnerId:
+      type: string
+- name: salesforce.com/records.create
+  description: Create a record of any object.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/records.createMany
+  description: Create up to 200 records of one object in one request, all or none.
+  fields:
+    accountIds:
+      type: string[]
+    count:
+      type: number
+    fields:
+      type: string[]
+    object:
+      type: string
+    ownerIds:
+      type: string[]
+- name: salesforce.com/records.delete
+  description: Delete a record of any object (Salesforce moves it to the recycle bin).
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/records.deleted
+  description: List an object's records deleted in a window of at most 30 days, within the last 15 days.
+  fields:
+    object:
+      type: string
+- name: salesforce.com/records.get
+  description: Get one record of any object; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/records.related
+  description: Read a record's related records through a relationship, such as an account's `Contacts` or `Opportunities`, or a lookup such as a contact's `Account`.
+  fields:
+    accountId:
+      type: string
+    object:
+      type: string
+    ownerId:
+      type: string
+    relationship:
+      type: string
+- name: salesforce.com/records.update
+  description: Update a record of any object. Only the fields given change; `null` clears a field. `OwnerId` is refused.
+  fields:
+    accountId:
+      type: string
+    fields:
+      type: string[]
+    object:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/records.updateMany
+  description: Update up to 200 records of one object in one request, all or none. `OwnerId` is refused.
+  fields:
+    accountIds:
+      type: string[]
+    count:
+      type: number
+    fields:
+      type: string[]
+    object:
+      type: string
+    ownerIds:
+      type: string[]
+- name: salesforce.com/records.updated
+  description: List the ids of an object's records created or updated in a window of at most 30 days, within the last 30 days.
+  fields:
+    object:
+      type: string
+- name: salesforce.com/records.upsert
+  description: Create a record, or update the one whose external id field has this value. The fields given replace an existing record's values; `OwnerId` is refused.
+  fields:
+    externalId:
+      type: string
+    externalIdField:
+      type: string
+    fields:
+      type: string[]
+    object:
+      type: string
+- name: salesforce.com/reports.describe
+  description: A report's columns, groupings, aggregates and saved filters, to choose `runReport` filters.
+  fields:
+    reportId:
+      type: string
+- name: salesforce.com/reports.list
+  description: List the reports the user can see, by name.
+  fields: {}
+- name: salesforce.com/reports.run
+  description: 'Run a report: its detail rows, flattened with their group values, and its subtotals and grand total.'
+  fields:
+    reportId:
+      type: string
+- name: salesforce.com/tasks.find
+  description: Find tasks, most recently changed first.
+  fields:
+    ownerId:
+      type: string
+    whatId:
+      type: string
+- name: salesforce.com/tasks.get
+  description: Get a task; null when it does not exist.
+  fields:
+    accountId:
+      type: string
+    ownerId:
+      type: string
+- name: salesforce.com/users.find
+  description: Find users of the org.
+  fields: {}
+- name: salesforce.com/users.get
+  description: Get a user; null when it does not exist.
+  fields: {}
+requires:
+- capability: fs.read
+- capability: fs.remove
+- capability: fs.stat
+- capability: fs.write
+- capability: http.delete
+  filter: host == "example.my.salesforce.com"
+- capability: http.download
+  filter: host == "example.my.salesforce.com"
+- capability: http.get
+  filter: host == "example.my.salesforce.com"
+- capability: http.patch
+  filter: host == "example.my.salesforce.com"
+- capability: http.post
+  filter: host == "example.my.salesforce.com"
+- capability: secrets.get
+  filter: name == "SALESFORCE_ACCESS_TOKEN"
