@@ -12,7 +12,7 @@ use crate::runtime::{
     limits::{HostBytes, TenantLimits},
 };
 
-const MAX_ENTRIES: usize = 16_384;
+pub(super) const MAX_ENTRIES: usize = 16_384;
 const RESERVED_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) struct Cache {

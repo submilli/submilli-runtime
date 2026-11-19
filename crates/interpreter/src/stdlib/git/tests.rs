@@ -115,6 +115,123 @@ async fn local_repository_round_trip() {
 }
 
 #[tokio::test]
+async fn list_and_file_history_use_the_commit_not_the_worktree() {
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import { mkdir, remove, writeText } from "submilli:fs";
+        function paths(entries: { path: string; kind: string }[]): string {
+            return entries.map((entry) => entry.kind + ":" + entry.path).join(",");
+        }
+        function main(): void {
+            const repo = Repository.init("/repo");
+            mkdir("/repo/notes");
+            writeText("/repo/notes/a.md", "one\n");
+            writeText("/repo/notes/b.md", "keep\n");
+            writeText("/repo/other.txt", "other\n");
+            repo.add(["."]);
+            const first = repo.commit("first");
+            writeText("/repo/notes/a.md", "two\n");
+            repo.add(["notes/a.md"]);
+            const second = repo.commit("second");
+            writeText("/repo/other.txt", "changed\n");
+            repo.add(["other.txt"]);
+            repo.commit("third");
+            remove("/repo/notes/a.md");
+            repo.add(["notes/a.md"]);
+            repo.commit("delete a");
+            writeText("/repo/notes/staged.md", "staged\n");
+            repo.add(["notes/staged.md"]);
+            writeText("/repo/notes/dirty.md", "dirty\n");
+
+            assert(paths(repo.ls(first, "notes")) === "file:notes/a.md,file:notes/b.md");
+            assert(paths(repo.ls(first)) === "directory:notes,file:other.txt");
+            assert(new TextDecoder().decode(repo.show(first, "notes/a.md")) === "one\n");
+            assert(paths(repo.ls("HEAD", "notes")) === "file:notes/b.md", "deleted, staged, and dirty files stay out");
+            const atHead = repo.log({ path: "notes/a.md", limit: 1 }).commits[0].message;
+            assert(atHead === "delete a");
+            assert(repo.log({ path: "notes/a.md", ref: second, limit: 1 }).commits[0].id === second);
+            assert(repo.log({ path: "notes/a.md", ref: first, limit: 1 }).commits[0].id === first);
+            const filtered = repo.log({ path: "notes/a.md" }).commits.map((commit) => commit.message).join(",");
+            assert(filtered === "delete a,second,first");
+            assert(repo.log().commits[0].message === "delete a");
+            assert(repo.log({ limit: 1, offset: 1 }).commits[0].message === "third");
+        }
+        "#,
+        test_data(Vfs::tempdir().unwrap()),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn path_filtered_log_skips_a_merge_that_did_not_change_the_file() {
+    let vfs = Vfs::tempdir().unwrap();
+    let repo = vfs.root().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    native(&repo, &["init", "-b", "main"]);
+    native(&repo, &["config", "user.name", "Agent"]);
+    native(&repo, &["config", "user.email", "agent@example.com"]);
+    std::fs::create_dir(repo.join("notes")).unwrap();
+    std::fs::write(repo.join("notes/a.md"), "one\n").unwrap();
+    std::fs::write(repo.join("notes/b.md"), "keep\n").unwrap();
+    native(&repo, &["add", "."]);
+    native(&repo, &["commit", "-m", "first"]);
+    std::fs::write(repo.join("notes/a.md"), "two\n").unwrap();
+    native(&repo, &["commit", "-am", "second"]);
+    native(&repo, &["checkout", "-b", "side", "HEAD~1"]);
+    std::fs::write(repo.join("notes/b.md"), "side\n").unwrap();
+    native(&repo, &["commit", "-am", "side"]);
+    native(&repo, &["checkout", "main"]);
+    native(&repo, &["merge", "--no-ff", "side", "-m", "merge"]);
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function messages(path: string): string {
+            return Repository.open("/repo").log({ path, limit: 10 }).commits.map((commit) => commit.message).join(",");
+        }
+        function main(): void {
+            assert(messages("notes/a.md") === "second\n,first\n");
+            assert(messages("notes/b.md") === "side\n,first\n");
+            assert(Repository.open("/repo").log({ path: "notes/a.md", limit: 1 }).commits[0].message === "second\n");
+        }
+        "#,
+        test_data(vfs),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn file_history_keeps_a_shallow_boundary_and_an_explicit_ref_without_head() {
+    let vfs = Vfs::tempdir().unwrap();
+    let repo = vfs.root().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    native(&repo, &["init", "-b", "main"]);
+    native(&repo, &["config", "user.name", "Agent"]);
+    native(&repo, &["config", "user.email", "agent@example.com"]);
+    std::fs::write(repo.join("README"), "notes\n").unwrap();
+    native(&repo, &["add", "."]);
+    native(&repo, &["commit", "-m", "notes"]);
+    let id = String::from_utf8(native(&repo, &["rev-parse", "HEAD"])).unwrap();
+    std::fs::write(repo.join(".git/shallow"), &id).unwrap();
+    native(&repo, &["checkout", "--orphan", "temp"]);
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            const repo = Repository.open("/repo");
+            assert(repo.log().commits.length === 0, "the orphan branch has no commits");
+            const kept = repo.log({ path: "README", ref: "main", limit: 1 });
+            assert(kept.commits.length === 1);
+            assert(kept.commits[0].message === "notes\n");
+            assert(repo.ls("main").length === 1);
+        }
+        "#,
+        test_data(vfs),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn undefined_method_completion_and_optional_options() {
     run_source(
         r#"

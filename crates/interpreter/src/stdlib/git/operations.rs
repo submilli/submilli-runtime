@@ -307,15 +307,35 @@ pub(super) fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
     if limit == 0 || limit > 1000 {
         bail!("git.log: limit must be 1..1000");
     }
-    let mut commits = Vec::new();
-    if snapshot.repo.head()?.is_unborn() {
-        return Ok(json!({"commits":[]}));
+    let path = optional_text(opts, "path")?;
+    let revision = optional_text(opts, "ref")?;
+    if let Some(path) = path.as_deref() {
+        validate_path(path)?;
     }
-    let head = super::history::resolve_commit(snapshot, "HEAD")?.id;
-    let cache = snapshot.history_cache.as_ref().ok_or_else(|| {
-        crate::runtime::host::fatal_host_error("git: history cache was not installed")
-    })?;
-    let ids = cache.page(snapshot, head, offset, limit)?;
+    let mut commits = Vec::new();
+    // An explicit ref must resolve even when HEAD is an unborn branch.
+    let head = if snapshot.repo.head()?.is_unborn() {
+        None
+    } else {
+        Some(super::history::resolve_commit(snapshot, "HEAD")?.id)
+    };
+    let start = if let Some(revision) = revision.as_deref() {
+        super::history::resolve_commit(snapshot, revision)?.id
+    } else if let Some(head) = head {
+        head
+    } else {
+        return Ok(json!({"commits":[]}));
+    };
+    let ids = if let Some(path) = path.as_deref() {
+        file_history(snapshot, start, path, offset, limit)?
+    } else if head == Some(start) {
+        let cache = snapshot.history_cache.as_ref().ok_or_else(|| {
+            crate::runtime::host::fatal_host_error("git: history cache was not installed")
+        })?;
+        cache.page(snapshot, start, offset, limit)?
+    } else {
+        super::history::commit_page(snapshot, start, offset, limit)?
+    };
     let more = ids.len() > limit as usize;
     commits
         .try_reserve_exact(ids.len().min(limit as usize))
@@ -347,9 +367,144 @@ fn page_number(options: &Value, name: &str, default: u64) -> Result<u64> {
     }
 }
 
+fn optional_text(options: &Value, name: &str) -> Result<Option<String>> {
+    match options.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => bail!("git.log: {name} must be a string"),
+    }
+}
+
+/// History of one repository-relative file, bounded like an unfiltered page.
+fn file_history(
+    snapshot: &Snapshot,
+    start: gix::ObjectId,
+    path: &str,
+    offset: u64,
+    limit: u64,
+) -> Result<Vec<gix::ObjectId>> {
+    let mut entries =
+        std::collections::HashMap::<gix::ObjectId, Option<(u32, gix::ObjectId)>>::new();
+    super::history::file_history_page(snapshot, start, offset, limit, |snapshot, tree, budget| {
+        if let Some(cached) = entries.get(&tree) {
+            return Ok((*cached, 0));
+        }
+        if entries.len() == super::log_cache::MAX_ENTRIES {
+            bail!("git: history resource limit exceeded");
+        }
+        let (entry, bytes) = path_entry(snapshot, tree, path, budget)?;
+        entries
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        entries.insert(tree, entry);
+        Ok((entry, bytes))
+    })
+}
+
+/// The tree entry at `path`, and the decoded-tree bytes charged for the lookup.
+/// A missing path is `None`, not an error: history compares absence too.
+fn path_entry(
+    snapshot: &Snapshot,
+    mut id: gix::ObjectId,
+    path: &str,
+    budget: u64,
+) -> Result<(Option<(u32, gix::ObjectId)>, u64)> {
+    let mut bytes = 0u64;
+    let mut depth = 0usize;
+    let mut components = path.split('/').peekable();
+    while let Some(component) = components.next() {
+        snapshot.check_cancelled()?;
+        if depth > super::storage::MAX_NESTING {
+            bail!("git: tree nesting limit exceeded");
+        }
+        let tree = super::object::tree(snapshot, id, budget.saturating_sub(bytes) / 4)?;
+        bytes = bytes.saturating_add((tree.data.len() as u64).saturating_mul(4));
+        if bytes > budget {
+            bail!("git: tree memory limit exceeded");
+        }
+        let Some((mode, child)) = find_tree_child(snapshot, &tree, component)? else {
+            return Ok((None, bytes));
+        };
+        if components.peek().is_some() {
+            if !mode.is_tree() {
+                return Ok((None, bytes));
+            }
+            id = child;
+            depth += 1;
+            continue;
+        }
+        return Ok((Some((mode.value() as u32, child)), bytes));
+    }
+    Ok((None, bytes))
+}
+
 pub fn resolve_tree(snapshot: &Snapshot, revision: &str) -> Result<Entries> {
     let commit = super::history::resolve_commit(snapshot, revision)?;
     tree_entries(snapshot, commit.tree_id()?.detach())
+}
+
+pub(super) fn ls(snapshot: &Snapshot, revision: &str, path: &str) -> Result<Value> {
+    if !path.is_empty() {
+        validate_path(path)?;
+    }
+    let mut id = super::history::resolve_commit(snapshot, revision)?
+        .tree_id()?
+        .detach();
+    let mut bytes = 0u64;
+    let mut depth = 0usize;
+    if !path.is_empty() {
+        for component in path.split('/') {
+            snapshot.check_cancelled()?;
+            if depth > super::storage::MAX_NESTING {
+                bail!("git: tree nesting limit exceeded");
+            }
+            let tree =
+                super::object::tree(snapshot, id, snapshot.max_bytes.saturating_sub(bytes) / 4)?;
+            bytes = bytes.saturating_add((tree.data.len() as u64).saturating_mul(4));
+            if bytes > snapshot.max_bytes {
+                bail!("git.ls: tree memory limit exceeded");
+            }
+            let (mode, child) = find_tree_child(snapshot, &tree, component)?
+                .ok_or_else(|| wasmtime::Error::msg("git.ls: path not found"))?;
+            if !mode.is_tree() {
+                bail!("git.ls: path is not a directory");
+            }
+            id = child;
+            depth += 1;
+        }
+        // Children are one level deeper than the directory. `show` refuses that level.
+        if depth > super::storage::MAX_NESTING {
+            bail!("git: tree nesting limit exceeded");
+        }
+    }
+    let tree = super::object::tree(snapshot, id, snapshot.max_bytes.saturating_sub(bytes) / 4)?;
+    bytes = bytes.saturating_add((tree.data.len() as u64).saturating_mul(4));
+    if bytes > snapshot.max_bytes {
+        bail!("git.ls: tree memory limit exceeded");
+    }
+    let mut entries = Vec::new();
+    let max_bytes = snapshot.max_bytes;
+    for_each_tree_child(snapshot, &tree, |name, mode, _id| {
+        let kind = if mode.is_tree() {
+            "directory"
+        } else if [0o100644, 0o100755, 0o120000].contains(&(mode.value() as u32)) {
+            "file"
+        } else {
+            bail!("git: submodules and special tree modes are unsupported");
+        };
+        let child = if path.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{path}/{name}")
+        };
+        bytes = bytes.saturating_add(child.len() as u64 + 128);
+        if bytes > max_bytes || entries.len() >= MAX_PATHS {
+            return Err(memory_limit("tree resource"));
+        }
+        entries.push(json!({"path": child, "kind": kind}));
+        Ok(())
+    })?;
+    Ok(json!(entries))
 }
 
 pub fn show(snapshot: &Snapshot, revision: &str, path: &str) -> Result<Vec<u8>> {
@@ -412,8 +567,24 @@ fn find_tree_child(
     tree: &gix::Tree<'_>,
     component: &str,
 ) -> Result<Option<(gix::objs::tree::EntryMode, gix::ObjectId)>> {
-    let mut folded = std::collections::HashSet::new();
     let mut child = None;
+    for_each_tree_child(snapshot, tree, |name, mode, id| {
+        if name == component {
+            child = Some((mode, id));
+        }
+        Ok(())
+    })?;
+    Ok(child)
+}
+
+/// Every immediate child. Refuses a name `validate_path` rejects, and two names
+/// that differ only by case.
+fn for_each_tree_child(
+    snapshot: &Snapshot,
+    tree: &gix::Tree<'_>,
+    mut visit: impl FnMut(&str, gix::objs::tree::EntryMode, gix::ObjectId) -> Result<()>,
+) -> Result<()> {
+    let mut folded = std::collections::HashSet::new();
     for entry in tree.iter() {
         snapshot.check_cancelled()?;
         let entry = entry?;
@@ -429,7 +600,7 @@ fn find_tree_child(
             .try_reserve(
                 name.len()
                     .checked_mul(3)
-                    .ok_or_else(|| wasmtime::Error::msg("git.show: filename size overflow"))?,
+                    .ok_or_else(|| wasmtime::Error::msg("git: filename size overflow"))?,
             )
             .map_err(crate::runtime::host::fatal_host_error)?;
         lowercase.extend(name.chars().flat_map(char::to_lowercase));
@@ -439,11 +610,9 @@ fn find_tree_child(
         if !folded.insert(lowercase) {
             bail!("git: case-colliding tree paths are unsupported");
         }
-        if name == component {
-            child = Some((entry.mode(), entry.object_id()));
-        }
+        visit(name, entry.mode(), entry.object_id())?;
     }
-    Ok(child)
+    Ok(())
 }
 
 pub(super) fn append_patch(

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a2901824f4f96ed42bb7f7150f18acf77ca42bbc4d294dfa5144a6667930c325"
+  contentHash: "b3c7cf0c7549a03049e24db77dfaca54dc461166e999fac569ac1eac447abc01"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -102,7 +102,7 @@ Blueprint's `git` block sets the identity that authors every commit and the
 | `Repository.init` | `git.init` | Creates the directory and refuses an existing repository |
 | `Repository.clone` | `git.clone` | Needs no `git.init`, `git.fetch` or `fs.*` rule |
 | `Repository.open`, constructor | None | Opens `path`'s `.git` directory |
-| `status`, `log`, `diff`, `show`, `branches`, `remotes` | None | Read only |
+| `status`, `log`, `diff`, `show`, `ls`, `branches`, `remotes` | None | Read only. `ls` lists one directory at a commit; `log` can start at a ref and keep only commits that changed one file |
 | `add` | None | At most 10,000 paths per call, `.` selects the working tree, and deletions are staged |
 | `commit` | `git.commit` (`branch` is the current branch) | Refuses an empty message and an empty commit |
 | `createBranch` | None | Never overwrites an existing branch |
@@ -549,7 +549,8 @@ A repository under the VFS root.
 | `createBranch(name: string, start?: string): void` |  | Create a branch without overwriting an existing branch. |
 | `diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string }` |  | Compare working (default), staged, or refs (requires from and to). |
 | `fetch(remote?: string, branch?: string): { branches: string[] }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch remote-tracking branches. |
-| `log(options?: { limit?: number; offset?: number }): { commits: { authorEmail: string; authorName: string; id: string; message: string }[]; nextOffset?: number }` |  | Read history, default 50 commits; limit 1..1000, nonnegative integer offset. |
+| `log(options?: { limit?: number; offset?: number; path?: string; ref?: string }): { commits: { authorEmail: string; authorName: string; id: string; message: string }[]; nextOffset?: number }` |  | Read history, default 50 commits from HEAD; limit 1..1000, nonnegative integer offset; path keeps commits that changed that file and ref starts at that commit. |
+| `ls(ref: string, path?: string): { kind: string; path: string }[]` |  | List files and directories in a repository-relative directory at a commit. |
 | `pull(remote?: string, branch?: string): { current: string; previous: string }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch and fast-forward the current branch under git.fetch. |
 | `remotes(): { name: string; url: string }[]` |  | List named remotes without credentials. |
 | `setRemoteUrl(name: string, url: string): void` |  | Update an existing remote's HTTPS URL. |
