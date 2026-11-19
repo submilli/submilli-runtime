@@ -2448,7 +2448,7 @@ fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
 pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledName> {
     match receiver_ty.lowered() {
         Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
-        Type::Array(_) => Some(crate::mangle::prelude("Array")),
+        Type::Array(_) | Type::Tuple(_) => Some(crate::mangle::prelude("Array")),
         _ if receiver_ty.array_like_union_element().is_some() => {
             Some(crate::mangle::prelude("Array"))
         }

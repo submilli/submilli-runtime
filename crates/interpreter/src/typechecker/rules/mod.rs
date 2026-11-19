@@ -2,6 +2,7 @@
 //!
 //! Read-only: produces additional diagnostics, never modifies the tree.
 
+pub(in crate::typechecker) mod array_writes;
 pub(crate) mod body_walk;
 mod callable_arity;
 mod capability_consistency;
@@ -241,6 +242,7 @@ fn run_submilli_rules(
     exhaustive_switch::run(ta, diags)?;
     super_call::run(ta, diags)?;
     callable_arity::run(ta, diags)?;
+    array_writes::run(ta, diags)?;
     match source {
         Source::Script => main_entry::run_script(ta, diags),
         Source::Package => main_entry::run_package(ta, diags),

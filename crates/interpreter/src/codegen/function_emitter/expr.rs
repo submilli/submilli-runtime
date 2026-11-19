@@ -4400,15 +4400,14 @@ fn emit_binary(
                 emit_value_operator_host(emitter, ctx, name, &[lhs, rhs], result_ty)?;
             }
         }
-        // A template of constants has a string literal type: concatenate it as
-        // a `string`.
+        // Template literal types use the same string representation as `string`.
         BinOp::Add => match &result_ty.widen_literal() {
             Type::Number => {
                 emit_primitive_operand(emitter, ctx, lhs)?;
                 emit_primitive_operand(emitter, ctx, rhs)?;
                 emitter.instruction(Instruction::F64Add);
             }
-            Type::String => {
+            ty if ty.is_string_shaped() => {
                 emit_primitive_operand(emitter, ctx, lhs)?;
                 emit_primitive_operand(emitter, ctx, rhs)?;
                 let idx = ctx

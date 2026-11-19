@@ -5,6 +5,7 @@ use crate::codegen::bounds::{
 };
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::init_guard;
+use crate::codegen::symbol_table::TopLevelFn;
 use crate::runtime::prelude::index::IndexAccess;
 use crate::{
     EnumVariantPayload, ExprId, Ident, MangledName, StmtId, Type, TypedStmtKind, TypedSwitchCase,
@@ -489,11 +490,22 @@ fn emit_assign_field(
     let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty)?)?;
     emitter.instruction(Instruction::LocalSet(recv));
     if let Some(setter) = host_property_setter(ctx, &receiver_ty, name) {
+        let [_, parameter] = setter.params.as_slice() else {
+            return Err(crate::codegen::internal_failure(
+                "a host property setter takes a receiver and one value",
+            ));
+        };
+        let value_ty = &ctx
+            .ta
+            .try_expr(value)
+            .map_err(crate::codegen::arena_failure)?
+            .ty;
         // The setter's Direct wrapper takes a non-null receiver, as a method's does.
         emitter.instruction(Instruction::LocalGet(recv));
         emitter.instruction(Instruction::RefAsNonNull);
         emit_expr(emitter, ctx, value)?;
-        emitter.instruction(Instruction::Call(setter));
+        cast::emit_coerce_to_slot(emitter, ctx, value_ty, parameter)?;
+        emitter.instruction(Instruction::Call(setter.wasm_idx));
         emitter.end_single_evaluations(mark)?;
         return Ok(());
     }
@@ -510,10 +522,14 @@ fn emit_assign_field(
 
 /// The host setter a prelude interface declares for a writable property it
 /// implements (`RegExp#lastIndex`), which takes the receiver and the value.
-fn host_property_setter(ctx: &CodegenCtx, receiver_ty: &Type, name: &Ident) -> Option<u32> {
+fn host_property_setter<'a>(
+    ctx: &CodegenCtx<'a>,
+    receiver_ty: &Type,
+    name: &Ident,
+) -> Option<&'a TopLevelFn> {
     let iface = crate::codegen::host_property_iface(receiver_ty)?;
     let key = crate::mangle::extend(&iface, &crate::mangle::property_setter(&name.name));
-    ctx.symbols.func_idx(&key)
+    ctx.symbols.top_level_fn(&key)
 }
 
 #[allow(clippy::too_many_arguments)]
