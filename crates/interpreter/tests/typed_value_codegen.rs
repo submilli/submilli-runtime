@@ -2,8 +2,8 @@
 //! front end rejects several of them, so marker calls let it build the surrounding
 //! tree; each test then replaces only that marker with the reported TypedAst.
 use submilli_engine::{
-    FileId, Ident, RuntimeConfig, Type, TypedAst, TypedExpr, TypedExprKind, TypedObjectMember,
-    TypedStmtKind, UnOp,
+    FileId, Ident, RuntimeConfig, Type, TypedArrayElement, TypedAst, TypedExpr, TypedExprKind,
+    TypedObjectMember, TypedStmtKind, UnOp,
 };
 
 fn run(source: &str, prepare: impl FnOnce(&mut TypedAst) + Send + 'static) -> String {
@@ -46,6 +46,114 @@ fn run(source: &str, prepare: impl FnOnce(&mut TypedAst) + Send + 'static) -> St
         .unwrap()
         .join()
         .unwrap()
+}
+
+#[test]
+fn constructs_through_a_union_of_constructors() {
+    // Replace the source constructs with markers so the engine front end can
+    // build the surrounding tree. Use an empty array for the spread whose
+    // empty tuple type the engine parser cannot spell. In makeBytes the
+    // dynamic receiver stays unknown, as with TypeScript's erased cast.
+    let source = include_str!("typed_value_sources/construct-union.ts")
+        .replace("new c()", "constructMarker(c)")
+        .replace("new c(\"x\")", "patternMarker(c, \"x\")")
+        .replace("new c(...empty())", "spreadMarker(c, empty())")
+        .replace("empty(): []", "empty(): number[]")
+        .replace(
+            "new (c as typeof Uint8Array)(size())",
+            "bytesMarker(c, size())",
+        );
+    let source = format!(
+        "function constructMarker(c: typeof TextEncoder | typeof TextDecoder): unknown {{ return c; }}
+         function patternMarker(c: typeof RegExp | typeof TextEncoder, pattern: string): unknown {{ return c; }}
+         function spreadMarker(c: typeof TextEncoder | typeof TextDecoder, empty: number[]): unknown {{ return c; }}
+         function bytesMarker(c: unknown, size: number): Uint8Array {{ return new Uint8Array(size); }}
+         {source}"
+    );
+    let (sources, _) = submilli_engine::Sources::single("construct-union.ts", &source).unwrap();
+    assert_eq!(
+        run(&source, move |ast| {
+            let mut count = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                let TypedExprKind::Call { mangled, args, .. } = &expr.kind else {
+                    continue;
+                };
+                let (constructor_args, authored) = match mangled.as_str() {
+                    "main#constructMarker" => (vec![], vec![]),
+                    "main#patternMarker" | "main#bytesMarker" => {
+                        (vec![args[1]], vec![TypedArrayElement::Value(args[1])])
+                    }
+                    "main#spreadMarker" => (vec![], vec![TypedArrayElement::Spread(args[1])]),
+                    _ => continue,
+                };
+                let span = expr.span;
+                expr.kind = TypedExprKind::MethodCall {
+                    receiver: args[0],
+                    iface: submilli_engine::mangle::prelude("Object"),
+                    member: submilli_engine::Member::ConstructSignature(span),
+                    args: constructor_args,
+                    type_predicate: None,
+                };
+                ast.record_authored_arguments(span, authored);
+                count += 1;
+            }
+            assert_eq!(count, 4);
+            assert_dynamic_constructor_edges(ast, &sources);
+        }),
+        "3"
+    );
+}
+
+#[test]
+fn dynamically_constructs_a_namespaced_constructor() {
+    let source = r#"
+        function main(): number {
+            const c = Temporal.Duration;
+            if (String(c) !== "function Duration() { [native code] }") return -1;
+            return (new c({ hours: 3 })).hours;
+        }
+    "#;
+    assert_eq!(run(source, |_| {}), "3");
+    assert_eq!(
+        run(source, |ast| {
+            let mut count = 0;
+            for id in ast.expr_ids().unwrap() {
+                if let TypedExprKind::MethodCall {
+                    iface,
+                    member: submilli_engine::Member::ConstructSignature(_),
+                    ..
+                } = &mut ast.try_expr_mut(id).unwrap().kind
+                {
+                    *iface = submilli_engine::mangle::prelude("Object");
+                    count += 1;
+                }
+            }
+            assert_eq!(count, 1);
+        }),
+        "3"
+    );
+}
+
+fn assert_dynamic_constructor_edges(ast: &TypedAst, sources: &submilli_engine::Sources) {
+    let (prelude, host, internal) =
+        submilli_engine::runtime::prelude::cached_runtime_package_declarations();
+    let declaration = submilli_engine::PackageDeclaration::with_package("main");
+    let authority = submilli_engine::authority::analyse(
+        &declaration,
+        ast,
+        sources,
+        prelude.iter().chain(host).chain(internal),
+    )
+    .unwrap();
+    for caller in ["main#make", "main#makeBytes"] {
+        assert!(authority.edges.iter().any(|edge| {
+            edge.caller == caller
+                && edge.unresolved
+                && edge.target.is_none()
+                && edge.reason.as_deref() == Some("dynamic constructor target")
+        }));
+    }
 }
 
 #[test]

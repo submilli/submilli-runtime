@@ -156,15 +156,47 @@ fn call_token(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::R
 }
 
 /// The call token for `new value(…)` through its interface's construct
-/// signature (`__value_construct(value, interface)`): the interface's host
-/// function for the signature, which a prelude constructor declares.
-/// `__value_invoke` throws a `TypeError` when there is none.
+/// signature (`__value_construct(value, interface)`). The Object interface
+/// denotes a dynamic construct, so use the constructor interface carried by
+/// the value. Retaining Object when there is no tag defers the TypeError
+/// until after argument evaluation because Object has no construct signature.
 fn construct_token(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    static OBJECT: LazyLock<crate::MangledName> =
+        LazyLock::new(|| crate::mangle::prelude("Object"));
+
     let value = *abi_arg(params, 0)?;
-    require_receiver(caller, &value)?;
-    let interface = host::read_string_arg(caller, abi_arg(params, 1)?, "interface")?;
+    let mut interface = host::read_string_arg(caller, abi_arg(params, 1)?, "interface")?;
+    if interface == OBJECT.as_str() {
+        if let Some(actual) = live_constructor_interface(caller, value)? {
+            interface = actual;
+        }
+    } else {
+        require_receiver(caller, &value)?;
+    }
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::COPY,
+        interface.len() as u64,
+    )?;
     let key = crate::mangle::construct_signature(&interface);
     write_token(caller, value, key.as_str(), Val::null_any_ref())
+}
+
+fn live_constructor_interface(
+    caller: &mut Caller<'_, StoreData>,
+    value: Val,
+) -> wasmtime::Result<Option<String>> {
+    // Class instance vtables use different slots from closure adapters.
+    if !value::is_callable(caller, &value)? {
+        return Ok(None);
+    }
+    let Val::AnyRef(Some(reference)) = super::closure::original(caller, value)? else {
+        return Ok(None);
+    };
+    let Some(object) = reference.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    super::object::static_interface(caller, &object)
 }
 
 /// A call token, `[receiver, key, method]`: an empty `key` calls `method`,
@@ -350,28 +382,30 @@ async fn coerce(
     }
 }
 
-/// Builtin method parameters keyed by the method's symbol, `Interface#method`,
-/// or by a signature's. Deriving them builds the whole prelude declaration, so
-/// they are collected once rather than per call.
+/// Builtin method and signature parameters, collected once by symbol.
 static BUILTIN_PARAMETERS: LazyLock<HashMap<String, Parameters>> = LazyLock::new(|| {
     let mut parameters = HashMap::new();
-    for symbol in super::prelude_package_declaration().types.into_values() {
+    for symbol in prelude_types() {
         let crate::TypeKind::Interface {
             methods,
             call,
             construct,
             ..
-        } = symbol.kind
+        } = &symbol.kind
         else {
             continue;
         };
         let interface = &symbol.mangled_name;
         let members = methods
-            .into_iter()
-            .map(|(method, signature)| (crate::mangle::extend(interface, &method), signature))
-            .chain(call.map(|signature| (crate::mangle::call_signature(interface), signature)))
+            .iter()
+            .map(|(method, signature)| (crate::mangle::extend(interface, method), signature))
+            .chain(
+                call.as_ref()
+                    .map(|signature| (crate::mangle::call_signature(interface), signature)),
+            )
             .chain(
                 construct
+                    .as_ref()
                     .map(|signature| (crate::mangle::construct_signature(interface), signature)),
             );
         for (key, signature) in members {
@@ -850,9 +884,8 @@ struct BuiltinMembers {
 
 fn builtin_members() -> &'static HashMap<String, BuiltinMembers> {
     static MEMBERS: LazyLock<HashMap<String, BuiltinMembers>> = LazyLock::new(|| {
-        let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
         let mut members = HashMap::new();
-        for symbol in prelude.iter().flat_map(|package| package.types.values()) {
+        for symbol in prelude_types() {
             let crate::TypeKind::Interface {
                 methods,
                 properties,
@@ -883,6 +916,28 @@ fn builtin_members() -> &'static HashMap<String, BuiltinMembers> {
         members
     });
     &MEMBERS
+}
+
+fn prelude_types() -> Vec<&'static crate::TypeSymbol> {
+    fn add_namespace_types<'a>(
+        namespace: &'a crate::NamespaceSymbol,
+        types: &mut Vec<&'a crate::TypeSymbol>,
+    ) {
+        types.extend(namespace.types.values());
+        for nested in namespace.namespaces.values() {
+            add_namespace_types(nested, types);
+        }
+    }
+
+    let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
+    let mut types = Vec::new();
+    for package in prelude {
+        types.extend(package.types.values());
+        for namespace in package.namespaces.values() {
+            add_namespace_types(namespace, &mut types);
+        }
+    }
+    types
 }
 
 fn require_receiver(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<()> {

@@ -13,6 +13,7 @@
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, Func, Global, GlobalType, Mutability, StructRef};
 use wasmtime::{FieldType, Finality, StorageType, StructRefPre, StructType, Val, ValType};
 
+use crate::ValueKind;
 use crate::runtime::StoreData;
 use crate::runtime::fuel::{host_func, host_func_async};
 use crate::runtime::host::{
@@ -22,7 +23,6 @@ use crate::runtime::host::{
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 use crate::runtime::prelude::iterator::{iterator_result_struct, value_closure_type};
 use crate::runtime::prelude::vtable::read_string_units;
-use crate::{Type, ValueKind};
 
 pub(super) fn static_value(caller: &mut Caller<'_, StoreData>, tag: &Val) -> wasmtime::Result<Val> {
     let key = read_string_units(caller, tag, "static value tag")?;
@@ -48,37 +48,60 @@ fn build_static_value_object(
     // Codegen's `static_value_tag` gives constructors their native-function
     // text and every other binding `[object name]`, so the text says which.
     if let Some(signature) = text.strip_prefix("function ") {
+        crate::runtime::fuel::charge(
+            &mut *caller,
+            crate::runtime::fuel::SCAN,
+            signature.len() as u64,
+        )?;
         let name = signature
             .split_once('(')
             .map_or(signature, |(name, _)| name);
-        if let Some((key, function)) = call_signature_function(caller, name) {
-            return build_converting_closure(caller, &intr, tag, text, key, function);
+        let interface = constructor_interface(name);
+        let local = name.rsplit_once('#').map_or(name, |(_, local)| local);
+        let message = format!("{local} used as a value can't be called");
+        let text = if local == name {
+            text
+        } else {
+            format!("function {local}() {{ [native code] }}")
+        };
+        let closure_vtable = host_closure_vtable(caller)?;
+        let vtable = build_static_value_vtable(caller, &intr, &closure_vtable, text, interface)?;
+        if let Some((key, function)) =
+            interface.and_then(|interface| call_signature_function(caller, interface))
+        {
+            return build_converting_closure(caller, &intr, tag, vtable, key, function);
         }
-        let message = format!("{name} used as a value can't be called");
-        return build_throwing_closure(caller, &intr, tag, text, message);
+        return build_throwing_closure(caller, &intr, tag, vtable, message);
     }
     build_namespace_object(caller, &intr, text)
 }
 
 fn constructor_interface(name: &str) -> Option<&'static crate::MangledName> {
     let (prelude, _, _) = crate::runtime::prelude::cached_runtime_package_declarations();
-    let symbol = prelude.first()?.values.get(name)?;
-    let ValueKind::Const {
-        ty: Type::InterfaceRef { mangled, .. },
-        ..
-    } = &symbol.kind
-    else {
+    let prelude = prelude.first()?;
+    let mut path = name.split('#');
+    let local = path.next_back()?;
+    let mut values = &prelude.values;
+    let mut namespaces = &prelude.namespaces;
+    for part in path {
+        let namespace = namespaces.get(part)?;
+        values = &namespace.values;
+        namespaces = &namespace.namespaces;
+    }
+    let symbol = values.get(local)?;
+    let ValueKind::Const { ty, .. } = &symbol.kind else {
         return None;
     };
-    Some(mangled)
+    Some(&prelude.static_interface_of(ty)?.mangled_name)
 }
 
 /// The host function behind the call signature of the constructor bound to
-/// `name` (`NumberConstructor#<call>` for `Number`), found through the type
-/// the prelude declares for the binding. `None` for a constructor without one.
-fn call_signature_function(caller: &Caller<'_, StoreData>, name: &str) -> Option<(String, Func)> {
-    let mangled = constructor_interface(name)?;
-    let key = crate::mangle::call_signature(mangled).as_str().to_owned();
+/// the interface (`NumberConstructor#<call>` for `Number`).
+fn call_signature_function(
+    caller: &Caller<'_, StoreData>,
+    interface: &crate::MangledName,
+) -> Option<(String, Func)> {
+    let key = crate::mangle::call_signature(interface).as_str().to_owned();
     let function = caller
         .data()
         .host_abi
@@ -99,12 +122,10 @@ fn build_converting_closure(
     caller: &mut Caller<'_, StoreData>,
     intr: &IntrinsicTypes,
     tag: Val,
-    text: String,
+    vtable: Val,
     key: String,
     function: Func,
 ) -> wasmtime::Result<Val> {
-    let closure_vtable = host_closure_vtable(caller)?;
-    let vtable = build_static_value_vtable(caller, intr, &closure_vtable, text)?;
     let arity = function.ty(&*caller).params().len();
     let env = match super::super::member::builtin_parameters(&key) {
         Some(parameters) => super::super::arguments::with_metadata(caller, tag, parameters)?,
@@ -143,11 +164,9 @@ fn build_throwing_closure(
     caller: &mut Caller<'_, StoreData>,
     intr: &IntrinsicTypes,
     tag: Val,
-    text: String,
+    vtable: Val,
     message: String,
 ) -> wasmtime::Result<Val> {
-    let closure_vtable = host_closure_vtable(caller)?;
-    let vtable = build_static_value_vtable(caller, intr, &closure_vtable, text)?;
     let (function_ty, closure_ty) = value_closure_type(caller.engine(), intr, 0)?;
     let function = host_func(&mut *caller, function_ty, move |caller, _, _| {
         Err(throw_host_error(caller, type_error(message.clone())))
@@ -177,7 +196,7 @@ fn build_namespace_object(
     text: String,
 ) -> wasmtime::Result<Val> {
     let object_vtable = host_object_vtable(caller)?;
-    let vtable = build_static_value_vtable(caller, intr, &object_vtable, text)?;
+    let vtable = build_static_value_vtable(caller, intr, &object_vtable, text, None)?;
     let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
     let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &[])?;
     let fields_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
@@ -204,6 +223,7 @@ fn build_static_value_vtable(
     intr: &IntrinsicTypes,
     base: &Val,
     text: String,
+    interface: Option<&crate::MangledName>,
 ) -> wasmtime::Result<Val> {
     let Val::AnyRef(Some(base)) = base else {
         return Err(wasmtime::Error::msg("static value base vtable is null"));
@@ -212,10 +232,6 @@ fn build_static_value_vtable(
         .as_struct(&mut *caller)?
         .ok_or_else(|| wasmtime::Error::msg("static value base vtable is not a struct"))?;
     crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::HASH, text.len() as u64)?;
-    let interface = text
-        .strip_prefix("function ")
-        .and_then(|signature| signature.split_once('('))
-        .and_then(|(name, _)| constructor_interface(name));
     let to_string = host_func_async(
         &mut *caller,
         intr.to_string_fn.clone(),

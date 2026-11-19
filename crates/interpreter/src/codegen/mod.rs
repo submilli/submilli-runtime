@@ -132,14 +132,14 @@ fn index_space_exhausted() -> CompilerFailure {
     }
 }
 
-/// How JavaScript prints the static-dispatch binding `name`. The capitalized
-/// ones (`Number`, `Map`, `Temporal.Instant`) are constructors, which print as
-/// native functions; `console` is the one plain object, printed by its tag.
+/// The static value tag. Constructor tags retain the binding's namespace
+/// path so the runtime can find its interface and print its local name.
 fn static_value_tag(name: &str) -> String {
-    if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+    let local = name.rsplit_once('#').map_or(name, |(_, local)| local);
+    if local.starts_with(|c: char| c.is_ascii_uppercase()) {
         format!("function {name}() {{ [native code] }}")
     } else {
-        format!("[object {name}]")
+        format!("[object {local}]")
     }
 }
 
@@ -266,7 +266,7 @@ fn import_value_symbol(
             // `PackageDeclaration::static_interface_of`): record the dispatch so
             // the emitter lowers references to a typed null, and import nothing.
             if let Some(ts) = defs.static_interface_of(ty) {
-                let tag = static_value_tag(&value.name);
+                let tag = static_value_tag(name);
                 symbols.record_iface_dispatch(ts.mangled_name.clone(), crate::Dispatch::Static);
                 symbols.record_static_value_tag(ts.mangled_name.clone(), tag.clone());
                 symbols.record_static_binding_tag(value.mangled_name.clone(), tag);
