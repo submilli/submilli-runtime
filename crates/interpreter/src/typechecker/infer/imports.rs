@@ -375,15 +375,11 @@ impl<'a> Inferer<'a> {
                 .imported_packages
                 .insert(pkg.package_name.clone());
 
-            match kind {
-                crate::ImportKind::Named(specs) => {
-                    for spec in specs {
-                        self.bind_named_import(pkg, &spec);
-                    }
-                }
-                crate::ImportKind::Namespace { local_name } => {
-                    self.bind_namespace_import(NamespaceMembers::from_package(pkg), &local_name);
-                }
+            for spec in kind.named() {
+                self.bind_named_import(pkg, spec);
+            }
+            if let Some(local_name) = kind.namespace() {
+                self.bind_namespace_import(NamespaceMembers::from_package(pkg), local_name);
             }
         }
 
@@ -425,18 +421,14 @@ impl<'a> Inferer<'a> {
             );
             return;
         };
-        match kind {
-            crate::ImportKind::Named(specs) => {
-                for spec in specs {
-                    self.bind_named_relative_import(module, &imported_module, &resolved, spec);
-                }
-            }
-            crate::ImportKind::Namespace { local_name } => {
-                self.bind_namespace_import(
-                    NamespaceMembers::from_module(self.package_name, &imported_module),
-                    local_name,
-                );
-            }
+        for spec in kind.named() {
+            self.bind_named_relative_import(module, &imported_module, &resolved, spec);
+        }
+        if let Some(local_name) = kind.namespace() {
+            self.bind_namespace_import(
+                NamespaceMembers::from_module(self.package_name, &imported_module),
+                local_name,
+            );
         }
     }
 
@@ -595,41 +587,36 @@ impl<'a> Inferer<'a> {
             .imported_packages
             .insert(test.owner.to_string());
         let declaration = &imported.declaration;
-        match kind {
-            crate::ImportKind::Named(specs) => {
-                for spec in specs {
-                    let name = spec.imported_name.name.as_str();
-                    if declaration.values.contains_key(name) || declaration.types.contains_key(name)
-                    {
-                        self.bind_named_import(declaration, spec);
-                    } else if imported.unexported.contains(name) {
-                        self.error_with_help(
-                            spec.imported_name.span,
-                            format!("`{name}` is not exported from `{specifier}`"),
-                            vec![format!(
-                                "add `export` to `{name}` in `src/{module_path}`; non-entry exports \
-                                 reach only this package's tests, never programs or `submilli docs`"
-                            )],
-                        );
-                    } else {
-                        let mut help = self.package_exports_help(declaration);
-                        if help.is_empty() {
-                            help.push(format!("`{specifier}` exports nothing"));
-                        }
-                        help.push(format!(
-                            "if the module re-exports `{name}` from another package, import it from that package"
-                        ));
-                        self.error_with_help(
-                            spec.imported_name.span,
-                            format!("module `{specifier}` does not export `{name}`"),
-                            help,
-                        );
-                    }
+        for spec in kind.named() {
+            let name = spec.imported_name.name.as_str();
+            if declaration.values.contains_key(name) || declaration.types.contains_key(name) {
+                self.bind_named_import(declaration, spec);
+            } else if imported.unexported.contains(name) {
+                self.error_with_help(
+                    spec.imported_name.span,
+                    format!("`{name}` is not exported from `{specifier}`"),
+                    vec![format!(
+                        "add `export` to `{name}` in `src/{module_path}`; non-entry exports \
+                         reach only this package's tests, never programs or `submilli docs`"
+                    )],
+                );
+            } else {
+                let mut help = self.package_exports_help(declaration);
+                if help.is_empty() {
+                    help.push(format!("`{specifier}` exports nothing"));
                 }
+                help.push(format!(
+                    "if the module re-exports `{name}` from another package, import it from that package"
+                ));
+                self.error_with_help(
+                    spec.imported_name.span,
+                    format!("module `{specifier}` does not export `{name}`"),
+                    help,
+                );
             }
-            crate::ImportKind::Namespace { local_name } => {
-                self.bind_namespace_import(NamespaceMembers::from_package(declaration), local_name);
-            }
+        }
+        if let Some(local_name) = kind.namespace() {
+            self.bind_namespace_import(NamespaceMembers::from_package(declaration), local_name);
         }
     }
 
@@ -692,19 +679,20 @@ impl<'a> Inferer<'a> {
 
     /// If an `import … from '<module>'` targets one of the built-in prelude
     /// namespaces, return its canonical name. Matches the module name
-    /// case-insensitively (`'temporal'` → `Temporal`) and any named specifier
-    /// exactly (`import { Temporal } from '…'`).
+    /// case-insensitively (`'temporal'` → `Temporal`). For named-only imports,
+    /// also matches named specifiers exactly (`import { Temporal } from '…'`).
     fn prelude_namespace_import(&self, module: &str, kind: &crate::ImportKind) -> Option<String> {
         let names = self.prelude_namespace_names();
         if let Some(found) = names.iter().find(|n| n.eq_ignore_ascii_case(module)) {
             return Some((*found).to_string());
         }
-        if let crate::ImportKind::Named(specs) = kind {
-            for spec in specs {
-                let imported = spec.imported_name.name.as_str();
-                if let Some(found) = names.iter().find(|n| **n == imported) {
-                    return Some((*found).to_string());
-                }
+        if kind.namespace().is_some() {
+            return None;
+        }
+        for spec in kind.named() {
+            let imported = spec.imported_name.name.as_str();
+            if let Some(found) = names.iter().find(|n| **n == imported) {
+                return Some((*found).to_string());
             }
         }
         None
@@ -716,15 +704,12 @@ impl<'a> Inferer<'a> {
     /// need real binding machinery, so they still error.
     fn prelude_import_is_noop(&self, kind: &crate::ImportKind) -> bool {
         let names = self.prelude_namespace_names();
-        match kind {
-            crate::ImportKind::Named(specs) => specs.iter().all(|spec| {
+        kind.namespace()
+            .is_none_or(|local_name| names.contains(&local_name.name.as_str()))
+            && kind.named().iter().all(|spec| {
                 spec.local_name.name == spec.imported_name.name
                     && names.contains(&spec.imported_name.name.as_str())
-            }),
-            crate::ImportKind::Namespace { local_name } => {
-                names.contains(&local_name.name.as_str())
-            }
-        }
+            })
     }
 
     fn prelude_namespace_help_list(&self) -> String {

@@ -250,10 +250,10 @@ impl<'a> Validator<'a> {
             } => {
                 self.span(*module_span)?;
                 self.doc(doc)?;
-                match kind {
-                    ImportKind::Named(specs) => self.specifiers(specs)?,
-                    ImportKind::Namespace { local_name } => self.span(local_name.span)?,
+                if let Some(local_name) = kind.namespace() {
+                    self.span(local_name.span)?;
                 }
+                self.specifiers(kind.named())?;
             }
             StmtKind::ExportFrom { specs, source, doc } => {
                 self.specifiers(specs)?;

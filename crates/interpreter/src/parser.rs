@@ -1951,11 +1951,13 @@ impl<'a> Parser<'a> {
                 let local_tok = self.advance();
                 let local_name = self.ident_from_token(&local_tok);
                 if matches!(self.peek().kind, TokenKind::Comma) {
-                    self.error_at_peek_with_help(
-                        "combining default and named imports is not supported",
-                        vec!["use two separate `import` statements".to_string()],
-                    );
-                    return None;
+                    self.advance();
+                    if !matches!(self.peek().kind, TokenKind::LeftBrace) {
+                        self.error_at_peek("expected `{` after namespace import followed by `,`");
+                        return None;
+                    }
+                    let (specs, _) = self.parse_specifier_list(SpecifierList::Import)?;
+                    return Some(ImportKind::NamespaceAndNamed { local_name, specs });
                 }
                 Some(ImportKind::Namespace { local_name })
             }
@@ -2013,9 +2015,8 @@ impl<'a> Parser<'a> {
 
     /// Parse a `{ a, b as c }` specifier list shared by `import` and re-`export`.
     /// `list` says whether the specifiers bind local names (an import) and names the
-    /// construct in diagnostics. Returns the specifiers (possibly
-    /// empty — callers reject empty with construct-specific help) and the span of
-    /// the opening brace.
+    /// construct in diagnostics. Returns the specifiers, which may be
+    /// empty, and the span of the opening brace.
     fn parse_specifier_list(
         &mut self,
         list: SpecifierList,
@@ -13253,14 +13254,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_combined_default_and_named_rejected() {
-        let (_ast, diags) = parse_str("import uuid, { v4 } from \"submilli:uuid\";");
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("combining default and named")),
-            "expected combined-import diagnostic, got: {diags:?}",
-        );
+    fn parse_combined_namespace_and_named_import() {
+        let (ast, diags) =
+            parse_str("import llm, { type Model as LlmModel } from \"submilli:llm\";");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let StmtKind::Import {
+            kind: ImportKind::NamespaceAndNamed { local_name, specs },
+            ..
+        } = &ast.try_stmt(ast.top_level[0]).unwrap().kind
+        else {
+            panic!("expected a combined namespace and named import");
+        };
+        assert_eq!(local_name.name, "llm");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].imported_name.name, "Model");
+        assert_eq!(specs[0].local_name.name, "LlmModel");
     }
 
     #[test]
