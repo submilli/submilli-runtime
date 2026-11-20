@@ -2,6 +2,9 @@
 
 Use `@submilli/google-drive` to work with files in My Drive or Shared Drives:
 
+<!-- submilli:if capability="submilli/google-drive.about" -->
+- read the connected account's email
+<!-- submilli:endif -->
 <!-- submilli:if capability="submilli/google-drive.searchFiles" -->
 - find files with structured search
 <!-- submilli:endif -->
@@ -72,8 +75,14 @@ actions are:
 
 <!-- submilli:if capability="submilli/google-drive.searchFiles" -->
 
-Prefer structured search fields over a raw Drive query. Use a Shared Drive ID
-when the task targets a Shared Drive.
+By default, `searchFiles` uses Drive's user corpus. Set `corpora: "domain"`
+to list domain-shared files visible to the account. This listing often includes
+only files the account has opened or received in Shared with me. Absence tells
+you nothing about a file's sharing. For Shared with me, use the default corpus
+and `rawQuery: "sharedWithMe = true"`. This includes files shared with individuals.
+Use `driveId` alone to restrict a search to one Shared Drive. Combining it with
+`corpora` raises `invalid_corpora`. Pass each page's `nextPageToken` as
+`pageToken` with the same options to continue.
 
 <!-- submilli:endif -->
 

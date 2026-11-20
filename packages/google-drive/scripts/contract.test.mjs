@@ -50,3 +50,44 @@ test('My Drive root resolves to null; matching shared drive proceeds to the same
     assert.deepEqual(host.requests[1].body.parents, ['parent']);
     assert.equal(new URL(host.requests[1].url).searchParams.get('supportsAllDrives'), 'true');
 });
+
+test('file search preserves the requested corpus and filters across pages', () => {
+    for (const [options, corpus, q] of [
+        [{}, null, 'trashed = false'],
+        [{ rawQuery: 'sharedWithMe = true' }, null, 'trashed = false and (sharedWithMe = true)'],
+        [{ corpora: 'domain' }, 'domain', 'trashed = false'],
+        [{ driveId: 'team' }, 'drive', 'trashed = false'],
+    ]) {
+        host.reset();
+        const token = 'page/+2';
+        host.response(() => ({ data: { files: [], nextPageToken: token } }));
+        const first = drive.searchFiles(options);
+        assert.equal(first.nextPageToken, token);
+        host.response(() => ({ data: { files: [{ id: 'doc' }] } }));
+        const last = drive.searchFiles({ ...options, pageToken: first.nextPageToken });
+        assert.equal(last.nextPageToken, '');
+        assert.deepEqual(last.items.map(file => file.id), ['doc']);
+
+        assert.equal(host.requests.length, 2);
+        for (const [index, request] of host.requests.entries()) {
+            const url = new URL(request.url);
+            assert.equal(request.method, 'get');
+            assert.equal(url.origin + url.pathname, 'https://www.googleapis.com/drive/v3/files');
+            assert.equal(url.searchParams.get('includeItemsFromAllDrives'), 'true');
+            assert.equal(url.searchParams.get('supportsAllDrives'), 'true');
+            assert.equal(url.searchParams.get('q'), q);
+            assert.equal(url.searchParams.get('corpora'), corpus);
+            assert.equal(url.searchParams.get('driveId'), options.driveId ?? null);
+            assert.equal(url.searchParams.get('pageToken'), index === 0 ? null : token);
+        }
+    }
+});
+
+test('file search rejects a conflicting or unsupported corpus before HTTP', () => {
+    for (const options of [{ corpora: 'domain', driveId: 'team' }, { corpora: 'allDrives' }]) {
+        host.reset();
+        assert.throws(() => drive.searchFiles(options),
+            error => error instanceof drive.DriveError && error.code === 'invalid_corpora');
+        assert.equal(host.requests.length, 0);
+    }
+});
