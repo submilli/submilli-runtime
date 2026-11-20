@@ -282,21 +282,25 @@ impl Inferer<'_> {
         }
     }
 
-    pub(super) fn validate_type_predicate_return(
+    /// Checks that a type guard's returned value proves its predicate, and
+    /// returns what to return in its place: the value itself or, for a
+    /// [`GuardFacts::plain_object_gap`], the value with the rest of the predicate checked at
+    /// run time.
+    pub(super) fn check_type_guard_return(
         &mut self,
         value_id: ExprId,
         span: crate::Span,
-    ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let Some((predicate, param_name)) = self.current_type_predicate.clone() else {
-            return Ok(());
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let Some((predicate, param)) = self.current_type_predicate.clone() else {
+            return Ok(value_id);
         };
         // As in tsc, an assertion's body is not checked to assert: it returns
         // `void`, and a call that returns at all is taken to prove it.
         if predicate.kind.is_assertion() {
-            return Ok(());
+            return Ok(value_id);
         }
-        let Some(scope_entry) = self.scopes.get(&param_name).cloned() else {
-            return Ok(());
+        let Some(scope_entry) = self.scopes.get(&param.name).cloned() else {
+            return Ok(value_id);
         };
         // x is T only attaches on true returns; return false makes no narrowing claim.
         if matches!(
@@ -306,10 +310,42 @@ impl Inferer<'_> {
                 .kind,
             crate::TypedExprKind::Boolean(false)
         ) {
-            return Ok(());
+            return Ok(value_id);
+        }
+        // A local of the same name would be what the body's checks narrow, not
+        // the argument the caller's narrowing applies to.
+        if scope_entry.decl_span != param.span {
+            let name = &param.name;
+            self.error_with_help(
+                span,
+                format!("a local `{name}` shadows the type guard's parameter at this return"),
+                vec![format!(
+                    "rename the local, so the checks this return relies on are about the \
+                     parameter `{name}`"
+                )],
+            );
+            return Ok(value_id);
+        }
+        // Likewise once the body writes the parameter, directly or from a
+        // closure: its checks are then about the written value.
+        if self.last_assignments.contains_key(&param.span)
+            || self
+                .captured_mutators
+                .contains(&(param.name.clone(), param.span))
+        {
+            let name = &param.name;
+            self.error_with_help(
+                span,
+                format!("the type guard assigns its parameter `{name}`"),
+                vec![format!(
+                    "a guard's checks must be about the argument it was called with: copy \
+                     `{name}` into a new local instead of assigning it"
+                )],
+            );
+            return Ok(value_id);
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
-            name: param_name.clone(),
+            name: param.name.clone(),
             decl_scope: scope_entry.decl_scope,
         });
         let (return_true_env, _return_false_env) = self.predicate_envs(value_id)?;
@@ -338,19 +374,252 @@ impl Inferer<'_> {
             .map_err(super::type_limit_at(span))?,
             _ => predicate.asserted_type.clone(),
         };
-        let _: () = if !assignable(&narrowed_ty, &asserted_body, self.resolver()) {
-            self.error_with_help(
-                span,
-                format!(
-                    "type-guard return value does not narrow parameter `{}` to `{}`",
-                    param_name, predicate.asserted_type,
+        if assignable(&narrowed_ty, &asserted_body, self.resolver()) {
+            return Ok(value_id);
+        }
+        let declared = scope_entry.declared_ty.as_ref().unwrap_or(&scope_entry.ty);
+        let root_ty = combined_env
+            .get(&path)
+            .map_or(declared, |view| &view.narrowed_ty);
+        let facts = GuardFacts {
+            declared_untyped: matches!(declared.peel(), Type::Unknown)
+                || matches!(
+                    narrowing::strip_nullish(declared).peel(),
+                    Type::NonPrimitive
                 ),
-                vec![format!(
-                    "at this return, `{}` is inferred as `{}`",
-                    param_name, narrowed_ty,
-                )],
-            );
+            unnarrowed: is_unnarrowed(root_ty),
+            narrowed_to_object: is_object_narrowing(root_ty),
+            narrowed_to_nullable_object: is_object_narrowing(&narrowing::strip_nullish(root_ty)),
+            asserts_object: is_object_like(&asserted_body),
+            refines: assignable(&asserted_body, &narrowed_ty, self.resolver()),
         };
-        Ok(())
+        let uncheckable = if facts.plain_object_gap() {
+            match self.as_check_shape(&asserted_body) {
+                Ok(shape) => {
+                    return self.checked_guard_return(
+                        value_id,
+                        &param,
+                        &scope_entry.ty,
+                        &asserted_body,
+                        shape,
+                        span,
+                    );
+                }
+                Err(reason) => Some(reason),
+            }
+        } else {
+            None
+        };
+        let name = &param.name;
+        let asserted = &predicate.asserted_type;
+        self.error_with_help(
+            span,
+            format!("type-guard return value does not narrow parameter `{name}` to `{asserted}`"),
+            vec![
+                format!("at this return, `{name}` is inferred as `{narrowed_ty}`"),
+                format!(
+                    "Submilli checks that a type guard's body proves its predicate (tsc trusts \
+                     it): a `return` that can be true must narrow `{name}` to `{asserted}`"
+                ),
+                type_guard_hint(name, asserted, &narrowed_ty, &facts, uncheckable),
+            ],
+        );
+        Ok(value_id)
+    }
+
+    /// `value ? (param as asserted, true) : false`: a guard whose body narrowed
+    /// an untyped parameter only to `object` proves the rest when it returns
+    /// true, the way `param as asserted` would, throwing a `TypeError` on a
+    /// mismatch (which a `try` around the `return` in the guard itself catches).
+    /// Plain data then behaves as in tsc, and anything else (a `Map`, a missing
+    /// field) fails loudly instead of narrowing.
+    fn checked_guard_return(
+        &mut self,
+        value_id: ExprId,
+        param: &crate::Ident,
+        param_ty: &Type,
+        asserted: &Type,
+        shape: Type,
+        span: crate::Span,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let read = crate::TypedExprKind::LocalRef {
+            ident: param.clone(),
+            boxed: false,
+        };
+        let (kind, ty) = self.checked_call(read, param_ty.clone(), asserted, shape, span)?;
+        let cast = self.push_guard_expr(kind, ty, span)?;
+        let yes = self.push_guard_expr(crate::TypedExprKind::Boolean(true), Type::Boolean, span)?;
+        let checked = self.push_guard_expr(
+            crate::TypedExprKind::EffectThen {
+                effect: cast,
+                result: yes,
+            },
+            Type::Boolean,
+            span,
+        )?;
+        let no = self.push_guard_expr(crate::TypedExprKind::Boolean(false), Type::Boolean, span)?;
+        self.push_guard_expr(
+            crate::TypedExprKind::Ternary {
+                cond: value_id,
+                then_: checked,
+                else_: no,
+            },
+            Type::Boolean,
+            span,
+        )
+    }
+
+    fn push_guard_expr(
+        &mut self,
+        kind: crate::TypedExprKind,
+        ty: Type,
+        span: crate::Span,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        self.typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)
+    }
+}
+
+/// What a type guard's failing `return` tells about its parameter and
+/// predicate, which decides between a run-time check and the error's hint.
+struct GuardFacts {
+    /// The parameter takes untyped data: `unknown`, or `object` possibly with
+    /// `null` or `undefined`.
+    declared_untyped: bool,
+    /// The checks reaching the return left it `unknown`, or ruled out only
+    /// `null` and `undefined`.
+    unnarrowed: bool,
+    /// The body narrowed it to `object`, or to shapes `"f" in x` built on it.
+    narrowed_to_object: bool,
+    /// The same, except that it may still be `null` or `undefined`.
+    narrowed_to_nullable_object: bool,
+    /// The predicate is an object shape, record or interface, or a union of these.
+    asserts_object: bool,
+    /// The predicate fits inside what the body narrowed the parameter to.
+    refines: bool,
+}
+
+impl GuardFacts {
+    /// What's left to prove is that the value is plain data of the predicate's
+    /// shape, which `typeof` can't tell and `as` checks at run time.
+    fn plain_object_gap(&self) -> bool {
+        self.declared_untyped && self.narrowed_to_object && self.asserts_object && self.refines
+    }
+}
+
+/// The help line telling how to make a type guard's body prove its predicate.
+/// `uncheckable` is why a plain-object gap's predicate can't be checked at run
+/// time.
+fn type_guard_hint(
+    param: &str,
+    asserted: &Type,
+    narrowed: &Type,
+    facts: &GuardFacts,
+    uncheckable: Option<&str>,
+) -> String {
+    if super::expr::type_contains_type_var(asserted) {
+        return format!(
+            "`{asserted}` names a type parameter, which can't be checked at run time: the \
+             body must prove it with checks on the value itself, e.g. `{param} !== null` for \
+             a parameter typed `T | null`"
+        );
+    }
+    if let Some(reason) = uncheckable {
+        return format!(
+            "`{asserted}` can't be checked at run time ({reason}), so the body must narrow \
+             `{param}` to it with its own checks"
+        );
+    }
+    if let Type::ClassRef { args, .. } = asserted.peel()
+        && args.is_empty()
+    {
+        return format!("return `{param} instanceof {asserted}`");
+    }
+    if facts.declared_untyped && facts.asserts_object && facts.unnarrowed {
+        return format!(
+            "narrow `{param}` to an object with `typeof {param} === \"object\" && {param} !== \
+             null` (add `&& !Array.isArray({param})` for a record), in the returned \
+             expression or an enclosing `if`: narrowing doesn't flow through `? true : false` \
+             or `Boolean(…)`. Submilli then checks the rest of `{asserted}` at run time when \
+             the guard returns true, and throws a `TypeError` if it doesn't match"
+        );
+    }
+    if facts.declared_untyped
+        && facts.asserts_object
+        && facts.refines
+        && facts.narrowed_to_nullable_object
+    {
+        let checks = nullish_members(narrowed)
+            .map(|nullish| format!("`{param} !== {nullish}`"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        return format!(
+            "rule out {checks} too; Submilli then checks the rest of `{asserted}` at run time \
+             when the guard returns true"
+        );
+    }
+    if !facts.refines {
+        return format!(
+            "the checks before this return leave `{param}` as `{narrowed}`, which \
+             `{asserted}` doesn't fit inside: re-check them"
+        );
+    }
+    if facts.asserts_object {
+        return format!(
+            "add checks that narrow `{param}` before returning true: a discriminant \
+             comparison (`{param}.kind === \"…\"`), or `\"field\" in {param}` followed by a \
+             `typeof` test on that field"
+        );
+    }
+    format!(
+        "add checks that narrow `{param}` before returning true, e.g. \
+         `return typeof {param} === \"…\"` or `Array.isArray({param})`"
+    )
+}
+
+/// `unknown`, or `{}` that may still be `null` or `undefined`: what is left
+/// when the checks prove nothing about the value's kind.
+fn is_unnarrowed(ty: &Type) -> bool {
+    match narrowing::strip_nullish(ty).peel() {
+        Type::Unknown => true,
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => fields.is_empty() && index.is_none() && more_indexes.is_empty(),
+        _ => false,
+    }
+}
+
+/// `object`, or a shape `"f" in x` built on it (or a union of these). An empty `{}` is not one: what
+/// `x !== null && x !== undefined` leaves still holds primitives.
+fn is_object_narrowing(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::NonPrimitive => true,
+        Type::Object { .. } => !is_unnarrowed(ty),
+        Type::Union(members) => members.iter().all(is_object_narrowing),
+        _ => false,
+    }
+}
+
+/// `null` and `undefined`, those of them `ty` still holds.
+fn nullish_members(ty: &Type) -> impl Iterator<Item = &'static str> + '_ {
+    let members = match ty.peel() {
+        Type::Union(members) => members.as_slice(),
+        _ => std::slice::from_ref(ty),
+    };
+    [(Type::Null, "null"), (Type::Undefined, "undefined")]
+        .into_iter()
+        .filter(move |(nullish, _)| members.iter().any(|m| m.peel() == nullish))
+        .map(|(_, name)| name)
+}
+
+/// An object shape, record or interface, or a union of only these.
+fn is_object_like(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Object { .. } | Type::InterfaceRef { .. } => true,
+        Type::Union(members) => members.iter().all(is_object_like),
+        _ => false,
     }
 }

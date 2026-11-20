@@ -1148,7 +1148,9 @@ pub(super) struct Inferer<'a> {
     pub(super) rejected_class_names: BTreeSet<String>,
     /// Source-declared cycles already diagnosed during signature validation.
     pub(super) invalid_class_hierarchies: std::collections::BTreeSet<crate::MangledName>,
-    pub(super) current_type_predicate: Option<(crate::TypePredicate, String)>,
+    /// The enclosing type guard's predicate and its parameter's declaring
+    /// ident, whose span identifies that binding at each `return`.
+    pub(super) current_type_predicate: Option<(crate::TypePredicate, crate::Ident)>,
     pub(super) inferred_returns: Option<Vec<ReturnedValue>>,
     /// Object literals inferred for their own type rather than checked against
     /// a declared one; see [`inference_sources`].
