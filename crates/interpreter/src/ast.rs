@@ -461,6 +461,28 @@ pub enum ImportKind {
     Namespace {
         local_name: Ident,
     },
+    NamespaceAndNamed {
+        local_name: Ident,
+        specs: Vec<ImportSpecifier>,
+    },
+}
+
+impl ImportKind {
+    pub(crate) fn namespace(&self) -> Option<&Ident> {
+        match self {
+            Self::Named(_) => None,
+            Self::Namespace { local_name } | Self::NamespaceAndNamed { local_name, .. } => {
+                Some(local_name)
+            }
+        }
+    }
+
+    pub(crate) fn named(&self) -> &[ImportSpecifier] {
+        match self {
+            Self::Named(specs) | Self::NamespaceAndNamed { specs, .. } => specs,
+            Self::Namespace { .. } => &[],
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
