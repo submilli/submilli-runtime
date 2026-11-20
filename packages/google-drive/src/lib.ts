@@ -138,7 +138,9 @@ export interface SearchFilesOptions {
     starred?: boolean;
     /** Extra Drive query-language clause, AND-ed with the structured filters. */
     rawQuery?: string;
-    /** Restrict the search to this Shared Drive. */
+    /** Search domain-shared files visible to the account. Omit for the default corpus. */
+    corpora?: "domain";
+    /** Restrict the search to this Shared Drive. Mutually exclusive with corpora. */
     driveId?: string;
     /** Maximum files per page, 1-1000; default 20. */
     limit?: number;
@@ -308,13 +310,13 @@ export function getFile(fileId: string): DriveFile | null {
 
 /**
  * Search Drive files with structured filters plus an optional raw Drive query.
- * Shared Drive searches set `driveId` and use `corpora=drive`.
-  * @param options Optional name, MIME type, parent folder, trashed/starred filters, raw Drive query, Shared Drive, page size (1-1000, default 20), continuation token, and sort order; omit it to list non-trashed files with the defaults.
+ * Set `corpora` to `domain` for domain discovery or `driveId` for a single Shared Drive.
+  * @param options Optional name, MIME type, parent folder, trashed/starred filters, raw Drive query, domain corpus or Shared Drive, page size (1-1000, default 20), continuation token, and sort order; omit it to list non-trashed files with the defaults.
   * @returns One page of matching files; `items` is empty when nothing matches and `nextPageToken` is empty on the last page.
  * @capability submilli/google-drive.searchFiles {}
  */
 export function searchFiles(options: SearchFilesOptions = {}): Page<DriveFile> {
-    const { limit, pageToken, orderBy, nameContains, mimeType, parentId, starred, trashed, rawQuery, driveId } = options;
+    const { limit, pageToken, orderBy, nameContains, mimeType, parentId, starred, trashed, rawQuery, driveId, corpora } = options;
     check("submilli/google-drive.searchFiles", {});
     const query = new Map<string, string>();
     query.set("fields", "nextPageToken,files(" + FILE_FIELDS + ")");
@@ -329,7 +331,7 @@ export function searchFiles(options: SearchFilesOptions = {}): Page<DriveFile> {
     // Trashed files are left out unless the caller asks about them.
     clauses.push("trashed = " + (trashed === true ? "true" : "false"));
     if (rawQuery !== undefined && rawQuery.length > 0) clauses.push("(" + rawQuery + ")");
-    applySharedDrive(query, driveId);
+    applySearchCorpus(query, driveId, corpora);
     if (clauses.length > 0) query.set("q", clauses.join(" and "));
     const data = driveGet("/files", query).json<FileListResponse>();
     return filePage(data);
@@ -787,10 +789,15 @@ function permissionFrom(item: ApiPermission): Permission {
     };
 }
 
-function applySharedDrive(query: Map<string, string>, driveId: string | undefined): void {
+function applySearchCorpus(query: Map<string, string>, driveId: string | undefined, corpora: string | undefined): void {
     query.set("includeItemsFromAllDrives", "true");
     query.set("supportsAllDrives", "true");
-    if (driveId !== undefined) {
+    if (corpora !== undefined) {
+        if (corpora !== "domain" || driveId !== undefined) {
+            throw new DriveError("invalid_corpora", "Only the domain corpus may be selected, without a driveId", 0);
+        }
+        query.set("corpora", "domain");
+    } else if (driveId !== undefined) {
         query.set("corpora", "drive");
         query.set("driveId", driveId);
     }
