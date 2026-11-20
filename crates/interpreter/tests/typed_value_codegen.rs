@@ -806,3 +806,144 @@ fn forward_capture_mutual_and_let_self_recursion() {
         "0"
     );
 }
+
+/// Replaces each `site(n)` marker call with site `n`'s `TemplateObject`.
+fn replace_template_sites(ast: &mut TypedAst, sites: &[(Vec<Option<&str>>, Vec<&str>)]) -> usize {
+    let mut replaced = 0;
+    for id in ast.expr_ids().unwrap() {
+        let TypedExprKind::Call { mangled, args, .. } = &ast.try_expr(id).unwrap().kind else {
+            continue;
+        };
+        if mangled.as_str() != "main#site" {
+            continue;
+        }
+        let TypedExprKind::Number(n) = ast.try_expr(args[0]).unwrap().kind else {
+            panic!("a site marker takes a number literal");
+        };
+        let (cooked, raw) = &sites[n as usize - 1];
+        let expr = ast.try_expr_mut(id).unwrap();
+        expr.kind = TypedExprKind::TemplateObject {
+            cooked: cooked.iter().map(|text| text.map(str::to_owned)).collect(),
+            raw: raw.iter().map(|text| (*text).to_owned()).collect(),
+        };
+        expr.ty = Type::Readonly(Box::new(Type::Array(Box::new(Type::String))));
+        replaced += 1;
+    }
+    replaced
+}
+
+#[test]
+fn template_objects_are_frozen_per_site_arrays_with_a_hidden_raw() {
+    let source = include_str!("typed_value_sources/tagged-template.ts");
+    let strings = (
+        vec![Some("a"), Some("b\n"), Some("")],
+        vec!["a", "b\\n", ""],
+    );
+    assert_eq!(
+        run(source, move |ast| {
+            assert_eq!(replace_template_sites(ast, &[strings.clone(), strings]), 2);
+        }),
+        [
+            "true",
+            "false",
+            "a1b\n2",
+            "3",
+            r#"["a","b\n",""]"#,
+            "0,1,2",
+            "0,1,2",
+            "3",
+            "true",
+            "true",
+            r#"["a","b\\n",""]"#,
+            "missing",
+            "true",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "wrote",
+            "wrote",
+            "TypeError",
+            "TypeError",
+            r#"["a","b\n",""]"#,
+        ]
+        .join("|")
+    );
+}
+
+#[test]
+fn template_objects_are_one_object_per_node() {
+    let source = include_str!("typed_value_sources/tagged-template-sites.ts");
+    assert_eq!(
+        run(source, |ast| {
+            let sites = [
+                (vec![Some("a")], vec!["a"]),
+                (vec![None, Some("x")], vec!["\\unicode", "x"]),
+                (vec![Some("a"), Some("b")], vec!["a", "b"]),
+            ];
+            assert_eq!(replace_template_sites(ast, &sites), 4);
+            let mut deletes = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr(id).unwrap().clone();
+                let TypedExprKind::Call { mangled, args, .. } = expr.kind else {
+                    continue;
+                };
+                if mangled.as_str() != "main#deleteMarker" {
+                    continue;
+                }
+                ast.try_expr_mut(id).unwrap().kind = TypedExprKind::DeleteField {
+                    receiver: args[0],
+                    name: Ident {
+                        name: "raw".into(),
+                        span: expr.span,
+                    },
+                };
+                deletes += 1;
+            }
+            assert_eq!(deletes, 1);
+        }),
+        r#"true|true|false|true|[null,"x"]|>a7b|TypeError|true"#
+    );
+}
+
+#[test]
+fn template_objects_reject_writes_where_javascript_does() {
+    let source = include_str!("typed_value_sources/tagged-template-writes.ts");
+    assert_eq!(
+        run(source, |ast| {
+            let sites = [
+                (vec![Some("a")], vec!["a"]),
+                (vec![Some("a"), Some("b"), Some("c")], vec!["a", "b", "c"]),
+                (vec![None, Some("x")], vec!["\\u", "x"]),
+            ];
+            assert_eq!(replace_template_sites(ast, &sites), 3);
+        }),
+        [
+            "wrote",
+            "wrote",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "a,b,c,x/y,b,c",
+            "true",
+            "undefined!x",
+            "TypeError",
+            r#"["a","b","c"]"#,
+            "TypeError",
+            "false",
+            "false",
+            r#"["a","b","c"]"#,
+        ]
+        .join("|")
+    );
+}

@@ -382,6 +382,7 @@ pub(super) fn collect_from_expr(
         | TypedExprKind::Null
         | TypedExprKind::This
         | TypedExprKind::Regex { .. }
+        | TypedExprKind::TemplateObject { .. }
         | TypedExprKind::LocalRef { .. }
         | TypedExprKind::LocalNarrowRef { .. }
         | TypedExprKind::GlobalRef { .. }

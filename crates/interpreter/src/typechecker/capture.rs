@@ -909,6 +909,7 @@ impl State<'_> {
             | TypedExprKind::Null
             | TypedExprKind::Undefined
             | TypedExprKind::Regex { .. }
+            | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
@@ -1574,6 +1575,7 @@ mod tests {
             | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
+            | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
             TypedExprKind::Binary { lhs, rhs, .. } => {

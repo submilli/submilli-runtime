@@ -290,6 +290,7 @@ impl Reachable {
             | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
+            | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }

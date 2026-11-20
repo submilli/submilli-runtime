@@ -11,6 +11,7 @@ pub struct IntrinsicTypeIndices {
     pub undefined: u32,
     pub type_descriptor: u32,
     pub callable_shape: u32,
+    pub frozen_array: u32,
     pub raw_string: u32,
     pub vtable: u32,
     pub object: u32,
@@ -67,7 +68,7 @@ pub struct IntrinsicTypeIndices {
 
 /// Number of types [`declare_intrinsic_types`] emits — the first free type index
 /// in every module.
-pub const INTRINSIC_TYPE_COUNT: u32 = 54;
+pub const INTRINSIC_TYPE_COUNT: u32 = 55;
 
 /// The field of a `$CallableShape` that holds its closure, after the four
 /// `$ObjectShape` fields. The host reads it too (`closure::hybrid_closure`).
@@ -77,6 +78,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     let undefined = 51u32;
     let type_descriptor = 52u32;
     let callable_shape = 53u32;
+    let frozen_array = 54u32;
     let raw_string = 0u32;
     let vtable = 1u32;
     let object = 2u32;
@@ -1075,10 +1077,37 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         )
     });
 
+    // `$FrozenArray` — a frozen `$Array`, as a tagged template's template
+    // object and its `raw` array are: `$Array`'s fields, then the template
+    // object's `raw` (null on the `raw` array itself). A write to one throws
+    // `TypeError`. The host mirrors this in `runtime::intrinsic_types`.
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                FieldType {
+                    element_type: StorageType::Val(ref_to(raw_array)),
+                    mutable: true,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: true,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ref_null(array)),
+                    mutable: false,
+                },
+            ],
+            Some(array),
+        )
+    });
+
     IntrinsicTypeIndices {
         undefined,
         type_descriptor,
         callable_shape,
+        frozen_array,
         raw_string,
         vtable,
         object,
@@ -1148,6 +1177,7 @@ pub(crate) fn intrinsic_supertypes(
         (indices.undefined, indices.object),
         (indices.type_descriptor, indices.object),
         (indices.callable_shape, indices.object_shape),
+        (indices.frozen_array, indices.array),
         (indices.string, indices.object),
         (indices.boxed_number, indices.object),
         (indices.boxed_boolean, indices.object),
@@ -1357,6 +1387,7 @@ mod tests {
         assert_eq!(indices.undefined, 51);
         assert_eq!(indices.type_descriptor, 52);
         assert_eq!(indices.callable_shape, 53);
-        assert_eq!(super::INTRINSIC_TYPE_COUNT, 54);
+        assert_eq!(indices.frozen_array, 54);
+        assert_eq!(super::INTRINSIC_TYPE_COUNT, 55);
     }
 }

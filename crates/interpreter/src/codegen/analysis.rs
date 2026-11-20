@@ -882,6 +882,7 @@ impl CodegenAnalysis {
             | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
+            | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
@@ -969,6 +970,8 @@ impl CodegenAnalysis {
                         &crate::mangle::prelude("Array"),
                         "append",
                     ));
+                    self.string_pool
+                        .intern_text(crate::runtime::array_storage::FROZEN_ARRAY_WRITE);
                 }
                 self.visit_type_at(elem_ty, stmt.span)?;
                 self.note_index_check(ta, Some(*receiver))?;
@@ -1401,6 +1404,8 @@ impl CodegenAnalysis {
                     receiver, elem_ty, ..
                 } => {
                     self.note_postfix_target(elem_ty)?;
+                    self.string_pool
+                        .intern_text(crate::runtime::array_storage::FROZEN_ARRAY_WRITE);
                     self.note_index_check(ta, Some(*receiver))?;
                     self.note_missing_key(&bounds::receiver_name(ta, *receiver)?);
                 }
@@ -1415,6 +1420,11 @@ impl CodegenAnalysis {
             TypedExprKind::Regex { source, flags } => {
                 self.string_pool.intern_text(source);
                 self.string_pool.intern_text(flags);
+            }
+            TypedExprKind::TemplateObject { cooked, raw } => {
+                for text in cooked.iter().flatten().chain(raw) {
+                    self.string_pool.intern_text(text);
+                }
             }
             TypedExprKind::CallClosure { callee, .. } => {
                 self.dependency_usage

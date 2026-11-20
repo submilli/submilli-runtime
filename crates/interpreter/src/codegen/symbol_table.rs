@@ -49,6 +49,9 @@ pub struct SymbolTable {
     pub type_descriptor_functions: BTreeMap<Type, u32>,
     pub type_descriptor_decoders: BTreeMap<Type, u32>,
     pub type_descriptor_globals: BTreeMap<Type, u32>,
+    /// The global caching each tagged template site's template object, keyed
+    /// by its `TemplateObject` node (`codegen::template_objects`).
+    pub template_object_globals: BTreeMap<ExprId, u32>,
     /// The JSON Schema each descriptor type carries, for the types that have
     /// one (`codegen::descriptor_schema`).
     pub descriptor_schemas: BTreeMap<Type, String>,

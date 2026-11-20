@@ -381,6 +381,7 @@ impl<V: Visitor> Walk<'_, V> {
             | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
+            | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }

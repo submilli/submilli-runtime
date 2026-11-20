@@ -41,6 +41,7 @@ mod nullish;
 mod number_remainder;
 pub mod recursive_validators;
 mod runtime_descriptors;
+pub(crate) mod template_objects;
 pub(crate) use runtime_descriptors::entry_type_arguments;
 mod runtime_values;
 pub mod string_pool;
@@ -1933,9 +1934,12 @@ fn codegen_inner(
     )?;
     let descriptor_globals_count =
         runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx)?;
+    let template_object_globals_count =
+        template_objects::allocate_globals(ta, &mut globals, &mut symbols, &mut next_global_idx)?;
     if [
         adapter_closure_globals_count,
         descriptor_globals_count,
+        template_object_globals_count,
         globals_count,
         vtable_globals_count,
         field_names_globals_count,
@@ -2734,6 +2738,7 @@ function main(): string {
             undefined: 51,
             type_descriptor: 52,
             callable_shape: 53,
+            frozen_array: 54,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,
@@ -6725,6 +6730,7 @@ function main(): void {
             | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
+            | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
@@ -6883,6 +6889,7 @@ function main(): void {
             undefined: 51,
             type_descriptor: 52,
             callable_shape: 53,
+            frozen_array: 54,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,

@@ -29,6 +29,30 @@ pub enum TypedExprKind {
         source: String,
         flags: String,
     },
+    /// The template object of one tagged template site (ECMAScript's
+    /// GetTemplateObject): the first argument of `` tag`a${x}b` ``.
+    ///
+    /// It is an array whose elements are `cooked`, where `None` is `undefined`
+    /// (an escape no string can hold, which only a tagged template allows). Its
+    /// property `raw` holds the array of `raw`: each part's source text with
+    /// escapes unprocessed and line terminators normalized to `\n`. Both arrays
+    /// are frozen, so a write throws `TypeError`. `raw` is non-enumerable,
+    /// non-writable and non-configurable: `Object.keys`, a spread, `for…in` and
+    /// `JSON.stringify` see the elements only, and `"raw" in` it is `true`.
+    ///
+    /// `cooked.len() == raw.len()`, one more than the template's substitutions.
+    /// The strings are encoded as `String`'s are: a lone surrogate is written
+    /// with the marker encoding of `literal_units`.
+    /// Every evaluation of one node gives the same object; two nodes give two
+    /// objects, even with equal strings. `TypedExpr.ty` is `readonly string[]`.
+    ///
+    /// A front end writes the tagged template as the call node its tag takes,
+    /// with this node as the first argument and the substitutions after it.
+    /// The engine typechecker does not produce it.
+    TemplateObject {
+        cooked: Vec<Option<String>>,
+        raw: Vec<String>,
+    },
     LocalRef {
         ident: Ident,
         boxed: bool,
