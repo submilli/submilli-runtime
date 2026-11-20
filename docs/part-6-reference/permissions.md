@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bc2fe2fa8c4eec6cb565370097401effea522b4b095e475661247285b568511f"
+  contentHash: "3b00ebc8ba5da974fb396ea00effb029cbcab5329cca64a308b0834cba6d00ad"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -170,11 +170,23 @@ out, and a condition on a missing field is false.
 
 ### Checks some operations make
 
-- **Git:** `git.clone` and `git.fetch` are checked with the branch the call
-  names, then once for each branch fetched. A call that names none is
-  checked with `branch` set to `""`, so a rule testing `branch` matches only
-  calls that name it. `git.clone` needs no `git.init` or `fs.*` rule.
-  Reading history, staging, and branching aren't gated.
+- **Git:** `git.open` is checked with the normalized absolute repository
+  path before the runtime looks for repository metadata. A denial is the
+  same whether that path is a repository. `Repository.open` and
+  `new Repository(path)` both check it. `git.read` is checked on every
+  inspection (`status`, `log`, `diff`, `show`, `ls`, `branches`,
+  `remotes`), and `git.write` on staging, branch creation, branch
+  switching, and remote configuration. Each check uses the caller whose
+  code is running, so a repository handle does not transfer permission.
+  `git.clone` and `git.fetch` are checked with the branch the call names,
+  then once for each branch fetched. A call that names none is checked
+  with `branch` set to `""`, so a rule testing `branch` matches only calls
+  that name it. `git.clone` needs no `git.init`, `git.open`, or `fs.*`
+  rule. `git.init`, `git.clone`, `git.fetch`, and `git.commit` stay
+  separate from `git.open`, `git.read`, and `git.write`: an older grant of
+  only those four does not open, inspect, stage, branch, or configure
+  remotes. Add `git.open`, `git.read`, and `git.write` for the repository
+  path when upgrading a Blueprint or package that does.
 - **HTTP redirects:** each redirect is checked before it is sent, with the
   new URL's `host` and `path`, under the same caller. A redirect that turns
   the request into a `GET` is checked as `http.get`, or for `request`, as
@@ -221,6 +233,9 @@ read checks the requested alias name and grants no access to its target name.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
+| `git.open` | `path: string` | Open an existing repository; a denial does not reveal whether it exists | `path == "/repo"` |
+| `git.read` | `path: string` | Inspect status, history, diffs, files, branches, and remotes | `path == "/repo"` |
+| `git.write` | `path: string` | Stage paths, create or switch branches, and configure remotes | `path == "/repo"` |
 | `git.init` | `path: string` | Create a local repository and its VFS directory | `path == "/repo"` |
 | `git.clone` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Clone an HTTPS repository into a VFS directory | `path == "/repo" and remote == "https://github.com/pied-piper/project.git"` |
 | `git.fetch` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Fetch or pull HTTPS remote branches into an existing repository | `path == "/repo" and remote == "https://github.com/pied-piper/project.git"` |

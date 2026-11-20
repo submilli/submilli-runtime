@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a7bfe25e6d00ced5277b44a29e7d368ea4d1b8008afa5df075a9ab158b591850"
+  contentHash: "49093d910ff09a12104b331d3f2566de5ed582e60cd541c7c93919c9d5460e30"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -108,7 +108,7 @@ class Repository {
 }
 ```
 
-Git has four capabilities:
+Git has seven capabilities:
 
 ```sh
 submilli blueprint capability list submilli:git
@@ -116,6 +116,15 @@ submilli blueprint capability list submilli:git
 
 ```text
 submilli:git
+  git.open — Open an existing repository; a denial does not reveal whether it exists
+      fields: path: string
+      example filter: path == "/repo"
+  git.read — Inspect status, history, diffs, files, branches, and remotes
+      fields: path: string
+      example filter: path == "/repo"
+  git.write — Stage paths, create or switch branches, and configure remotes
+      fields: path: string
+      example filter: path == "/repo"
   git.init — Create a local repository and its VFS directory
       fields: path: string
       example filter: path == "/repo"
@@ -161,6 +170,7 @@ read, list, and edit under it:
 ```sh
 submilli blueprint capability add git.clone \
   --filter 'path == "/repo" and remote == "https://github.com/octocat/Hello-World.git"'
+submilli blueprint capability add git.write --filter 'path == "/repo"'
 submilli blueprint capability add git.commit --filter 'path == "/repo"'
 submilli blueprint capability add fs.read --filter 'path == "/repo" or path glob "/repo/*"'
 submilli blueprint capability add fs.list --filter 'path == "/repo" or path glob "/repo/*"'
@@ -172,6 +182,9 @@ submilli blueprint capability add fs.stat
 ✓ added allow git.clone (filter: path == "/repo" and remote == "https://github.com/octocat/Hello-World.git") to caller 'main' in blueprint.yaml
   Clone an HTTPS repository into a VFS directory
   filter fields: path: string, remoteName: string, remote: string, branch: string
+✓ added allow git.write (filter: path == "/repo") to caller 'main' in blueprint.yaml
+  Stage paths, create or switch branches, and configure remotes
+  filter fields: path: string
 ✓ added allow git.commit (filter: path == "/repo") to caller 'main' in blueprint.yaml
   Commit staged changes with blueprint identity
   filter fields: path: string, branch: string
@@ -190,12 +203,17 @@ submilli blueprint capability add fs.stat
 ```
 
 Each operation needs its own rule and no other. `git.clone` creates and
-fills `/repo` with no `fs` rule. Reading history, staging, creating or
-switching branches, and adding remotes need no rule at all. `fs.stat` is
+fills `/repo` with no `fs` rule and no `git.open` rule. The example stages
+with `add`, so it also needs `git.write` for `/repo`. Opening an existing
+repository needs `git.open`, and inspection needs `git.read`; neither comes
+with `git.clone` or `git.commit`. A repository value does not carry the
+grant: the caller whose code runs the method is checked again. `fs.stat` is
 left unfiltered because the workspace tools look for ignore files up to
 the root before a search, and `stat` reveals only metadata. `remote` is
 the full HTTPS URL. Refer to [permissions](/docs/reference/permissions)
-for how it is normalized and for filtering on `branch`.
+for how paths are normalized, for filtering on `branch`, and for the rules
+an existing Blueprint needs when it starts opening, reading, or changing a
+repository locally.
 
 If the program should fetch or pull later, grant `git.fetch` for the same
 path:
@@ -264,6 +282,9 @@ permissions:
   main:
   - capability: git.clone
     filter: path == "/repo" and remote == "https://github.com/octocat/Hello-World.git"
+    action: allow
+  - capability: git.write
+    filter: path == "/repo"
     action: allow
   - capability: git.commit
     filter: path == "/repo"

@@ -90,6 +90,8 @@ git:
 permissions:
   main:
     - { capability: git.init, action: allow }
+    - { capability: git.write, action: allow }
+    - { capability: git.read, action: allow }
     - { capability: fs.write, action: allow }
     - capability: git.commit
       action: allow

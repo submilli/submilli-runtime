@@ -641,8 +641,8 @@ async fn smart_http_clone_and_fast_forward_pull() {
     let vfs = Vfs::tempdir().unwrap();
     let mut data = test_data(vfs.clone());
     data.http_client = http.clone();
-    data.security_check = Arc::new(GitOnly {
-        capability: "git.clone",
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.clone", "git.read"],
     });
     run_source(
         r#"
@@ -661,8 +661,8 @@ async fn smart_http_clone_and_fast_forward_pull() {
     native(upstream.path(), &["commit", "-am", "two"]);
     let mut data = test_data(vfs.clone());
     data.http_client = http;
-    data.security_check = Arc::new(GitOnly {
-        capability: "git.fetch",
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.fetch", "git.open", "git.read"],
     });
     run_source(
         r#"
@@ -703,13 +703,13 @@ impl SecretProvider for Token {
     }
 }
 
-struct GitOnly {
-    capability: &'static str,
+struct GitGrants {
+    allowed: &'static [&'static str],
 }
-impl SecurityCheck for GitOnly {
+impl SecurityCheck for GitGrants {
     fn check(&self, caller: &str, capability: &str, context: &Value) -> CheckOutcome {
         assert_eq!(caller, "main");
-        if capability == self.capability && context["path"] == "/repo" {
+        if self.allowed.contains(&capability) && context["path"] == "/repo" {
             CheckOutcome::Allow { rule: None }
         } else {
             CheckOutcome::Deny {
@@ -741,8 +741,8 @@ async fn clone_grant_includes_authentication_without_other_grants() {
     let mut data = test_data(Vfs::tempdir().unwrap());
     data.http_client = http.clone();
     data.secret_provider = secret.clone();
-    data.security_check = Arc::new(GitOnly {
-        capability: "git.fetch",
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.fetch"],
     });
     let denied_vfs = data.vfs.clone();
     run_source(
@@ -763,16 +763,21 @@ async fn clone_grant_includes_authentication_without_other_grants() {
     let mut data = test_data(Vfs::tempdir().unwrap());
     data.http_client = http;
     data.secret_provider = secret.clone();
-    data.security_check = Arc::new(GitOnly {
-        capability: "git.clone",
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.clone"],
     });
+    let cloned = data.vfs.clone();
     run_source(
         r#"
         import { Repository } from "submilli:git";
         function main(): void {
             const repo = Repository.clone("https://example.com/repo.git", "/repo");
-            assert(repo.status().clean);
-            assert(repo.log().commits.length === 1);
+            let readDenied = "";
+            try { repo.status(); }
+            catch (e: PermissionDeniedError) {
+                readDenied = e.caller + "|" + e.capability + "|" + e.reason;
+            }
+            if (readDenied !== "main|git.read|not granted") throw new Error("read after clone: " + readDenied);
             let fetchDenied = false;
             try { repo.fetch(); }
             catch (e: PermissionDeniedError) { fetchDenied = true; }
@@ -786,15 +791,19 @@ async fn clone_grant_includes_authentication_without_other_grants() {
         data,
     )
     .await;
+    assert_eq!(
+        std::fs::read_to_string(cloned.root().join("repo/hello")).unwrap(),
+        "one"
+    );
     assert!(secret.0.load(Ordering::Relaxed) > 0);
 }
 
 #[tokio::test]
-async fn init_and_commit_grants_leave_local_work_ungated() {
+async fn init_and_commit_remain_separate_from_repository_access() {
     let vfs = Vfs::tempdir().unwrap();
     let mut data = test_data(vfs.clone());
-    data.security_check = Arc::new(GitOnly {
-        capability: "git.init",
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.init"],
     });
     run_source(
         r#"
@@ -818,7 +827,9 @@ async fn init_and_commit_grants_leave_local_work_ungated() {
     native(&root, &["add", "."]);
     native(&root, &["commit", "-m", "one"]);
     let mut data = test_data(vfs.clone());
-    data.security_check = Arc::new(GitOnly { capability: "" });
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.open", "git.read", "git.write"],
+    });
     run_source(
         r#"
         import { Repository } from "submilli:git";
@@ -828,6 +839,7 @@ async fn init_and_commit_grants_leave_local_work_ungated() {
             assert(repo.log().commits.length === 1);
             repo.diff();
             repo.show("HEAD", "hello");
+            repo.ls("HEAD", "");
             repo.createBranch("topic");
             repo.switchBranch("topic");
             assert(repo.branches().length === 2);
@@ -845,23 +857,214 @@ async fn init_and_commit_grants_leave_local_work_ungated() {
     )
     .await;
     std::fs::write(root.join("hello"), "two").unwrap();
-    let mut data = test_data(vfs);
-    data.security_check = Arc::new(GitOnly {
-        capability: "git.commit",
+    native(&root, &["add", "hello"]);
+    let mut data = test_data(vfs.clone());
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.open", "git.commit"],
     });
     run_source(
         r#"
         import { Repository } from "submilli:git";
         function main(): void {
             const repo = Repository.open("/repo");
-            repo.add(["hello"]);
+            let writeDenied = "";
+            try { repo.add(["hello"]); }
+            catch (e: PermissionDeniedError) {
+                writeDenied = e.caller + "|" + e.capability + "|" + e.reason;
+            }
+            if (writeDenied !== "main|git.write|not granted") throw new Error("stage before commit: " + writeDenied);
             repo.commit("two");
-            assert(repo.log().commits[0].message === "two");
         }
     "#,
         data,
     )
     .await;
+    let committed = String::from_utf8(native(&root, &["log", "-1", "--format=%s"])).unwrap();
+    assert_eq!(committed.trim(), "two");
+}
+
+const MEMORY_PACKAGE: &str = "@submilli/memory";
+
+struct MemoryPolicy;
+
+impl SecurityCheck for MemoryPolicy {
+    fn check(&self, caller: &str, capability: &str, context: &Value) -> CheckOutcome {
+        let path = context.get("path").and_then(Value::as_str).unwrap_or("");
+        let allowed = caller == MEMORY_PACKAGE
+            && path == "/memory"
+            && matches!(
+                capability,
+                "git.open" | "git.read" | "git.write" | "git.init" | "git.commit"
+            );
+        if allowed {
+            CheckOutcome::Allow { rule: None }
+        } else {
+            CheckOutcome::Deny {
+                rule: None,
+                reason: "not granted".into(),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn repository_access_follows_the_current_caller_and_path() {
+    let vfs = Vfs::tempdir().unwrap();
+    let memory = vfs.root().join("memory");
+    std::fs::create_dir(&memory).unwrap();
+    native(&memory, &["init", "-q", "-b", "main"]);
+    native(&memory, &["config", "user.name", "Native"]);
+    native(&memory, &["config", "user.email", "native@example.com"]);
+    std::fs::write(memory.join("hello"), "one").unwrap();
+    native(&memory, &["add", "."]);
+    native(&memory, &["commit", "-m", "one"]);
+
+    let package = crate::compile_package(
+        MEMORY_PACKAGE,
+        crate::ModulePath::from("lib"),
+        &[crate::PackageSourceModule {
+            path: crate::ModulePath::from("lib"),
+            source: r#"
+                import { Repository } from "submilli:git";
+                export function open(path: string): Repository {
+                    return Repository.open(path);
+                }
+                export function deniedOpen(path: string): string {
+                    try { Repository.open(path); return "allowed"; }
+                    catch (error: PermissionDeniedError) {
+                        return error.caller + "|" + error.capability + "|" + error.reason + "|" + error.message;
+                    }
+                }
+                export function inspect(repo: Repository): string {
+                    const status = repo.status();
+                    const history = repo.log({ limit: 1 });
+                    const diff = repo.diff();
+                    const shown = new TextDecoder().decode(repo.show("HEAD", "hello"));
+                    const listed = repo.ls("HEAD", "");
+                    return status.clean + ":" + history.commits.length + ":" + diff.patch.length
+                        + ":" + shown + ":" + listed.length + ":" + repo.branches().length
+                        + ":" + repo.remotes().length;
+                }
+                export function change(repo: Repository): void {
+                    repo.add(["hello"]);
+                    repo.createBranch("topic");
+                    repo.switchBranch("topic");
+                    repo.addRemote("origin", "https://example.com/repo.git");
+                    repo.setRemoteUrl("origin", "https://example.com/other.git");
+                }
+                export function branchCount(repo: Repository): number {
+                    return repo.branches().length;
+                }
+            "#,
+        }],
+        &[],
+    )
+    .unwrap_or_else(|error| panic!("{error:#?}"));
+
+    let mut data = test_data(vfs.clone());
+    data.security_check = Arc::new(MemoryPolicy);
+    run_with_package(
+        r#"
+        import { Repository } from "submilli:git";
+        import { open, deniedOpen, inspect, change, branchCount } from "@submilli/memory";
+        function denial(path: string): string {
+            try { Repository.open(path); return "allowed"; }
+            catch (error: PermissionDeniedError) {
+                return error.caller + "|" + error.capability + "|" + error.reason + "|" + error.message;
+            }
+        }
+        function main(): void {
+            const missing = denial("/missing");
+            const existing = denial("/memory");
+            let constructed = "";
+            try { new Repository("/memory"); constructed = "allowed"; }
+            catch (error: PermissionDeniedError) {
+                constructed = error.caller + "|" + error.capability + "|" + error.reason + "|" + error.message;
+            }
+            let constructedMissing = "";
+            try { new Repository("/absent"); constructedMissing = "allowed"; }
+            catch (error: PermissionDeniedError) {
+                constructedMissing = error.caller + "|" + error.capability + "|" + error.reason + "|" + error.message;
+            }
+            if (missing !== existing) throw new Error("open errors differ: [" + missing + "] [" + existing + "]");
+            if (constructed !== existing) throw new Error("constructor error differs: [" + constructed + "]");
+            if (constructedMissing !== missing) throw new Error("absent constructor differs: [" + constructedMissing + "]");
+            if (missing.indexOf("main|git.open|not granted|") !== 0) throw new Error("main denial: " + missing);
+            if (missing.indexOf("not found") >= 0 || missing.indexOf("does not exist") >= 0) {
+                throw new Error("denial reveals existence: " + missing);
+            }
+
+            const packageMissing = deniedOpen("/missing");
+            if (packageMissing.indexOf("@submilli/memory|git.open|not granted|") !== 0) throw new Error("package denial: " + packageMissing);
+            if (packageMissing !== deniedOpen("/other")) throw new Error("package path errors differ: " + deniedOpen("/other"));
+
+            const repo = open("/memory");
+            assert(open("memory") instanceof Repository);
+            function denied(capability: string, call: () => void): void {
+                try { call(); throw new Error("allowed " + capability); }
+                catch (error: PermissionDeniedError) {
+                    const actual = error.caller + "|" + error.capability + "|" + error.reason;
+                    if (actual !== "main|" + capability + "|not granted") throw new Error(capability + ": " + actual);
+                }
+            }
+            denied("git.read", () => { repo.status(); });
+            denied("git.read", () => { repo.log(); });
+            denied("git.read", () => { repo.diff(); });
+            denied("git.read", () => { repo.show("HEAD", "hello"); });
+            denied("git.read", () => { repo.ls("HEAD", ""); });
+            denied("git.read", () => { repo.branches(); });
+            denied("git.read", () => { repo.remotes(); });
+            denied("git.write", () => { repo.add(["hello"]); });
+            denied("git.write", () => { repo.createBranch("smuggled"); });
+            denied("git.write", () => { repo.switchBranch("topic"); });
+            denied("git.write", () => { repo.addRemote("origin", "https://example.com/repo.git"); });
+            denied("git.write", () => { repo.setRemoteUrl("origin", "https://example.com/other.git"); });
+
+            const report = inspect(repo);
+            if (report !== "true:1:0:one:1:1:0") throw new Error("inspect: " + report);
+            change(repo);
+            if (branchCount(repo) !== 2) throw new Error("branches: " + branchCount(repo));
+        }
+        "#,
+        &package,
+        data,
+    )
+    .await;
+    assert!(!vfs.root().join("missing").exists());
+    assert!(!vfs.root().join("absent").exists());
+    assert!(!vfs.root().join("other").exists());
+    native(&memory, &["rev-parse", "--verify", "topic"]);
+}
+
+async fn run_with_package(source: &str, package: &crate::CompiledPackage, mut data: StoreData) {
+    let compiled = crate::compile_script(
+        source,
+        "git.ts",
+        crate::FileId(0),
+        &[&package.declaration],
+        &[],
+    )
+    .unwrap_or_else(|error| panic!("{error:#?}"));
+    let cfg = RuntimeConfig::default();
+    let engine = cfg.engine().unwrap();
+    data.install_type_info(compiled.type_info.clone());
+    let mut store = cfg.store(&engine, data).unwrap();
+    let script = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+    let package_module = wasmtime::Module::new(&engine, &package.wasm).unwrap();
+    let mut linker = Linker::new(&engine);
+    install_runtime_async(&mut linker, &mut store)
+        .await
+        .unwrap();
+    let linked = [crate::runtime::LinkedPackageModule {
+        module: &package_module,
+        declaration: &package.declaration,
+        type_info: &package.type_info,
+    }];
+    crate::runtime::install_package_modules_async(&mut linker, &mut store, &linked)
+        .await
+        .unwrap();
+    let instance = linker.instantiate_async(&mut store, &script).await.unwrap();
+    dispatch_main_async(&mut store, &instance).await.unwrap();
 }
 
 #[test]
@@ -1045,6 +1248,9 @@ fn repository_docs_expose_class_factories_and_capabilities() {
         "static open(",
         "static init(",
         "static clone(",
+        "@capability git.open",
+        "@capability git.read",
+        "@capability git.write",
         "@capability git.init",
         "@capability git.clone",
         "@capability git.fetch",
