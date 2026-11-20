@@ -83,6 +83,13 @@ impl Job {
         }
     }
 
+    /// Check `capability` for this caller and the already-normalized repository path.
+    /// Call it before any repository metadata is read, so a denial is the same for a
+    /// missing path and an existing repository.
+    fn authorize(&self, capability: &str) -> Result<()> {
+        self.check(capability, serde_json::json!({"path": self.path}))
+    }
+
     fn check(&self, capability: &str, context: Value) -> Result<()> {
         self.check_cancelled()?;
         // Git's decisions are made on a worker thread, after the program's stack is gone;
@@ -152,43 +159,51 @@ impl Drop for CancelOnDrop {
 }
 
 fn open(vfs: &Vfs, job: &Job, (): ()) -> Result<()> {
+    job.authorize("git.open")?;
     let (_permit, _snapshot) = worker::open_repository(vfs, job)?;
     Ok(())
 }
 
 fn status(vfs: &Vfs, job: &Job, (): ()) -> Result<Value> {
+    job.authorize("git.read")?;
     let (_permit, snapshot) = worker::open_repository(vfs, job)?;
     operations::status(&snapshot)
 }
 
 fn branches(vfs: &Vfs, job: &Job, (): ()) -> Result<Value> {
+    job.authorize("git.read")?;
     let (_permit, snapshot) = worker::open_repository(vfs, job)?;
     operations::branches(&snapshot)
 }
 
 fn remotes(vfs: &Vfs, job: &Job, (): ()) -> Result<Value> {
+    job.authorize("git.read")?;
     let (_permit, snapshot) = worker::open_repository(vfs, job)?;
     operations::remotes(&snapshot)
 }
 
 fn log(vfs: &Vfs, job: &Job, arguments: Value) -> Result<Value> {
+    job.authorize("git.read")?;
     worker::validate_branch_options(&arguments)?;
     let (_permit, snapshot) = worker::open_repository(vfs, job)?;
     operations::log(&snapshot, &arguments)
 }
 
 fn diff(vfs: &Vfs, job: &Job, arguments: Value) -> Result<Value> {
+    job.authorize("git.read")?;
     worker::validate_branch_options(&arguments)?;
     let (_permit, snapshot) = worker::open_repository(vfs, job)?;
     diff::read(&snapshot, &arguments)
 }
 
 fn show(vfs: &Vfs, job: &Job, arguments: ShowArguments) -> Result<effects::OutcomeBytes> {
+    job.authorize("git.read")?;
     let (_permit, snapshot) = worker::open_repository(vfs, job)?;
     operations::show(&snapshot, &arguments.revision, &arguments.path).map(effects::OutcomeBytes)
 }
 
 fn ls(vfs: &Vfs, job: &Job, arguments: ListArguments) -> Result<Value> {
+    job.authorize("git.read")?;
     let (_permit, snapshot) = worker::open_repository(vfs, job)?;
     operations::ls(&snapshot, &arguments.revision, &arguments.path)
 }
@@ -219,6 +234,7 @@ fn clone_repository(vfs: &Vfs, job: &Job, arguments: CloneArguments) -> Result<(
 }
 
 fn add(vfs: &Vfs, job: &Job, arguments: Vec<String>) -> Result<()> {
+    job.authorize("git.write")?;
     let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
     operations::add(&snapshot, &arguments)?;
     job.check_cancelled()?;
@@ -241,6 +257,7 @@ fn commit(vfs: &Vfs, job: &Job, arguments: String) -> Result<String> {
 }
 
 fn create_branch(vfs: &Vfs, job: &Job, arguments: BranchArguments) -> Result<()> {
+    job.authorize("git.write")?;
     let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
     operations::create_branch(&snapshot, &arguments.name, &arguments.start)?;
     job.check_cancelled()?;
@@ -250,6 +267,7 @@ fn create_branch(vfs: &Vfs, job: &Job, arguments: BranchArguments) -> Result<()>
 }
 
 fn switch_branch(vfs: &Vfs, job: &Job, arguments: String) -> Result<()> {
+    job.authorize("git.write")?;
     let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
     operations::checkout(&snapshot, &arguments)?;
     job.check_cancelled()?;
@@ -259,6 +277,7 @@ fn switch_branch(vfs: &Vfs, job: &Job, arguments: String) -> Result<()> {
 }
 
 fn add_remote(vfs: &Vfs, job: &Job, arguments: RemoteArguments) -> Result<()> {
+    job.authorize("git.write")?;
     let (_permit, mut snapshot) = worker::open_repository_for_write(vfs, job)?;
     operations::add_remote(&mut snapshot, &arguments.name, &arguments.url)?;
     job.check_cancelled()?;
@@ -268,6 +287,7 @@ fn add_remote(vfs: &Vfs, job: &Job, arguments: RemoteArguments) -> Result<()> {
 }
 
 fn set_remote_url(vfs: &Vfs, job: &Job, arguments: RemoteArguments) -> Result<()> {
+    job.authorize("git.write")?;
     let (_permit, mut snapshot) = worker::open_repository_for_write(vfs, job)?;
     operations::set_remote_url(&mut snapshot, &arguments.name, &arguments.url)?;
     job.check_cancelled()?;

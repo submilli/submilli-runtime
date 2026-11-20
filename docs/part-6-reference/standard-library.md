@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b3c7cf0c7549a03049e24db77dfaca54dc461166e999fac569ac1eac447abc01"
+  contentHash: "0ae29fb2a3e1dbf6a281108b47065f3d8c772d33381385b922860ba9e1f1f283"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -25,7 +25,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:llm` | Model calls: `text`, `texts`, `call`, `batch`, `models` | `llm.call`; `fs.read` for files |
 | `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
-| `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull | `git.init`, `git.clone`, `git.fetch`, `git.commit` |
+| `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull | `git.open`, `git.read`, `git.write`, `git.init`, `git.clone`, `git.fetch`, `git.commit` |
 | `submilli:code` | Numbered reads, search, glob, tree, anchored edits, and diffs over the program's files | `fs.read`, `fs.list`, `fs.stat`, `fs.write` |
 | `submilli:crypto` | SHA-256, SHA-512, HMAC-SHA-256, random bytes | Nothing |
 | `submilli:url` | URL and query-string parsing and building | Nothing |
@@ -99,16 +99,15 @@ Blueprint's `git` block sets the identity that authors every commit and the
 
 | Method | Capability | Behavior |
 | --- | --- | --- |
-| `Repository.init` | `git.init` | Creates the directory and refuses an existing repository |
-| `Repository.clone` | `git.clone` | Needs no `git.init`, `git.fetch` or `fs.*` rule |
-| `Repository.open`, constructor | None | Opens `path`'s `.git` directory |
-| `status`, `log`, `diff`, `show`, `ls`, `branches`, `remotes` | None | Read only. `ls` lists one directory at a commit; `log` can start at a ref and keep only commits that changed one file |
-| `add` | None | At most 10,000 paths per call, `.` selects the working tree, and deletions are staged |
-| `commit` | `git.commit` (`branch` is the current branch) | Refuses an empty message and an empty commit |
-| `createBranch` | None | Never overwrites an existing branch |
-| `switchBranch` | None | Requires a clean working tree, untracked files included |
-| `addRemote`, `setRemoteUrl` | None | HTTPS URLs only |
-| `fetch` | `git.fetch` | Defaults to `origin`. With no branch, fetches every remote branch and checks each |
+| `Repository.init` | `git.init` | Creates the directory and refuses an existing repository. Does not require `git.open` |
+| `Repository.clone` | `git.clone` | Needs no `git.init`, `git.open`, `git.fetch` or `fs.*` rule |
+| `Repository.open`, constructor | `git.open` | Opens `path`'s `.git` directory. A denial is the same whether the repository exists. Checked again for the current caller on every later call |
+| `status`, `log`, `diff`, `show`, `ls`, `branches`, `remotes` | `git.read` | Read only. `ls` lists one directory at a commit; `log` can start at a ref and keep only commits that changed one file |
+| `add` | `git.write` | At most 10,000 paths per call, `.` selects the working tree, and deletions are staged |
+| `commit` | `git.commit` (`branch` is the current branch) | Refuses an empty message and an empty commit. Does not require `git.write` |
+| `createBranch`, `switchBranch` | `git.write` | `createBranch` never overwrites an existing branch. `switchBranch` requires a clean working tree, untracked files included |
+| `addRemote`, `setRemoteUrl` | `git.write` | HTTPS URLs only |
+| `fetch` | `git.fetch` | Defaults to `origin`. With no branch, fetches every remote branch and checks each. Does not require `git.write` |
 | `pull` | `git.fetch` | Fetches and fast-forwards the current branch. Refuses divergence and a dirty working tree |
 
 
@@ -540,23 +539,23 @@ A repository under the VFS root.
 | --- | --- | --- |
 | `static clone(url: string, path: string, options?: { branch?: string }): Repository` | `git.clone { path, remote: $url, remoteName: "origin", branch: string }` | Clone HTTPS into an empty VFS directory, following remote HEAD unless branch is specified. |
 | `static init(path: string, options?: { branch?: string }): Repository` | `git.init { path }` | Initialize a repository, default branch main. |
-| `static open(path: string): Repository` |  | Open an ordinary repository under the VFS root. |
+| `static open(path: string): Repository` | `git.open { path }` | Open an ordinary repository under the VFS root. |
 | `constructor(path: string)` |  |  |
-| `add(paths: string[]): void` |  | Stage explicit files or directories, including deletions. |
-| `addRemote(name: string, url: string): void` |  | Add a named HTTPS remote, for example origin or upstream. |
-| `branches(): { current: boolean; id: string; name: string }[]` |  | List local branches. |
+| `add(paths: string[]): void` | `git.write { path: string }` | Stage explicit files or directories, including deletions. |
+| `addRemote(name: string, url: string): void` | `git.write { path: string }` | Add a named HTTPS remote, for example origin or upstream. |
+| `branches(): { current: boolean; id: string; name: string }[]` | `git.read { path: string }` | List local branches. |
 | `commit(message: string): string` | `git.commit { path: string, branch: string }` | Commit staged changes with Blueprint identity and return the commit ID. |
-| `createBranch(name: string, start?: string): void` |  | Create a branch without overwriting an existing branch. |
-| `diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string }` |  | Compare working (default), staged, or refs (requires from and to). |
+| `createBranch(name: string, start?: string): void` | `git.write { path: string }` | Create a branch without overwriting an existing branch. |
+| `diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string }` | `git.read { path: string }` | Compare working (default), staged, or refs (requires from and to). |
 | `fetch(remote?: string, branch?: string): { branches: string[] }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch remote-tracking branches. |
-| `log(options?: { limit?: number; offset?: number; path?: string; ref?: string }): { commits: { authorEmail: string; authorName: string; id: string; message: string }[]; nextOffset?: number }` |  | Read history, default 50 commits from HEAD; limit 1..1000, nonnegative integer offset; path keeps commits that changed that file and ref starts at that commit. |
-| `ls(ref: string, path?: string): { kind: string; path: string }[]` |  | List files and directories in a repository-relative directory at a commit. |
+| `log(options?: { limit?: number; offset?: number; path?: string; ref?: string }): { commits: { authorEmail: string; authorName: string; id: string; message: string }[]; nextOffset?: number }` | `git.read { path: string }` | Read history, default 50 commits from HEAD; limit 1..1000, nonnegative integer offset; path keeps commits that changed that file and ref starts at that commit. |
+| `ls(ref: string, path?: string): { kind: string; path: string }[]` | `git.read { path: string }` | List files and directories in a repository-relative directory at a commit. |
 | `pull(remote?: string, branch?: string): { current: string; previous: string }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch and fast-forward the current branch under git.fetch. |
-| `remotes(): { name: string; url: string }[]` |  | List named remotes without credentials. |
-| `setRemoteUrl(name: string, url: string): void` |  | Update an existing remote's HTTPS URL. |
-| `show(ref: string, path: string): Uint8Array` |  | Read file bytes from a commit. |
-| `status(): { branch?: string; clean: boolean; entries: { path: string; staged: string; unstaged: string; untracked: boolean }[] }` |  | Inspect staged, unstaged and untracked paths. |
-| `switchBranch(name: string): void` |  | Switch local branches; requires a completely clean working tree. |
+| `remotes(): { name: string; url: string }[]` | `git.read { path: string }` | List named remotes without credentials. |
+| `setRemoteUrl(name: string, url: string): void` | `git.write { path: string }` | Update an existing remote's HTTPS URL. |
+| `show(ref: string, path: string): Uint8Array` | `git.read { path: string }` | Read file bytes from a commit. |
+| `status(): { branch?: string; clean: boolean; entries: { path: string; staged: string; unstaged: string; untracked: boolean }[] }` | `git.read { path: string }` | Inspect staged, unstaged and untracked paths. |
+| `switchBranch(name: string): void` | `git.write { path: string }` | Switch local branches; requires a completely clean working tree. |
 
 ## `submilli:http`
 

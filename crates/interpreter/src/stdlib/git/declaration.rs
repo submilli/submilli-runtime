@@ -17,7 +17,7 @@ pub fn package_declaration() -> PackageDeclaration {
         "open",
         vec![string("path")],
         repository_type(),
-        "/** Open an ordinary repository under the VFS root. Gated operations check the current caller's grants. */",
+        "/** Open an ordinary repository under the VFS root. A denial does not reveal whether the repository exists. Later calls check the current caller again.\n * @capability git.open { path }\n */",
     );
     insert_static(
         &mut statics,
@@ -100,7 +100,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             predicate: None,
             doc: crate::doc(
                 FileId::GIT,
-                "/** Inspect staged, unstaged and untracked paths. */",
+                "/** Inspect staged, unstaged and untracked paths.\n * @capability git.read { path: string }\n */",
             ),
         },
     );
@@ -121,7 +121,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 Type::Number,
             ),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Read history, default 50 commits from HEAD; limit 1..1000, nonnegative integer offset; path keeps commits that changed that file and ref starts at that commit. Traversal is resource-bounded. */"),
+            doc: crate::doc(FileId::GIT, "/** Read history, default 50 commits from HEAD; limit 1..1000, nonnegative integer offset; path keeps commits that changed that file and ref starts at that commit. Traversal is resource-bounded.\n * @capability git.read { path: string }\n */"),
         },
     );
     methods.insert(
@@ -142,7 +142,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 false,
             ),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Compare working (default), staged, or refs (requires from and to). Bounded patches and binary path markers. */"),
+            doc: crate::doc(FileId::GIT, "/** Compare working (default), staged, or refs (requires from and to). Bounded patches and binary path markers.\n * @capability git.read { path: string }\n */"),
         },
     );
     methods.insert(
@@ -157,7 +157,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 false,
             )),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** List files and directories in a repository-relative directory at a commit. Omit path for the root. kind is file or directory; a file path can be passed to show. Working-tree and staged changes are not included. */"),
+            doc: crate::doc(FileId::GIT, "/** List files and directories in a repository-relative directory at a commit. Omit path for the root. kind is file or directory; a file path can be passed to show. Working-tree and staged changes are not included.\n * @capability git.read { path: string }\n */"),
         },
     );
     methods.insert(
@@ -169,7 +169,10 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             params: vec![string("ref"), string("path")],
             ret: Type::Uint8Array,
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Read file bytes from a commit. */"),
+            doc: crate::doc(
+                FileId::GIT,
+                "/** Read file bytes from a commit.\n * @capability git.read { path: string }\n */",
+            ),
         },
     );
     methods.insert(
@@ -188,7 +191,10 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 false,
             )),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** List local branches. */"),
+            doc: crate::doc(
+                FileId::GIT,
+                "/** List local branches.\n * @capability git.read { path: string }\n */",
+            ),
         },
     );
     methods.insert(
@@ -205,7 +211,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             predicate: None,
             doc: crate::doc(
                 FileId::GIT,
-                "/** List named remotes without credentials. */",
+                "/** List named remotes without credentials.\n * @capability git.read { path: string }\n */",
             ),
         },
     );
@@ -217,7 +223,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             params: vec![Param::new("paths", array(Type::String))],
             ret: Type::Void,
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Stage explicit files or directories, including deletions. Use . for the working tree. */"),
+            doc: crate::doc(FileId::GIT, "/** Stage explicit files or directories, including deletions. Use . for the working tree.\n * @capability git.write { path: string }\n */"),
         },
     );
     methods.insert(
@@ -242,7 +248,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             predicate: None,
             doc: crate::doc(
                 FileId::GIT,
-                "/** Create a branch without overwriting an existing branch. */",
+                "/** Create a branch without overwriting an existing branch.\n * @capability git.write { path: string }\n */",
             ),
         },
     );
@@ -257,7 +263,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             predicate: None,
             doc: crate::doc(
                 FileId::GIT,
-                "/** Switch local branches; requires a completely clean working tree. */",
+                "/** Switch local branches; requires a completely clean working tree.\n * @capability git.write { path: string }\n */",
             ),
         },
     );
@@ -272,7 +278,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             predicate: None,
             doc: crate::doc(
                 FileId::GIT,
-                "/** Add a named HTTPS remote, for example origin or upstream. */",
+                "/** Add a named HTTPS remote, for example origin or upstream.\n * @capability git.write { path: string }\n */",
             ),
         },
     );
@@ -285,7 +291,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             params: vec![string("name"), string("url")],
             ret: Type::Void,
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Update an existing remote's HTTPS URL. */"),
+            doc: crate::doc(FileId::GIT, "/** Update an existing remote's HTTPS URL.\n * @capability git.write { path: string }\n */"),
         },
     );
     methods.insert(
@@ -345,7 +351,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 implements: vec![],
                 doc: crate::doc(
                     FileId::GIT,
-                    "/** A repository under the VFS root. Construct to open an existing repository, or use Repository.open, Repository.init or Repository.clone. */",
+                    "/** A repository under the VFS root. Construct or use Repository.open to open an existing repository; both check git.open for the current caller. Repository.init and Repository.clone create one. */",
                 ),
             },
         },

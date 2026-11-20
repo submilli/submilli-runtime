@@ -249,6 +249,27 @@ const REMOTE: FilterField = normalized_string_field(
 const REMOTE_NAME: FilterField = field("remoteName", "string", "Named remote, for example origin");
 const GIT: &[Capability] = &[
     Capability {
+        name: "git.open",
+        main_denial: None,
+        summary: "Open an existing repository; a denial does not reveal whether it exists",
+        filter_fields: &[PATH],
+        example_filter: "path == \"/repo\"",
+    },
+    Capability {
+        name: "git.read",
+        main_denial: None,
+        summary: "Inspect status, history, diffs, files, branches, and remotes",
+        filter_fields: &[PATH],
+        example_filter: "path == \"/repo\"",
+    },
+    Capability {
+        name: "git.write",
+        main_denial: None,
+        summary: "Stage paths, create or switch branches, and configure remotes",
+        filter_fields: &[PATH],
+        example_filter: "path == \"/repo\"",
+    },
+    Capability {
         name: "git.init",
         main_denial: None,
         summary: "Create a local repository and its VFS directory",
@@ -698,7 +719,8 @@ pub fn vfs_path_fields(capability: &str) -> &'static [&'static str] {
     match capability {
         "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
         "fs.copy" | "fs.move" => &["from", "to"],
-        "git.init" | "git.clone" | "git.fetch" | "git.commit" => &["path"],
+        "git.open" | "git.read" | "git.write" | "git.init" | "git.clone" | "git.fetch"
+        | "git.commit" => &["path"],
         "http.download" => &["vfs_path"],
         _ => &[],
     }

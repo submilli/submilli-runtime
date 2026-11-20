@@ -237,9 +237,11 @@ call waits until they do. Approved, it runs as usual. Declined, or not decided i
 `PermissionDeniedError`, and that answer is final like any denial. A one-off execute can't wait, \
 so there such a call throws `PermissionDeniedError` at once.";
 
-const GIT_GUIDANCE: &str = "Git is available as `submilli:git`. Read its package docs before use; \
-    init, clone, fetch/pull, and commit require their respective Git capabilities. \
-    Other local operations need no Git capability. Push is not available.";
+const GIT_GUIDANCE: &str = "Git is available as `submilli:git`. Read its package docs before use. \
+    Opening a repository requires `git.open`, inspection requires `git.read`, and staging, \
+    branching, and remote configuration require `git.write`. init, clone, fetch/pull, and commit \
+    require their respective Git capabilities. A repository handle does not carry those grants. \
+    Push is not available.";
 
 const LLM_GUIDANCE: &str = r#"Model calls (`submilli:llm`): `text(model, prompt)` returns a
 `Completion<string>` — `{ ok: true, value }` or `{ ok: false, reason, message }`
