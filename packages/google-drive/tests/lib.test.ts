@@ -5,6 +5,7 @@ import {
     FileUploadOptions,
     FileDownloadOptions,
     ShareFileInput,
+    about,
     getFile,
 } from "@submilli/google-drive";
 
@@ -36,6 +37,7 @@ function main(): void {
 
     label("an unbound access token is reported before any request");
     assert(failure(() => { getFile("file1"); }) === "missing_token", "no token");
+    assert(failure(() => { about(); }) === "missing_token", "about reports a missing token");
 }
 
 function failure(call: () => void): string {

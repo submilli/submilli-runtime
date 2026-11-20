@@ -1,5 +1,8 @@
 namespace: submilli
 provides:
+- name: submilli/google-drive.about
+  description: Read the email of the Google account that granted the access token, via Drive about.get with fields=user(emailAddress) only.
+  fields: {}
 - name: submilli/google-drive.copyFile
   description: Copy a file with an optional new name or parent. `parentId` in the check is the destination folder, or "" when the copy stays beside the source.
   fields:

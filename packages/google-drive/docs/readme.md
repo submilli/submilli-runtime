@@ -2,6 +2,9 @@
 
 Use `@submilli/google-drive` to work with files in My Drive or Shared Drives:
 
+<!-- submilli:if capability="submilli/google-drive.about" -->
+- read the connected account's email
+<!-- submilli:endif -->
 <!-- submilli:if capability="submilli/google-drive.searchFiles" -->
 - find files with structured search
 <!-- submilli:endif -->

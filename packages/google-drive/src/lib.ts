@@ -88,6 +88,16 @@ export interface DriveFile {
     description: string;
 }
 
+/** The Google account that granted the access token. */
+export interface DriveAboutUser {
+    /** Email of the account that granted the access token. */
+    emailAddress: string;
+}
+
+interface ApiAboutUser {
+    user?: { emailAddress?: string | null } | null;
+}
+
 interface ApiFile {
     id: string;
     name: string;
@@ -265,6 +275,24 @@ interface GoogleErrorBody {
 
 interface GoogleErrorDetail {
     reason?: string;
+}
+
+/**
+ * Read the email of the Google account that granted the access token.
+ * Calls Drive `about.get` with `fields=user(emailAddress)` only.
+ * @returns The account email.
+ * @capability submilli/google-drive.about {}
+ */
+export function about(): DriveAboutUser {
+    check("submilli/google-drive.about", {});
+    const query = new Map<string, string>();
+    query.set("fields", "user(emailAddress)");
+    const body = driveGet("/about", query).json<ApiAboutUser>();
+    const email = body.user === undefined || body.user === null ? "" : (body.user.emailAddress ?? "");
+    if (!BARE_ADDRESS.test(email)) {
+        throw new DriveError("missing_email", "Drive about did not return a user email address", 0);
+    }
+    return { emailAddress: email };
 }
 
 /**
