@@ -405,9 +405,11 @@ impl Inferer<'_> {
                         span,
                     });
                 }
-                if self.reachable {
-                    self.validate_type_predicate_return(id, span)?;
-                }
+                let id = if self.reachable {
+                    self.check_type_guard_return(id, span)?
+                } else {
+                    id
+                };
                 Some(id)
             }
             None => {

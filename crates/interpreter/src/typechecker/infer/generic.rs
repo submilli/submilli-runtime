@@ -649,7 +649,7 @@ impl Inferer<'_> {
             if let Some(pred) = &resolved_predicate {
                 let idx = pred.parameter_index as usize;
                 if let Some(param) = params.get(idx) {
-                    self.current_type_predicate = Some((pred.clone(), param.name.name.clone()));
+                    self.current_type_predicate = Some((pred.clone(), param.name.clone()));
                 }
             }
             // Snapshot arena lengths to bound which IDs this body walk allocates —

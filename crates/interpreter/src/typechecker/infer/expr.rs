@@ -11692,7 +11692,7 @@ impl Inferer<'_> {
                                 )
                                 .with_span(span)
                             })?;
-                    Ok::<_, CompilerFailure>((pred.clone(), parameter.name.name.clone()))
+                    Ok::<_, CompilerFailure>((pred.clone(), parameter.name.clone()))
                 })
                 .transpose()?,
         );
@@ -11727,7 +11727,7 @@ impl Inferer<'_> {
                 if let Some(declared) = &annotated_ret {
                     self.absorb_missing_into(id, declared)?;
                 }
-                self.validate_type_predicate_return(id, span)?;
+                let id = self.check_type_guard_return(id, span)?;
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary
                 // binding and re-checks the cast per call.
