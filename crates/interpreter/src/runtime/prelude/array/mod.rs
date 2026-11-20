@@ -84,6 +84,41 @@ fn box_number(caller: &mut Caller<'_, StoreData>, n: f64) -> wasmtime::Result<Va
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
+/// A tagged template's template object's `raw` array, or `None` for any other
+/// value (its `raw` array included). `raw` is a non-enumerable, read-only,
+/// non-configurable own property: reads, `in` and `Object.hasOwn` see it, and
+/// `Object.keys`, a spread, `for…in` and `JSON.stringify` do not.
+pub(crate) fn template_raw(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+) -> wasmtime::Result<Option<Val>> {
+    use crate::runtime::host::fatal_host_error;
+    let Val::AnyRef(Some(any)) = val else {
+        return Ok(None);
+    };
+    let Some(st) = any.as_struct(&mut *caller).map_err(fatal_host_error)? else {
+        return Ok(None);
+    };
+    let intr = intrinsic_types(&mut *caller)?;
+    if !st
+        .matches_ty(&*caller, &intr.frozen_array)
+        .map_err(fatal_host_error)?
+    {
+        return Ok(None);
+    }
+    let raw = st.field(&mut *caller, 3).map_err(fatal_host_error)?;
+    Ok((!matches!(raw, Val::AnyRef(None))).then_some(raw))
+}
+
+/// Whether `key` names a template object's own `raw` on `val`.
+pub(crate) fn has_template_raw(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    key: &[u16],
+) -> wasmtime::Result<bool> {
+    Ok("raw".encode_utf16().eq(key.iter().copied()) && template_raw(caller, val)?.is_some())
+}
+
 /// Whether `val` is a (non-null) `$Array` — backs `flat`/`flatMap` flattening.
 pub(super) fn is_array(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<bool> {
     let Val::AnyRef(Some(any)) = val else {
@@ -339,6 +374,8 @@ fn push(
     items: Vec<Val>,
 ) -> wasmtime::Result<f64> {
     let mut storage = ArrayStorage::read(caller, receiver)?;
+    // With no items, JavaScript still writes `length`.
+    storage.ensure_writable(caller)?;
     let mut length = f64::from(storage.len);
     for item in items {
         length = storage.push(caller, item)?;
@@ -353,6 +390,8 @@ pub(crate) fn set_length(
     receiver: &Val,
     value: f64,
 ) -> wasmtime::Result<()> {
+    // A frozen `length` is not writable, whatever the value.
+    ArrayStorage::read(caller, receiver)?.ensure_writable(caller)?;
     if !(value >= 0.0 && value.fract() == 0.0 && value <= f64::from(u32::MAX)) {
         return Err(crate::runtime::host::range_error("Invalid array length"));
     }
@@ -381,6 +420,8 @@ fn shift(
     mut elements: Vec<Val>,
 ) -> wasmtime::Result<Val> {
     if elements.is_empty() {
+        // JavaScript still writes `length`.
+        ArrayStorage::read(caller, receiver)?.ensure_writable(caller)?;
         return super::undefined::value(caller);
     }
     let first = elements.remove(0);
@@ -405,6 +446,10 @@ fn reverse(
     receiver: &Val,
     mut elements: Vec<Val>,
 ) -> wasmtime::Result<Val> {
+    // Fewer than two elements swap nothing, so a frozen array does not throw.
+    if elements.len() < 2 {
+        return Ok(*receiver);
+    }
     elements.reverse();
     replace_elements(caller, receiver, &elements)?;
     Ok(*receiver)
@@ -421,6 +466,10 @@ fn fill(
     let len = elements.len() as i32;
     let si = norm_clamp(start, len);
     let ei = norm_clamp(end, len);
+    // An empty range writes nothing, so a frozen array does not throw.
+    if si >= ei {
+        return Ok(*receiver);
+    }
     for slot in elements.iter_mut().take(ei as usize).skip(si as usize) {
         *slot = value;
     }
@@ -444,6 +493,10 @@ fn copy_within(
     let rem = len - ti;
     if count > rem {
         count = rem;
+    }
+    // Copying nothing writes nothing, so a frozen array does not throw.
+    if count <= 0 {
+        return Ok(*receiver);
     }
     // Copy the source span first so overlapping ranges stay memmove-correct.
     let src: Vec<Val> = elements[si as usize..(si + count) as usize].to_vec();
@@ -500,6 +553,12 @@ async fn sort(
     mut elements: Vec<Val>,
     cmp: Option<Closure>,
 ) -> wasmtime::Result<Val> {
+    // Fewer than two elements need no reordering. Node writes nothing back
+    // then, so a frozen array does not throw (the specification would write
+    // a single element back and throw).
+    if elements.len() < 2 {
+        return Ok(*receiver);
+    }
     sort_elems(caller, &mut elements, cmp.as_ref()).await?;
     // Re-read the storage: the comparator may have pushed or popped.
     ArrayStorage::read(caller, receiver)?.overwrite_prefix(caller, &elements)?;

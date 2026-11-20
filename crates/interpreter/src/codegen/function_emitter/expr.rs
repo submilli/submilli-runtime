@@ -144,6 +144,9 @@ fn emit_expr_value(
         TypedExprKind::Regex { source, flags } => {
             emit_regex_literal(emitter, ctx, source, flags)?;
         }
+        TypedExprKind::TemplateObject { cooked, raw } => {
+            crate::codegen::template_objects::emit(emitter, ctx, id, cooked, raw)?;
+        }
         TypedExprKind::Sequence { stmts, result } => {
             for &stmt in stmts {
                 super::stmt::emit_statement(emitter, ctx, stmt)?;
@@ -2884,6 +2887,9 @@ fn emit_index_postfix(
     emit_postfix_delta(emitter, ctx, op, &result_ty);
     let updated = emitter.add_anonymous_local(ctx.symbols.value_type(&result_ty)?)?;
     emitter.instruction(Instruction::LocalSet(updated));
+    if !is_uint8 {
+        crate::codegen::template_objects::emit_write_guard(emitter, ctx, receiver_local)?;
+    }
     // GetValue and PutValue each convert the original property key. Conversion
     // can mutate the array, so reload the backing storage for the write.
     let (backing, position, _) = emit_index_location(

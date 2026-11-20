@@ -907,6 +907,7 @@ fn emit_array_index_store(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_arr_local));
+    crate::codegen::template_objects::emit_write_guard(emitter, ctx, array_local)?;
     // Only the current end can grow a dense array. The RHS may have changed
     // the length, so decide between append and overwrite after it runs.
     emitter.instruction(Instruction::LocalGet(idx_f64_local));

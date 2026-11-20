@@ -81,6 +81,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _| {
             let mut storage =
                 crate::runtime::array_storage::ArrayStorage::read(caller, abi_arg(params, 0)?)?;
+            storage.ensure_writable(caller)?;
             storage.push(caller, *abi_arg(params, 1)?)?;
             Ok(())
         },

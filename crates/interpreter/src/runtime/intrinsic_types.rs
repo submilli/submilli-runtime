@@ -37,6 +37,7 @@ pub(crate) struct IntrinsicTypes {
     pub undefined: StructType,
     pub type_descriptor: StructType,
     pub callable_shape: StructType,
+    pub frozen_array: StructType,
     pub raw_string: ArrayType,
     pub vtable: StructType,
     pub object: StructType,
@@ -700,10 +701,34 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         ],
     )?;
 
+    // `$FrozenArray`: `$Array`'s fields, then the template object's `raw`
+    // (null on the `raw` array). Mirrors codegen index 54.
+    let frozen_array = singleton_struct(
+        engine,
+        Final,
+        Some(array.clone()),
+        vec![
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(false, vtable.clone().into()))),
+            ),
+            FieldType::new(
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(false, raw_array.clone().into()))),
+            ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I32)),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(true, array.clone().into()))),
+            ),
+        ],
+    )?;
+
     Ok(IntrinsicTypes {
         undefined,
         type_descriptor,
         callable_shape,
+        frozen_array,
         raw_string,
         vtable,
         object,
@@ -833,6 +858,7 @@ mod tests {
         assert!(StructType::eq(&intr.undefined, &recovered_struct(51)));
         assert!(StructType::eq(&intr.type_descriptor, &recovered_struct(52)));
         assert!(StructType::eq(&intr.callable_shape, &recovered_struct(53)));
+        assert!(StructType::eq(&intr.frozen_array, &recovered_struct(54)));
         assert!(!StructType::eq(&intr.undefined, &intr.object));
         assert!(!StructType::eq(&intr.undefined, &intr.boxed_boolean));
         assert!(ArrayType::eq(&intr.field_names, &recovered_array(6)));

@@ -241,6 +241,7 @@ fn set_array_element(
     value: &Val,
 ) -> wasmtime::Result<()> {
     let storage = crate::runtime::array_storage::ArrayStorage::read(caller, object)?;
+    storage.ensure_writable(caller)?;
     let index = existing_element(index, storage.len, super::super::index::IndexAccess::Write)?;
     fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     storage
@@ -314,6 +315,9 @@ pub(super) fn has(
         if super::integer_key(&key).is_some_and(|index| index < len)
             || "length".encode_utf16().eq(key.iter().copied())
         {
+            return Ok(true);
+        }
+        if super::super::array::has_template_raw(caller, object, &key)? {
             return Ok(true);
         }
         let regex_match = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?

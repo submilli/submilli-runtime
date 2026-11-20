@@ -273,6 +273,8 @@ async fn set_array(
 ) -> wasmtime::Result<()> {
     let units = read_string_units(caller, key, "array target key")?;
     let mut storage = ArrayStorage::read(caller, target)?;
+    // Every property of a frozen array is read-only, `length` included.
+    storage.ensure_writable(caller)?;
     if let Some(index) = super::integer_key(&units) {
         if index < storage.len {
             return storage.backing.set(&mut *caller, index, value);

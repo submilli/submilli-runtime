@@ -800,6 +800,9 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
     {
         return Ok(!super::closure::length_is_deleted(caller, obj)?);
     }
+    if super::array::has_template_raw(caller, obj, &target)? {
+        return Ok(true);
+    }
     let regex_match = intrinsic_types(&mut *caller)?.regex_match_box.clone();
     if is_a(caller, obj, &regex_match)? {
         for name in ["index", "input", "groups"] {

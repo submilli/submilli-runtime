@@ -451,6 +451,11 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
     if let Some(value) = super::regex::try_match_metadata(caller, abi_arg(params, 0)?, &name)? {
         return Ok(value);
     }
+    if name == "raw"
+        && let Some(raw) = super::array::template_raw(caller, abi_arg(params, 0)?)?
+    {
+        return Ok(raw);
+    }
     if let Some(value) = value::conversion_method(caller, abi_arg(params, 0)?, &name).await? {
         return Ok(value);
     }
@@ -499,6 +504,11 @@ pub(super) async fn builtin_property(
     require_receiver(caller, object)?;
     if let Some(value) = super::regex::try_match_metadata(caller, object, name)? {
         return Ok(value);
+    }
+    if name == "raw"
+        && let Some(raw) = super::array::template_raw(caller, object)?
+    {
+        return Ok(raw);
     }
     if name == "length" && value::is_callable(caller, object)? {
         let original = super::closure::original(caller, *object)?;

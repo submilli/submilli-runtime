@@ -1415,6 +1415,7 @@ impl<'a> Walker<'a, '_> {
             | TypedExprKind::Null
             | TypedExprKind::Undefined
             | TypedExprKind::Regex { .. }
+            | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => Flow::new(),

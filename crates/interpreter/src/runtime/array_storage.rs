@@ -47,6 +47,22 @@ impl ArrayStorage {
         })
     }
 
+    /// Throws `TypeError` when the array is frozen (a tagged template's
+    /// template object or its `raw` array). Every mutator but `push` checks
+    /// this; `push` also fills fresh arrays element by element, so its
+    /// callers that write to a script's array check once.
+    pub fn ensure_writable(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<()> {
+        let intr = intrinsic_types(&mut *caller)?;
+        if self
+            .object
+            .matches_ty(&*caller, &intr.frozen_array)
+            .map_err(fatal_host_error)?
+        {
+            return Err(super::host::type_error(FROZEN_ARRAY_WRITE));
+        }
+        Ok(())
+    }
+
     /// Every whole-array read by a host function goes through here, so this
     /// is where its per-element cost is charged.
     pub fn snapshot(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Vec<Val>> {
@@ -109,6 +125,7 @@ impl ArrayStorage {
     /// Removes and returns the last element, clearing its slot so the GC can
     /// reclaim it; `None` when empty.
     pub fn pop(&mut self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Option<Val>> {
+        self.ensure_writable(caller)?;
         let Some(last) = self.len.checked_sub(1) else {
             return Ok(None);
         };
@@ -142,6 +159,7 @@ impl ArrayStorage {
         caller: &mut Caller<'_, StoreData>,
         elements: &[Val],
     ) -> wasmtime::Result<()> {
+        self.ensure_writable(caller)?;
         let len = checked_length(elements.len())?;
         self.reserve(caller, len)?;
         fuel::charge(&mut *caller, fuel::ELEM, u64::from(len.max(self.len)))?;
@@ -167,6 +185,7 @@ impl ArrayStorage {
         length: usize,
         missing: Val,
     ) -> wasmtime::Result<()> {
+        self.ensure_writable(caller)?;
         let length = checked_length(length)?;
         fuel::charge(
             &mut *caller,
@@ -195,6 +214,7 @@ impl ArrayStorage {
         caller: &mut Caller<'_, StoreData>,
         elements: &[Val],
     ) -> wasmtime::Result<()> {
+        self.ensure_writable(caller)?;
         let len = checked_length(elements.len())?.max(self.len);
         self.reserve(caller, len)?;
         fuel::charge(&mut *caller, fuel::ELEM, elements.len() as u64)?;
@@ -252,6 +272,9 @@ impl ArrayStorage {
         Ok(())
     }
 }
+
+/// The `TypeError` message for a write to a frozen array.
+pub(crate) const FROZEN_ARRAY_WRITE: &str = "Cannot modify a frozen array";
 
 pub(crate) fn checked_length(len: usize) -> wasmtime::Result<u32> {
     i32::try_from(len)

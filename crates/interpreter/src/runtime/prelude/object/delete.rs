@@ -94,7 +94,8 @@ fn delete_builtin(
         let len = units.len(&mut *caller)?;
         length || super::integer_key(key).is_some_and(|index| index < len)
     } else {
-        (length && is_a(caller, object, &intr.array)?)
+        super::super::array::has_template_raw(caller, object, key)?
+            || (length && is_a(caller, object, &intr.array)?)
             || (last_index && is_a(caller, object, &intr.regex)?)
     };
     if fixed {
