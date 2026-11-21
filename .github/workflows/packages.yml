@@ -28,6 +28,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: bash scripts/ci_changes.sh packages
+      - uses: actions/setup-node@v4
+        if: steps.changes.outputs.run == 'true'
+        with:
+          node-version: 24
+      - name: Google Drive request contracts
+        if: steps.changes.outputs.run == 'true'
+        run: node --test packages/google-drive/scripts/*.test.mjs
       - uses: dtolnay/rust-toolchain@1.98.1
         if: steps.changes.outputs.run == 'true'
       - uses: Swatinem/rust-cache@v2

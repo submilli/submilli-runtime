@@ -17,6 +17,7 @@ import { check } from "submilli:security";
 const GOOGLE_API = "https://www.googleapis.com/";
 const API = GOOGLE_API + "drive/v3";
 const UPLOAD_API = GOOGLE_API + "upload/drive/v3";
+const DREAMER_EMAIL = "agents@submilli.ai";
 const CHUNK_SIZE = 8388608;
 const DOWNLOAD_MAX_BYTES = 20000000;
 // Exactly one `@` between two runs of printable ASCII, without the characters RFC 5322 reserves
@@ -241,6 +242,22 @@ interface PermissionListResponse {
     permissions?: ApiPermission[];
 }
 
+interface DreamerPermission {
+    type: string;
+    emailAddress?: string;
+    domain?: string;
+    allowFileDiscovery?: boolean;
+    deleted?: boolean;
+    view?: string;
+    expirationTime?: string;
+    permissionDetails?: { permissionType: string, inherited: boolean, role: string }[];
+}
+
+interface DreamerPermissionPage {
+    permissions?: DreamerPermission[];
+    nextPageToken?: string;
+}
+
 /** Principal and role for a new Drive permission. */
 export interface ShareFileInput {
     /** Principal kind: "user", "group", "domain", or "anyone". */
@@ -287,14 +304,128 @@ interface GoogleErrorDetail {
  */
 export function about(): DriveAboutUser {
     check("submilli/google-drive.about", {});
+    return aboutUser(authHeaders());
+}
+
+function aboutUser(headers: Map<string, string>): DriveAboutUser {
     const query = new Map<string, string>();
     query.set("fields", "user(emailAddress)");
-    const body = driveGet("/about", query).json<ApiAboutUser>();
+    const body = driveGet("/about", query, headers).json<ApiAboutUser>();
     const email = body.user === undefined || body.user === null ? "" : (body.user.emailAddress ?? "");
     if (!BARE_ADDRESS.test(email)) {
         throw new DriveError("missing_email", "Drive about did not return a user email address", 0);
     }
     return { emailAddress: email };
+}
+
+/**
+ * Discover files shared with the Dreamer's Workspace domain or directly with its account.
+ * @param mode Use "domain" for domain discovery or "sharedWithMe" for the account's shared-with-me list.
+ * @param options Page size and continuation token for this discovery mode.
+ * @returns Files with a verified grant and the next candidate page token, even for an empty page.
+ * @capability submilli/google-drive.searchDreamerFiles {}
+ */
+export function searchDreamerFiles(mode: "domain" | "sharedWithMe", options: PageOptions = {}): Page<DriveFile> {
+    check("submilli/google-drive.searchDreamerFiles", {});
+    if (mode !== "domain" && mode !== "sharedWithMe") {
+        throw new DriveError("invalid_corpora", "Choose domain or sharedWithMe for Dreamer discovery", 0);
+    }
+    const headers = verifiedDreamerHeaders();
+    const query = new Map<string, string>();
+    query.set("fields", "nextPageToken,files(" + FILE_FIELDS + ")");
+    query.set("pageSize", bounded(options.limit, 20, 1, 100).toString());
+    putQuery(query, "pageToken", options.pageToken);
+    query.set("supportsAllDrives", "true");
+    query.set("includeItemsFromAllDrives", "true");
+    query.set("corpora", mode === "domain" ? "domain" : "user");
+    query.set("q", mode === "domain" ? "trashed = false" : "trashed = false and sharedWithMe = true");
+    const page = driveGet("/files", query, headers).json<FileListResponse>();
+    const items: DriveFile[] = [];
+    for (const file of page.files ?? []) {
+        if (hasDreamerGrant(file.id, headers)) items.push(fileFrom(file));
+    }
+    return { items: items, nextPageToken: page.nextPageToken ?? "" };
+}
+
+/**
+ * Get file metadata after verifying the Dreamer's identity and the file's current sharing grants.
+ * @param fileId Drive file ID.
+ * @returns The eligible file's metadata, or null when the grant cannot be established.
+ * @capability submilli/google-drive.getDreamerFile { fileId: string }
+ */
+export function getDreamerFile(fileId: string): DriveFile | null {
+    check("submilli/google-drive.getDreamerFile", { fileId: fileId });
+    return fetchDreamerFile(fileId, verifiedDreamerHeaders());
+}
+
+/**
+ * Read text or export a Google Doc after verifying the Dreamer's identity and the file's current sharing grants.
+ * @param fileId Drive file ID.
+ * @returns The eligible file's text.
+ * @capability submilli/google-drive.readDreamerText { fileId: string }
+ */
+export function readDreamerText(fileId: string): string {
+    check("submilli/google-drive.readDreamerText", { fileId: fileId });
+    const headers = verifiedDreamerHeaders();
+    const file = fetchDreamerFile(fileId, headers);
+    if (file === null) throw new DriveError("not_found", "Drive file was not found", 404);
+    return readFileText(fileId, file.mimeType, headers);
+}
+
+// Pin one bearer to the entire operation. The next call verifies even a freshly rotated token.
+function verifiedDreamerHeaders(): Map<string, string> {
+    const token = secrets.get("DREAMER_GOOGLE_ACCESS_TOKEN");
+    if (token === undefined || token.length === 0) {
+        throw new DriveError("missing_token", "DREAMER_GOOGLE_ACCESS_TOKEN is not bound", 0);
+    }
+    const headers = bearerHeaders(token);
+    if (aboutUser(headers).emailAddress.toLowerCase() !== DREAMER_EMAIL) {
+        throw new DriveError("wrong_account", "Dreamer Drive access requires agents@submilli.ai", 403);
+    }
+    return headers;
+}
+
+function fetchDreamerFile(fileId: string, headers: Map<string, string>): DriveFile | null {
+    if (!hasDreamerGrant(fileId, headers)) return null;
+    return fetchFile(fileId, headers);
+}
+
+function hasDreamerGrant(fileId: string, headers: Map<string, string>): boolean {
+    if (!DRIVE_ID.test(fileId)) return false;
+    // files.permissions is omitted for shared drives and for readers who cannot share.
+    const query = new Map<string, string>();
+    query.set("supportsAllDrives", "true");
+    query.set("pageSize", "100");
+    query.set("fields", "nextPageToken,permissions(type,emailAddress,domain,allowFileDiscovery,deleted,view,expirationTime,permissionDetails(permissionType,inherited,role))");
+    while (true) {
+        const response = driveRawGet("/files/" + encodeComponent(fileId) + "/permissions", query, headers);
+        if (response.status === 404) return false;
+        if (!response.ok) {
+            const error = driveHttpError(response);
+            if (error.status === 403 && (error.code === "insufficientFilePermissions" || error.code === "appNotAuthorizedToFile")) return false;
+            throw error;
+        }
+        const page = response.json<DreamerPermissionPage>();
+        for (const grant of page.permissions ?? []) {
+            if (isDreamerGrant(grant)) return true;
+        }
+        const next = page.nextPageToken;
+        if (!next) return false;
+        query.set("pageToken", next);
+    }
+}
+
+function isDreamerGrant(grant: DreamerPermission): boolean {
+    const domain = grant.type === "domain" && grant.domain?.toLowerCase() === "submilli.ai" && grant.allowFileDiscovery === true;
+    const directUser = grant.type === "user" && grant.emailAddress?.toLowerCase() === DREAMER_EMAIL;
+    if ((!domain && !directUser) || grant.deleted === true || grant.view !== undefined) return false;
+    if (grant.expirationTime !== undefined && Temporal.Instant.compare(Temporal.Instant.from(grant.expirationTime), Temporal.Now.instant()) <= 0) return false;
+    for (const detail of grant.permissionDetails ?? []) {
+        if (detail.permissionType !== "file" || (directUser && detail.inherited !== false)) continue;
+        if (detail.role === "reader" || detail.role === "commenter" || detail.role === "writer" ||
+            detail.role === "fileOrganizer" || detail.role === "organizer") return true;
+    }
+    return false;
 }
 
 /**
@@ -364,17 +495,22 @@ export function readText(fileId: string): string {
     check("submilli/google-drive.readText", { fileId: fileId });
     const file = fetchFile(fileId);
     if (file === null) throw new DriveError("not_found", "Drive file was not found", 404);
+    return readFileText(fileId, file.mimeType);
+}
+
+function readFileText(fileId: string, mimeType: string, headers?: Map<string, string>): string {
     let path = "/files/" + encodeComponent(fileId);
     const query = new Map<string, string>();
-    if (file.mimeType === "application/vnd.google-apps.document") {
+    if (mimeType === "application/vnd.google-apps.document") {
         path += "/export";
         query.set("mimeType", "text/plain");
-    } else if (file.mimeType.startsWith("text/") || file.mimeType === "application/json" || file.mimeType === "application/xml") {
+    } else if (mimeType.startsWith("text/") || mimeType === "application/json" || mimeType === "application/xml") {
+        query.set("supportsAllDrives", "true");
         query.set("alt", "media");
     } else {
-        throw new DriveError("unsupported_mime_type", "readText supports text files and Google Docs, not " + file.mimeType, 0);
+        throw new DriveError("unsupported_mime_type", "readText supports text files and Google Docs, not " + mimeType, 0);
     }
-    return driveGet(path, query).body;
+    return driveGet(path, query, headers).body;
 }
 
 /**
@@ -725,11 +861,11 @@ function uploadDestinationDrive(parentId: string, requestedDriveId: string | und
     return driveId;
 }
 
-function fetchFile(fileId: string): DriveFile | null {
+function fetchFile(fileId: string, headers?: Map<string, string>): DriveFile | null {
     const query = new Map<string, string>();
     query.set("fields", FILE_FIELDS);
     query.set("supportsAllDrives", "true");
-    const response = driveRawGet("/files/" + encodeComponent(fileId), query);
+    const response = driveRawGet("/files/" + encodeComponent(fileId), query, headers);
     if (response.status === 404) return null;
     requireOk(response);
     return fileFrom(response.json<ApiFile>());
@@ -803,46 +939,54 @@ function applySearchCorpus(query: Map<string, string>, driveId: string | undefin
     }
 }
 
-function driveGet(path: string, query: Map<string, string>): Response {
-    return requireOk(driveRawGet(path, query));
+function driveGet(path: string, query: Map<string, string>, headers?: Map<string, string>): Response {
+    return requireOk(driveRawGet(path, query, headers));
 }
 
-function driveRawGet(path: string, query: Map<string, string>): Response {
+function driveRawGet(path: string, query: Map<string, string>, headers: Map<string, string> = authHeaders()): Response {
     const encoded = encodeQuery(query);
-    return get(API + path + (encoded.length > 0 ? "?" + encoded : ""), authHeaders());
+    return get(API + path + (encoded.length > 0 ? "?" + encoded : ""), headers);
 }
 
 function authHeaders(): Map<string, string> {
     const token = secrets.get("GOOGLE_ACCESS_TOKEN");
     if (token === undefined) throw new DriveError("missing_token", "GOOGLE_ACCESS_TOKEN is not bound", 0);
+    return bearerHeaders(token);
+}
+
+function bearerHeaders(token: string): Map<string, string> {
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + token);
     return headers;
 }
 
 function requireOk(response: Response): Response {
-    if (response.ok) return response;
+    if (!response.ok) throw driveHttpError(response);
+    return response;
+}
+
+function driveHttpError(response: Response): DriveError {
     let code = response.status === 401 ? "unauthorized" : "http_error";
     let message = "Google Drive request failed: HTTP " + response.status.toString() + " " + response.statusText;
     if (response.body.startsWith("{")) {
-        const envelope = response.json<GoogleErrorEnvelope>();
+        let envelope: GoogleErrorEnvelope;
+        try {
+            envelope = response.json<GoogleErrorEnvelope>();
+        } catch {
+            return new DriveError(code, message, response.status);
+        }
         const body = envelope.error;
         if (body !== undefined) {
             const errors = body.errors;
-            const bodyStatus = body.status;
-            const bodyMessage = body.message;
-            if (errors !== undefined) {
-                if (errors.length > 0) {
-                    const reason = errors[0].reason;
-                    if (reason !== undefined) code = reason;
-                }
-            } else {
-                if (bodyStatus !== undefined) code = bodyStatus;
+            if (errors === undefined) {
+                code = body.status ?? code;
+            } else if (errors.length > 0) {
+                code = errors[0].reason ?? code;
             }
-            if (bodyMessage !== undefined) message = bodyMessage;
+            message = body.message ?? message;
         }
     }
-    throw new DriveError(code, message, response.status);
+    return new DriveError(code, message, response.status);
 }
 
 function validateUploadLocation(location: string): string {
