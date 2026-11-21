@@ -267,7 +267,15 @@ pub(super) fn run(vfs: &crate::runtime::Vfs, job: &Job, op: &str, args: &[Value]
             })?;
             super::add(vfs, job, serde_json::from_value(paths.clone())?)
         }
-        "commit" => super::commit(vfs, job, text(0)?).map(|_| ()),
+        "commit" => super::commit(
+            vfs,
+            job,
+            super::CommitArguments {
+                message: text(0)?,
+                allow_empty: super::allow_empty(args.get(1).unwrap_or(&Value::Null))?,
+            },
+        )
+        .map(|_| ()),
         "createBranch" => super::create_branch(
             vfs,
             job,

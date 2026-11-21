@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0ae29fb2a3e1dbf6a281108b47065f3d8c772d33381385b922860ba9e1f1f283"
+  contentHash: "dc806595073db912b048f252c9f26f02412c75349b7d1046aca529cb5a769393"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -104,7 +104,7 @@ Blueprint's `git` block sets the identity that authors every commit and the
 | `Repository.open`, constructor | `git.open` | Opens `path`'s `.git` directory. A denial is the same whether the repository exists. Checked again for the current caller on every later call |
 | `status`, `log`, `diff`, `show`, `ls`, `branches`, `remotes` | `git.read` | Read only. `ls` lists one directory at a commit; `log` can start at a ref and keep only commits that changed one file |
 | `add` | `git.write` | At most 10,000 paths per call, `.` selects the working tree, and deletions are staged |
-| `commit` | `git.commit` (`branch` is the current branch) | Refuses an empty message and an empty commit. Does not require `git.write` |
+| `commit` | `git.commit` (`branch` is the current branch) | Refuses an empty message, and an empty commit unless `allowEmpty` is true. Does not require `git.write` |
 | `createBranch`, `switchBranch` | `git.write` | `createBranch` never overwrites an existing branch. `switchBranch` requires a clean working tree, untracked files included |
 | `addRemote`, `setRemoteUrl` | `git.write` | HTTPS URLs only |
 | `fetch` | `git.fetch` | Defaults to `origin`. With no branch, fetches every remote branch and checks each. Does not require `git.write` |
@@ -544,7 +544,7 @@ A repository under the VFS root.
 | `add(paths: string[]): void` | `git.write { path: string }` | Stage explicit files or directories, including deletions. |
 | `addRemote(name: string, url: string): void` | `git.write { path: string }` | Add a named HTTPS remote, for example origin or upstream. |
 | `branches(): { current: boolean; id: string; name: string }[]` | `git.read { path: string }` | List local branches. |
-| `commit(message: string): string` | `git.commit { path: string, branch: string }` | Commit staged changes with Blueprint identity and return the commit ID. |
+| `commit(message: string, options?: { allowEmpty?: boolean }): string` | `git.commit { path: string, branch: string }` | Commit staged changes with Blueprint identity and return the commit ID. |
 | `createBranch(name: string, start?: string): void` | `git.write { path: string }` | Create a branch without overwriting an existing branch. |
 | `diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string }` | `git.read { path: string }` | Compare working (default), staged, or refs (requires from and to). |
 | `fetch(remote?: string, branch?: string): { branches: string[] }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch remote-tracking branches. |

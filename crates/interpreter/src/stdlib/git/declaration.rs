@@ -231,10 +231,10 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
-            params: vec![string("message")],
+            params: vec![string("message"), options(&[("allowEmpty", Type::Boolean)])],
             ret: Type::String,
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Commit staged changes with Blueprint identity and return the commit ID. Empty commits are refused.\n * @capability git.commit { path: string, branch: string }\n */"),
+            doc: crate::doc(FileId::GIT, "/** Commit staged changes with Blueprint identity and return the commit ID. With no staged changes it is refused unless allowEmpty is true.\n * @capability git.commit { path: string, branch: string }\n */"),
         },
     );
     methods.insert(

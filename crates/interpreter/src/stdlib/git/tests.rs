@@ -115,6 +115,94 @@ async fn local_repository_round_trip() {
 }
 
 #[tokio::test]
+async fn empty_commits_need_allow_empty() {
+    let source = r#"
+        import { Repository } from "submilli:git";
+        import { writeText } from "submilli:fs";
+        function refusal(commit: () => string): string {
+            try { commit(); } catch (e: Error) { return e.message; }
+            return "";
+        }
+        function main(): void {
+            const repo = Repository.init("/repo");
+            assert(refusal(() => repo.commit("root")).includes("no staged changes"));
+            assert(refusal(() => repo.commit("root", {})).includes("no staged changes"));
+            assert(refusal(() => repo.commit("root", { allowEmpty: undefined })).includes("no staged changes"));
+            assert(repo.log().commits.length === 0);
+            const root = repo.commit("root", { allowEmpty: true });
+            assert(repo.ls("HEAD").length === 0);
+            writeText("/repo/notes.md", "notes\n");
+            repo.add(["notes.md"]);
+            const notes = repo.commit("notes", { allowEmpty: false });
+            assert(refusal(() => repo.commit("unchanged", { allowEmpty: false })).includes("no staged changes"));
+            assert(refusal(() => repo.commit("  ", { allowEmpty: true })).includes("message must not be empty"));
+            writeText("/repo/notes.md", "unstaged\n");
+            const decision = repo.commit("decision: keep notes", { allowEmpty: true });
+            assert(!repo.status().clean);
+            assert(new TextDecoder().decode(repo.show("HEAD", "notes.md")) === "notes\n");
+            const log = repo.log().commits;
+            assert(log.length === 3);
+            assert(log[0].id === decision && log[0].message === "decision: keep notes");
+            assert(log[1].id === notes && log[2].id === root);
+            assert(repo.diff({ mode: "refs", from: notes, to: decision }).patch === "");
+        }
+    "#;
+    let vfs = Vfs::tempdir().unwrap();
+    run_source(source, test_data(vfs.clone())).await;
+    let root = vfs.root().join("repo");
+    let tree = |revision: &str| native(&root, &["rev-parse", &format!("{revision}^{{tree}}")]);
+    assert_eq!(tree("HEAD"), tree("HEAD~1"));
+    assert_eq!(
+        tree("HEAD~2"),
+        native(&root, &["hash-object", "-t", "tree", "/dev/null"])
+    );
+    assert_eq!(
+        native(&root, &["rev-list", "--max-parents=0", "HEAD"]),
+        native(&root, &["rev-parse", "HEAD~2"])
+    );
+    native(&root, &["fsck", "--full"]);
+}
+
+#[test]
+fn allow_empty_reads_only_a_boolean() {
+    use serde_json::json;
+    assert!(!super::allow_empty(&Value::Null).unwrap());
+    assert!(!super::allow_empty(&json!({})).unwrap());
+    assert!(!super::allow_empty(&json!({ "allowEmpty": null })).unwrap());
+    assert!(!super::allow_empty(&json!({ "allowEmpty": false })).unwrap());
+    assert!(super::allow_empty(&json!({ "allowEmpty": true })).unwrap());
+    let error = super::allow_empty(&json!({ "allowEmpty": "yes" })).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "git.commit: options.allowEmpty must be a boolean"
+    );
+}
+
+#[tokio::test]
+async fn allow_empty_commits_still_need_the_commit_grant() {
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.security_check = Arc::new(GitGrants {
+        allowed: &["git.init", "git.open", "git.read", "git.write"],
+    });
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            let denied = "";
+            try { repo.commit("root", { allowEmpty: true }); }
+            catch (e: PermissionDeniedError) { denied = e.capability + "|" + e.reason; }
+            assert(denied === "git.commit|not granted");
+            assert(repo.log().commits.length === 0);
+        }
+    "#,
+        data,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn list_and_file_history_use_the_commit_not_the_worktree() {
     run_source(
         r#"
