@@ -243,17 +243,31 @@ fn add(vfs: &Vfs, job: &Job, arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn commit(vfs: &Vfs, job: &Job, arguments: String) -> Result<String> {
+fn commit(vfs: &Vfs, job: &Job, arguments: CommitArguments) -> Result<String> {
     let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
     job.check(
         "git.commit",
         serde_json::json!({"path":job.path,"branch":operations::current_branch(&snapshot)?}),
     )?;
-    let id = operations::commit(&snapshot, &arguments, &job.config)?;
+    let id = operations::commit(
+        &snapshot,
+        &arguments.message,
+        arguments.allow_empty,
+        &job.config,
+    )?;
     job.check_cancelled()?;
     job.algorithm_fuel.before_effect();
     snapshot.publish()?;
     Ok(id)
+}
+
+/// Reads `allowEmpty` from `Repository.commit`'s options; missing, undefined or null is false.
+fn allow_empty(options: &Value) -> Result<bool> {
+    match options.get("allowEmpty") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(allow)) => Ok(*allow),
+        Some(_) => bail!("git.commit: options.allowEmpty must be a boolean"),
+    }
 }
 
 fn create_branch(vfs: &Vfs, job: &Job, arguments: BranchArguments) -> Result<()> {
@@ -328,6 +342,11 @@ struct ListArguments {
 struct CloneArguments {
     url: String,
     options: Value,
+}
+#[derive(Serialize)]
+struct CommitArguments {
+    message: String,
+    allow_empty: bool,
 }
 #[derive(Serialize)]
 struct BranchArguments {

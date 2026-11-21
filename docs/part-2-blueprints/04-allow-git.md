@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "49093d910ff09a12104b331d3f2566de5ed582e60cd541c7c93919c9d5460e30"
+  contentHash: "ce94c8422f10cce79a7030a9d552c446f1a862935b3fb402581e3f527b5c2edd"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -98,7 +98,7 @@ class Repository {
   static init(path: string, options?: { branch?: string }): Repository;
   static open(path: string): Repository;
   add(paths: string[]): void;
-  commit(message: string): string;
+  commit(message: string, options?: { allowEmpty?: boolean }): string;
   status(): { branch?: string; clean: boolean; entries: { … }[] };
   log(options?: { limit?: number; offset?: number }): { commits: { … }[]; nextOffset?: number };
   diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string };

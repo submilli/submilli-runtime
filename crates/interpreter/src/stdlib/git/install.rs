@@ -241,7 +241,7 @@ fn install_repository_writes(
         crate::mangle::extend(&repository, "commit"),
         FuncType::new(
             engine,
-            [receiver.clone(), argument.clone()],
+            [receiver.clone(), argument.clone(), argument.clone()],
             [ValType::Ref(RefType::new(
                 false,
                 intr.string.clone().into(),
@@ -251,7 +251,18 @@ fn install_repository_writes(
             Box::pin(async move {
                 invalidate_history_cache(caller)?;
                 let call = GitCall::new(caller, "commit")?;
-                let arguments = read_argument(caller, abi_arg(params, 1)?, None, &call).await?;
+                let message = read_argument(caller, abi_arg(params, 1)?, None, &call).await?;
+                let options = read_argument(
+                    caller,
+                    abi_arg(params, 2)?,
+                    Some(serde_json::json!({})),
+                    &call,
+                )
+                .await?;
+                let arguments = super::CommitArguments {
+                    message,
+                    allow_empty: super::allow_empty(&options)?,
+                };
                 let path = repository_path(caller, abi_arg(params, 0)?)?;
                 let result = call.execute(caller, path, arguments, super::commit).await?;
                 Ok(Val::AnyRef(Some(

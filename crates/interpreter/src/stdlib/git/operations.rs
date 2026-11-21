@@ -875,13 +875,20 @@ fn select_add_path(snapshot: &Snapshot, selected: &mut BTreeSet<String>, path: &
     Ok(())
 }
 
-pub fn commit(snapshot: &Snapshot, message: &str, identity: &super::GitConfig) -> Result<String> {
+pub fn commit(
+    snapshot: &Snapshot,
+    message: &str,
+    allow_empty: bool,
+    identity: &super::GitConfig,
+) -> Result<String> {
     if message.trim().is_empty() {
         bail!("git.commit: message must not be empty");
     }
     let files = index_entries(snapshot)?;
-    if files == head_entries(snapshot)? {
-        bail!("git.commit: no staged changes");
+    if !allow_empty && files == head_entries(snapshot)? {
+        bail!(
+            "git.commit: no staged changes; stage files with add(), or pass {{ allowEmpty: true }} to record a commit without changes"
+        );
     }
     let mut editor = snapshot
         .repo
@@ -1156,7 +1163,7 @@ mod tests {
         for contents in ["first", "second"] {
             snapshot.dir.write("file", contents).unwrap();
             add(&snapshot, &["file".into()]).unwrap();
-            ids.push(commit(&snapshot, contents, &identity).unwrap());
+            ids.push(commit(&snapshot, contents, false, &identity).unwrap());
         }
         let first = log(&snapshot, &json!({"limit":1})).unwrap();
         assert_eq!(first["commits"][0]["id"], ids[1]);
