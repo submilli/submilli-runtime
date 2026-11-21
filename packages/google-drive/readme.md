@@ -36,6 +36,30 @@ rule is needed.
 Run `submilli blueprint add-package @submilli/google-drive` to scaffold the
 package's permissions, then review the generated operation grants.
 
+## Dreamer configuration
+
+Authorize the Workspace user `agents@submilli.ai` through the normal user OAuth
+consent flow with only `https://www.googleapis.com/auth/drive.readonly`. The
+harness owns consent and refresh. Bind the resulting access token only as
+`DREAMER_GOOGLE_ACCESS_TOKEN` for this agent. Leave `GOOGLE_ACCESS_TOKEN`
+unbound. Drive's `about.get` identifies the account. The harness controls the
+OAuth flow and the scopes it requests.
+
+Use a default-deny Dreamer blueprint. Grant its caller only
+`submilli/google-drive.searchDreamerFiles`, `submilli/google-drive.readDreamerText`,
+and, if it needs metadata by ID, `submilli/google-drive.getDreamerFile`.
+Grant the package `secrets.get` for the Dreamer binding and `http.get` for
+`www.googleapis.com` under `/drive/v3/`. Keep raw HTTP, secret access, and
+general Drive operations out of the caller's grants.
+
+Each operation checks the account before its first file request. Discovery has
+two modes, `domain` and `sharedWithMe`, with independent page tokens. Both
+require a current file permission for the discoverable `submilli.ai` domain
+or a direct file grant to the agent. A permission inherited from Shared Drive
+membership, ownership alone, or link-only access is insufficient. If Drive
+withholds the permissions, the file is omitted. Follow the continuation token
+even on an empty page. Reads by ID check the current permissions again.
+
 ## Development
 
 Run:

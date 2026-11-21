@@ -33,14 +33,15 @@ export function contractHost() {
         const captured = { method, url, body: wire, headers };
         requests.push(captured);
         const result = respond(captured);
+        const responseBody = result.body ?? JSON.stringify(result.data);
         return {
             status: result.status ?? 200,
             ok: (result.status ?? 200) < 400,
             statusText: result.statusText ?? '',
-            body: JSON.stringify(result.data),
+            body: responseBody,
             headers: { get: (name) => result.headers?.[name] },
-            json: () => result.data,
-            text: () => JSON.stringify(result.data),
+            json: () => result.body === undefined ? result.data : JSON.parse(responseBody),
+            text: () => responseBody,
         };
     };
     return {

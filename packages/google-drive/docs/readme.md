@@ -2,6 +2,15 @@
 
 Use `@submilli/google-drive` to work with files in My Drive or Shared Drives:
 
+<!-- submilli:if capability="submilli/google-drive.searchDreamerFiles" -->
+- find eligible files with `searchDreamerFiles("domain")` and `searchDreamerFiles("sharedWithMe")`. Follow each mode's `nextPageToken` using `{ pageToken }`, including on empty pages.
+<!-- submilli:endif -->
+<!-- submilli:if capability="submilli/google-drive.getDreamerFile" -->
+- inspect an eligible file by ID with `getDreamerFile`. It returns `null` when the file is absent or its grant cannot be verified.
+<!-- submilli:endif -->
+<!-- submilli:if capability="submilli/google-drive.readDreamerText" -->
+- read an eligible text file or Google Doc by ID with `readDreamerText`. It checks the file's current sharing grants before fetching content.
+<!-- submilli:endif -->
 <!-- submilli:if capability="submilli/google-drive.about" -->
 - read the connected account's email
 <!-- submilli:endif -->

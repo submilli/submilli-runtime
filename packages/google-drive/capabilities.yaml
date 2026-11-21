@@ -22,6 +22,11 @@ provides:
       type: string
     path:
       type: string
+- name: submilli/google-drive.getDreamerFile
+  description: Get file metadata after verifying the Dreamer's identity and the file's current sharing grants.
+  fields:
+    fileId:
+      type: string
 - name: submilli/google-drive.getFile
   description: Fetch one Drive file, returning null when absent.
   fields:
@@ -41,6 +46,11 @@ provides:
     fileId:
       type: string
     parentId:
+      type: string
+- name: submilli/google-drive.readDreamerText
+  description: Read text or export a Google Doc after verifying the Dreamer's identity and the file's current sharing grants.
+  fields:
+    fileId:
       type: string
 - name: submilli/google-drive.readText
   description: Read a text file or export a Google Doc as UTF-8 text.
@@ -62,6 +72,9 @@ provides:
   fields:
     fileId:
       type: string
+- name: submilli/google-drive.searchDreamerFiles
+  description: Discover files shared with the Dreamer's Workspace domain or directly with its account.
+  fields: {}
 - name: submilli/google-drive.searchFiles
   description: Search Drive files with structured filters plus an optional raw Drive query. Set `corpora` to `domain` for domain discovery or `driveId` for a single Shared Drive.
   fields: {}
@@ -110,5 +123,7 @@ requires:
   filter: host == "www.googleapis.com"
 - capability: http.put
   filter: host == "www.googleapis.com"
+- capability: secrets.get
+  filter: name == "DREAMER_GOOGLE_ACCESS_TOKEN"
 - capability: secrets.get
   filter: name == "GOOGLE_ACCESS_TOKEN"

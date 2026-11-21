@@ -7,6 +7,9 @@ import {
     ShareFileInput,
     about,
     getFile,
+    getDreamerFile,
+    readDreamerText,
+    searchDreamerFiles,
 } from "@submilli/google-drive";
 
 function main(): void {
@@ -38,6 +41,9 @@ function main(): void {
     label("an unbound access token is reported before any request");
     assert(failure(() => { getFile("file1"); }) === "missing_token", "no token");
     assert(failure(() => { about(); }) === "missing_token", "about reports a missing token");
+    assert(failure(() => { getDreamerFile("file1"); }) === "missing_token", "Dreamer metadata needs its binding");
+    assert(failure(() => { readDreamerText("file1"); }) === "missing_token", "Dreamer text needs its binding");
+    assert(failure(() => { searchDreamerFiles("domain"); }) === "missing_token", "Dreamer search needs its binding");
 }
 
 function failure(call: () => void): string {

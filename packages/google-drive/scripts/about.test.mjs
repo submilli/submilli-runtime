@@ -44,3 +44,11 @@ test('about is denied before any request', () => {
     assert.equal(host.requests.length, 0);
     assert.equal(host.checks[0].capability, 'submilli/google-drive.about');
 });
+
+test('malformed JSON error bodies keep the Drive HTTP status', () => {
+    for (const [status, code] of [[401, 'unauthorized'], [502, 'http_error']]) {
+        host.reset();
+        host.response(() => ({ status, body: '{"error":' }));
+        assert.throws(() => drive.about(), e => e instanceof drive.DriveError && e.status === status && e.code === code);
+    }
+});
