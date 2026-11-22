@@ -1,0 +1,334 @@
+namespace: submilli
+provides:
+- name: zendesk.com/articles.browse
+  description: The Help Center's categories.
+  fields: {}
+- name: zendesk.com/articles.get
+  description: Get a Help Center article; null when it does not exist.
+  fields:
+    locale:
+      type: string
+    section:
+      type: string
+- name: zendesk.com/articles.search
+  description: Search Help Center articles, best match first.
+  fields:
+    locale:
+      type: string
+    query:
+      type: string
+    section:
+      type: string
+- name: zendesk.com/attachments.upload
+  description: Upload a file from the VFS, to attach to a reply, a note or a new ticket.
+  fields:
+    contentType:
+      type: string
+    fileName:
+      type: string
+    path:
+      type: string
+- name: zendesk.com/comments.list
+  description: 'A ticket''s comments, oldest first: public replies and internal notes.'
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/comments.note
+  description: 'Add an internal note: only agents see it.'
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/comments.reply
+  description: 'Reply publicly: the requester and anyone copied see it, and Zendesk emails them.'
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    previousStatus:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/groups.list
+  description: The account's groups of agents.
+  fields: {}
+- name: zendesk.com/groups.members
+  description: The agents in a group.
+  fields:
+    group:
+      type: string
+- name: zendesk.com/macros.apply
+  description: Apply a macro to a ticket and save the result. The check names the fields the macro changes (`group` and `assignee` when it moves the ticket); a comment it adds is also checked as a reply or a note.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    fields:
+      type: string[]
+    group:
+      type: string
+    macro:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/macros.list
+  description: The macros the token's user can apply.
+  fields: {}
+- name: zendesk.com/macros.preview
+  description: What a macro would change on a ticket, without changing it.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    macro:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/metadata.read
+  description: The account's brands.
+  fields:
+    what:
+      type: string
+- name: zendesk.com/organizations.find
+  description: Find organizations whose name starts with this text.
+  fields:
+    name:
+      type: string
+- name: zendesk.com/organizations.get
+  description: Get an organization; null when it does not exist.
+  fields:
+    organization:
+      type: string
+- name: zendesk.com/ratings.list
+  description: Customers' satisfaction ratings, newest first.
+  fields:
+    score:
+      type: string
+- name: zendesk.com/search.raw
+  description: 'Search with Zendesk''s query language, such as `type:ticket status<solved priority:urgent`. Results are Zendesk''s objects, untyped, with `result_type`. Prefer `findTickets`: a raw query''s scope cannot be checked.'
+  fields:
+    query:
+      type: string
+    type:
+      type: string
+- name: zendesk.com/tickets.assign
+  description: Move a ticket to another group or agent, or unassign it.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+    toAssignee:
+      type: string
+    toGroup:
+      type: string
+- name: zendesk.com/tickets.count
+  description: Count tickets without reading them.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string[]
+    tags:
+      type: string[]
+- name: zendesk.com/tickets.create
+  description: Create a ticket. A public first comment is also checked as a reply, since the requester sees it.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    fields:
+      type: string[]
+    group:
+      type: string
+    organization:
+      type: string
+    public:
+      type: boolean
+    requester:
+      type: string
+- name: zendesk.com/tickets.find
+  description: Find tickets, most recently changed first. Search reads at most 1,000 results.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string[]
+    tags:
+      type: string[]
+- name: zendesk.com/tickets.get
+  description: Get a ticket; null when it does not exist.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/tickets.merge
+  description: 'Merge tickets into one: each source is closed with a comment pointing to the target, and its comments are copied there. Zendesk merges in a background job.'
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    role:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/tickets.metrics
+  description: 'A ticket''s timings: replies, reopens, and minutes to first reply and to resolution.'
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    group:
+      type: string
+    organization:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/tickets.update
+  description: Change a ticket's subject, status, priority, type, tags, custom fields or due date. Its group, assignee, requester, organization and brand do not change here (`assignTicket` moves a ticket), so the check's facts stay the ticket's.
+  fields:
+    assignee:
+      type: string
+    brand:
+      type: string
+    fields:
+      type: string[]
+    group:
+      type: string
+    organization:
+      type: string
+    previousStatus:
+      type: string
+    requester:
+      type: string
+    status:
+      type: string
+- name: zendesk.com/users.create
+  description: Create an end user, such as a customer to open a ticket for. Agents and admins are created in Zendesk.
+  fields:
+    fields:
+      type: string[]
+    organization:
+      type: string
+- name: zendesk.com/users.find
+  description: Find users by name or email, or by Zendesk's user search syntax.
+  fields:
+    query:
+      type: string
+- name: zendesk.com/users.get
+  description: Get a user; null when it does not exist.
+  fields:
+    organization:
+      type: string
+    role:
+      type: string
+- name: zendesk.com/users.update
+  description: Change a user's name, phone, tags, notes, details or custom fields. Role, email and organization do not change here.
+  fields:
+    fields:
+      type: string[]
+    organization:
+      type: string
+    role:
+      type: string
+- name: zendesk.com/views.list
+  description: The views the token's user can use, such as "Unassigned tickets".
+  fields: {}
+- name: zendesk.com/views.read
+  description: How many tickets a view holds. Zendesk caches the count; it may lag.
+  fields:
+    view:
+      type: string
+requires:
+- capability: fs.read
+- capability: fs.stat
+- capability: http.get
+  filter: host == "example.zendesk.com"
+- capability: http.post
+  filter: host == "example.zendesk.com"
+- capability: http.put
+  filter: host == "example.zendesk.com"
+- capability: secrets.get
+  filter: name == "ZENDESK_ACCESS_TOKEN"

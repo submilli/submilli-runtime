@@ -1,0 +1,36 @@
+# Run by `policy_scripts_pass_under_their_blueprints` in crates/submilli/tests/package_policy.rs.
+# A first-line support agent: it searches only its group's queue, opens internal tickets in its
+# group, adds customers without custom fields, reads the knowledge base and the ticket fields,
+# and reads bad ratings; no raw search. The package is granted nothing, so an allowed call stops
+# when the package reads its token.
+kind: blueprint
+name: zendesk-tier-one-test
+packages:
+  - '@submilli/zendesk'
+default: deny
+permissions:
+  main:
+    - capability: zendesk.com/tickets.find
+      filter: group == "100" and not (status contains "closed")
+      action: allow
+    - capability: zendesk.com/tickets.count
+      filter: group == "100"
+      action: allow
+    - capability: zendesk.com/tickets.create
+      filter: group == "100" and public == false and not (fields contains "custom.360001")
+      action: allow
+    - capability: zendesk.com/users.create
+      filter: organization == "" and not (fields contains "notes")
+      action: allow
+    - capability: zendesk.com/articles.search
+      filter: locale == "en-us"
+      action: allow
+    - capability: zendesk.com/metadata.read
+      filter: what == "ticket_fields"
+      action: allow
+    - capability: zendesk.com/ratings.list
+      filter: score == "bad"
+      action: allow
+    - capability: zendesk.com/views.read
+      filter: view == "360000001"
+      action: allow

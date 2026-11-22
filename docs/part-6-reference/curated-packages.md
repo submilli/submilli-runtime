@@ -42,6 +42,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/slack-bot`](#submillislack-bot) | Slack as the app's bot: bot messages, conversation history and threads, conversations and members, direct messages, users, and reactions. | `SLACK_BOT_TOKEN` | `slack.com` |
 | [`@submilli/slack-user`](#submillislack-user) | Slack as the authenticated user: search, messages and threads, channels, users, files, sending messages, and reactions. | `SLACK_USER_TOKEN` | `files.slack.com`, `slack.com` |
 | [`@submilli/typesafe`](#submillitypesafe) | Semantic judgments by TypeSafe's Jev model: choice, yes/no, and rubric-scored questions with typed answers and probabilities. | `TYPESAFE_AI_KEY` | `api.typesafe.ai` |
+| [`@submilli/zendesk`](#submillizendesk) | Zendesk Support tickets, public replies and internal notes, attachments, users, organizations, groups, views, macros, Help Center articles, satisfaction ratings and ticket metrics. | `ZENDESK_ACCESS_TOKEN` | The account's `zendesk.com` host, chosen at install (`--config accountUrl=…`) |
 
 ## Package entries
 
@@ -471,4 +472,25 @@ submilli install submilli/submilli-runtime @submilli/typesafe
 submilli blueprint add-package @submilli/typesafe --no-capabilities
 submilli blueprint capability list @submilli/typesafe
 submilli blueprint capability add typesafe.ai/systemone
+```
+
+## @submilli/zendesk
+
+Zendesk Support tickets, public replies and internal notes, attachments, users, organizations, groups, views, macros, Help Center articles, satisfaction ratings and ticket metrics.
+
+| | |
+| --- | --- |
+| Build setting | `accountUrl` (required): the account's URL, such as `https://acme.zendesk.com` |
+| Secret | `ZENDESK_ACCESS_TOKEN` |
+| Credential | An OAuth access token for that account with the `read` and `write` scopes (`read` alone for read-only agents) |
+| Without the secret | Throws `ZendeskError` with code `missing_token` |
+| HTTP | The account's host: GET, POST and PUT under `/api/v2/` |
+| Filesystem | `uploadAttachment` reads the file it is given |
+| Readme | [`packages/zendesk/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/zendesk/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/zendesk --config accountUrl=https://acme.zendesk.com
+submilli blueprint add-package @submilli/zendesk --no-capabilities
+submilli blueprint capability list @submilli/zendesk
+submilli blueprint capability add zendesk.com/tickets.find
 ```

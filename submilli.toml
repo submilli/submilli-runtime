@@ -152,3 +152,10 @@ version = "0.1.0"
 description = "Salesforce client for records of any object, typed standard objects (accounts, contacts, leads, opportunities, cases and more), SOQL queries built from typed conditions, aggregates and search."
 keywords = ["salesforce", "crm", "soql", "records", "opportunities", "accounts", "cases", "leads", "api"]
 path = "packages/salesforce"
+
+[[package]]
+name = "@submilli/zendesk"
+version = "0.1.0"
+description = "Zendesk Support client for tickets, public replies and internal notes, attachments, users, organizations, groups, views, macros, Help Center articles, satisfaction ratings and ticket metrics."
+keywords = ["zendesk", "support", "helpdesk", "tickets", "customer-service", "help-center", "api"]
+path = "packages/zendesk"
