@@ -2384,11 +2384,14 @@ fn ts_callable_property_type(method: &crate::MethodSig, value: &Type) -> String 
         })
         .collect::<Vec<_>>()
         .join(" ");
-    format!("{{ {signatures} }} & {}", ts_intersection_member(value))
+    format!(
+        "{{ {signatures} }} & {}",
+        intersection_member(value, ts_type)
+    )
 }
 
-fn ts_intersection_member(ty: &Type) -> String {
-    let rendered = ts_type(ty);
+fn intersection_member(ty: &Type, format_type: impl FnOnce(&Type) -> String) -> String {
+    let rendered = format_type(ty);
     if matches!(
         ty,
         Type::Function { .. } | Type::Union(_) | Type::Conditional { .. }
@@ -2409,28 +2412,33 @@ fn ts_return_type(
     predicate: Option<&TypePredicate>,
     doc: Option<&DocComment>,
 ) -> String {
-    let Some(predicate) = predicate else {
-        return ts_type(ret);
-    };
-    let Some(param) = params.get(predicate.parameter_index as usize) else {
-        return ts_type(ret);
-    };
+    predicate
+        .and_then(|predicate| render_type_predicate(params, predicate, doc, ts_type))
+        .unwrap_or_else(|| ts_type(ret))
+}
+
+fn render_type_predicate(
+    params: &[Param],
+    predicate: &TypePredicate,
+    doc: Option<&DocComment>,
+    format_type: impl Fn(&Type) -> String,
+) -> Option<String> {
+    let index = predicate.parameter_index as usize;
+    let param = params.get(index)?;
     let names = parameter_display_names(params, doc);
-    let Some(name) = names.get(predicate.parameter_index as usize) else {
-        return ts_type(ret);
-    };
+    let name = names.get(index)?;
     let generic_param = matches!(param.ty, Type::TypeVar(_) | Type::GenericParam { .. });
-    ts_predicate(predicate, name, || {
+    Some(ts_predicate(predicate, name, || {
         if generic_param {
             format!(
                 "{} & {}",
-                ts_type(&param.ty),
-                ts_type(&predicate.asserted_type)
+                format_type(&param.ty),
+                intersection_member(&predicate.asserted_type, format_type)
             )
         } else {
-            ts_type(&predicate.asserted_type)
+            format_type(&predicate.asserted_type)
         }
-    })
+    }))
 }
 
 /// `x is T`, `asserts x is T` or `asserts x`.
@@ -2557,7 +2565,7 @@ fn ts_type(ty: &Type) -> String {
         | Type::Conditional { .. } => ty.to_string(),
         Type::Intersection(members) => members
             .iter()
-            .map(ts_intersection_member)
+            .map(|member| intersection_member(member, ts_type))
             .collect::<Vec<_>>()
             .join(" & "),
         Type::InterfaceRef { name, args, .. }
@@ -2662,13 +2670,21 @@ fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
             generics,
             params,
             ret,
+            type_predicate,
             ..
         } => {
+            let doc = value_doc(kind).as_ref();
+            let ret = type_predicate
+                .as_ref()
+                .and_then(|predicate| {
+                    render_type_predicate(params, predicate, doc, ToString::to_string)
+                })
+                .unwrap_or_else(|| ret.to_string());
             let _ = writeln!(
                 out,
                 "{indent}function {name}{}({}): {ret};\n",
                 generics_str(generics),
-                params_str(params, value_doc(kind).as_ref())
+                params_str(params, doc)
             );
         }
         ValueKind::Let { ty, .. } => {
