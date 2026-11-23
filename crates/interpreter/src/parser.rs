@@ -4451,6 +4451,20 @@ impl<'a> Parser<'a> {
 
     fn parse_object_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let open = self.advance();
+        if matches!(self.peek().kind, TokenKind::LeftParen | TokenKind::LessThan) {
+            // A type literal containing just a call signature is a function type.
+            let mut signature = self.parse_type_literal_signature(open.span.start)?;
+            self.finish_type_member(signature.span.end, "expected `;`, `,`, or `}`")?;
+            if !matches!(self.peek().kind, TokenKind::RightBrace) {
+                self.error_at_peek(
+                    "additional members in a callable type literal require an interface",
+                );
+                return None;
+            }
+            let close = self.advance();
+            signature.span = self.span(open.span.start, close.span.end);
+            return Some(signature);
+        }
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
         let mut indexes = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
@@ -4592,7 +4606,7 @@ impl<'a> Parser<'a> {
             self.error_at_peek("expected `(` after construct signature type parameters");
             return None;
         }
-        self.parse_object_type_method_signature(keyword.span.start)?;
+        self.parse_type_literal_signature(keyword.span.start)?;
         Some(())
     }
 
@@ -4613,7 +4627,7 @@ impl<'a> Parser<'a> {
             if readonly {
                 self.reject_readonly_modifier(self.readonly_modifier_span(member_start));
             }
-            self.parse_object_type_method_signature(name.span.start)?
+            self.parse_type_literal_signature(name.span.start)?
         } else {
             if !matches!(self.peek().kind, TokenKind::Colon) {
                 self.error_at_peek("expected `:` after field name");
@@ -4632,11 +4646,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `m(params): T` inside a type literal, spelled as the function-typed field
-    /// `m: (params) => T` — the two are interchangeable in a structural shape, and
-    /// interfaces already accept both spellings for the same member. `start` is the
-    /// member name's offset, so the annotation's span covers the name too.
-    fn parse_object_type_method_signature(&mut self, start: u32) -> Option<TypeAnnotation> {
+    /// Parse the function type of a method or anonymous call signature, starting
+    /// at its type parameters or opening parenthesis.
+    fn parse_type_literal_signature(&mut self, start: u32) -> Option<TypeAnnotation> {
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
         } else {

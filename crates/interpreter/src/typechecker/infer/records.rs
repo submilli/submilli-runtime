@@ -1919,6 +1919,19 @@ impl Inferer<'_> {
             return Err(type_limit_at(span)(TypeTooLarge::Depth));
         }
         let (methods, signatures, properties, indexes) = match ty.peel() {
+            Type::Function { generics, .. } if !generics.is_empty() => {
+                self.error(span, "generic call signatures are not yet supported".into());
+                return Ok(None);
+            }
+            Type::Function { .. } => (
+                BTreeMap::new(),
+                InheritedSignatures {
+                    call: crate::MethodSig::from_function_type(&ty, false),
+                    construct: None,
+                },
+                BTreeMap::new(),
+                Vec::new(),
+            ),
             Type::InterfaceRef {
                 mangled,
                 name,
