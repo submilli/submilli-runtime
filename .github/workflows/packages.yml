@@ -54,8 +54,9 @@ jobs:
       # own scripts and examples therefore run under build test, not cargo test.
       - name: Package tests
         if: steps.changes.outputs.run == 'true'
-        # @submilli/salesforce's org is a required build setting; a repository-wide
-        # build uses the installed one.
+        # @submilli/salesforce's org and @submilli/zendesk's account are required
+        # build settings; a repository-wide build uses the installed ones.
         run: |
           cargo run -p submilli -- build publish-local -p @submilli/salesforce --config orgUrl=https://example.my.salesforce.com
+          cargo run -p submilli -- build publish-local -p @submilli/zendesk --config accountUrl=https://example.zendesk.com
           cargo run -p submilli -- build test --skip-network

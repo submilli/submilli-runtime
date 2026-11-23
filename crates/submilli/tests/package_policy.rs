@@ -8,8 +8,9 @@
 //!
 //! A check whose fields come from the service's answers cannot be reached that
 //! way. `attio_status_rules_hold_against_a_fake_attio` and
-//! `salesforce_owner_rules_hold_against_a_fake_salesforce` cover those: each runs
-//! a copy of its package against a fake service on 127.0.0.1.
+//! `salesforce_owner_rules_hold_against_a_fake_salesforce` and
+//! `zendesk_ticket_rules_hold_against_a_fake_zendesk` cover those: each runs a
+//! copy of its package against a fake service on 127.0.0.1.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -33,15 +34,23 @@ const PACKAGES: &[&str] = &[
     "salesforce",
     "slack-bot",
     "slack-user",
+    "zendesk",
 ];
 
 /// Required build settings, as `--config` gives them. The policy blueprints deny the
 /// packages their secrets, so no request reaches these hosts.
-const SETTINGS: &[(&str, &str)] = &[("salesforce", SALESFORCE_ORG_SETTING)];
+const SETTINGS: &[(&str, &str)] = &[
+    ("salesforce", SALESFORCE_ORG_SETTING),
+    ("zendesk", ZENDESK_ACCOUNT_SETTING),
+];
 
 /// The org every build of `@submilli/salesforce` in the tests uses, and so the
 /// host its checked-in `capabilities.yaml` names.
 const SALESFORCE_ORG_SETTING: &str = "orgUrl=https://example.my.salesforce.com";
+
+/// The account every build of `@submilli/zendesk` in the tests uses, and so the host its
+/// checked-in `capabilities.yaml` names.
+const ZENDESK_ACCOUNT_SETTING: &str = "accountUrl=https://example.zendesk.com";
 
 #[test]
 fn policy_scripts_pass_under_their_blueprints() {
@@ -464,7 +473,7 @@ fn salesforce_writes_against_a_fake(script: &str) -> Vec<(String, String, serde_
     let home = tempfile::tempdir().expect("package store");
     put_secret(home.path(), "policy-token", SALESFORCE_TOKEN);
     let project = tempfile::tempdir().expect("package copy");
-    copy_salesforce(project.path());
+    copy_package(project.path(), "salesforce");
     let published = Command::new(env!("CARGO_BIN_EXE_submilli"))
         .args([
             "build",
@@ -516,12 +525,11 @@ fn salesforce_writes_against_a_fake(script: &str) -> Vec<(String, String, serde_
         .collect()
 }
 
-/// Copies the package's sources into `project` with the org's URL replaced.
-/// A copy of the package, so that building it against the fake leaves the
-/// repository's `capabilities.yaml` alone.
-fn copy_salesforce(project: &Path) {
-    let source = repository_root().join("packages/salesforce");
-    let target = project.join("packages/salesforce");
+/// Copies a package's sources into `project`, alone in its manifest, so that
+/// building it against a fake leaves the repository's `capabilities.yaml` alone.
+fn copy_package(project: &Path, package: &str) {
+    let source = repository_root().join("packages").join(package);
+    let target = project.join("packages").join(package);
     for directory in ["src", "docs"] {
         std::fs::create_dir_all(target.join(directory)).expect("package directory");
         for entry in std::fs::read_dir(source.join(directory)).expect("package sources") {
@@ -532,9 +540,11 @@ fn copy_salesforce(project: &Path) {
     }
     std::fs::write(
         project.join("submilli.toml"),
-        "[[package]]\nname = \"@submilli/salesforce\"\nversion = \"0.1.0\"\n\
-         description = \"@submilli/salesforce against a fake Salesforce\"\nkeywords = [\"salesforce\"]\n\
-         path = \"packages/salesforce\"\n",
+        format!(
+            "[[package]]\nname = \"@submilli/{package}\"\nversion = \"0.1.0\"\n\
+             description = \"@submilli/{package} against a fake service\"\nkeywords = [\"{package}\"]\n\
+             path = \"packages/{package}\"\n"
+        ),
     )
     .expect("manifest");
 }
@@ -644,6 +654,173 @@ fn percent_decode(text: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+const ZENDESK_TOKEN: &str = "fake-zendesk-token";
+
+/// Every ticket check's facts (group, organization, brand, assignee, requester,
+/// status) and a user's role come from Zendesk, so an offline script never
+/// reaches them. `tests/fake-host/ticket-rules.ts` runs as `main` against a fake
+/// Zendesk: group 100's ticket is read, updated, noted, reassigned within the
+/// group and given a macro; group 200's ticket, a missing one, a priority
+/// change, a public reply, a macro that replies or moves the ticket, and a move
+/// to another group are denied and write nothing. Every write carries
+/// `safe_update` with the `updated_at` read for its check, and a conflict comes
+/// back as a retryable `UpdateConflict`.
+#[test]
+fn zendesk_ticket_rules_hold_against_a_fake_zendesk() {
+    let fake = FakeHost::start(ZENDESK_TOKEN, zendesk_answer);
+    let home = tempfile::tempdir().expect("package store");
+    put_secret(home.path(), "policy-token", ZENDESK_TOKEN);
+    let project = tempfile::tempdir().expect("package copy");
+    copy_package(project.path(), "zendesk");
+    let published = Command::new(env!("CARGO_BIN_EXE_submilli"))
+        .args([
+            "build",
+            "publish-local",
+            "-p",
+            "@submilli/zendesk",
+            "--config",
+            &format!("accountUrl=http://127.0.0.1:{}", fake.port),
+        ])
+        .current_dir(project.path())
+        .env("SUBMILLI_HOME", home.path())
+        .env("SUBMILLI_TELEMETRY", "0")
+        .output()
+        .expect("publish the package copy");
+    assert!(
+        published.status.success(),
+        "{}",
+        String::from_utf8_lossy(&published.stderr)
+    );
+    let directory = repository_root().join("packages/zendesk/tests/fake-host");
+    let run = submilli(
+        &[
+            "run",
+            &directory.join("ticket-rules.ts").to_string_lossy(),
+            "--blueprint",
+            &directory.join("ticket-rules.yaml").to_string_lossy(),
+        ],
+        home.path(),
+    );
+    assert!(
+        run.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let requests = fake.requests();
+    assert!(
+        requests.iter().all(|request| request.authorized),
+        "every request carries the token: {requests:#?}"
+    );
+    let writes: Vec<(String, String, serde_json::Value)> = requests
+        .into_iter()
+        .filter(|request| request.method != "GET")
+        .map(|request| (request.method, request.path, request.body))
+        .collect();
+    let stamped = |mut ticket: serde_json::Value| {
+        ticket["safe_update"] = serde_json::json!(true);
+        ticket["updated_stamp"] = serde_json::json!(ZENDESK_UPDATED);
+        serde_json::json!({ "ticket": ticket })
+    };
+    let first = "/api/v2/tickets/1.json".to_string();
+    assert_eq!(
+        writes,
+        vec![
+            (
+                "PUT".to_string(),
+                first.clone(),
+                stamped(serde_json::json!({ "status": "pending", "tags": ["vip"] }))
+            ),
+            (
+                "PUT".to_string(),
+                first.clone(),
+                stamped(
+                    serde_json::json!({ "comment": { "public": false, "body": "Checked the logs" } })
+                )
+            ),
+            (
+                "PUT".to_string(),
+                first.clone(),
+                stamped(serde_json::json!({ "assignee_id": 20, "group_id": 100 }))
+            ),
+            (
+                "PUT".to_string(),
+                first,
+                stamped(
+                    serde_json::json!({ "tags": ["vip", "billing"], "comment": { "public": false, "body": "Tagged for billing" } })
+                )
+            ),
+            (
+                "PUT".to_string(),
+                "/api/v2/tickets/4.json".to_string(),
+                stamped(serde_json::json!({ "status": "pending" }))
+            ),
+        ],
+        "only the allowed writes reach Zendesk, each conditional on the ticket read"
+    );
+}
+
+const ZENDESK_UPDATED: &str = "2026-11-20T10:00:00Z";
+
+/// A fake Zendesk: tickets 1 and 4 in group 100 and ticket 2 in group 200
+/// (ticket 3 does not exist; ticket 4 changed since it was read, so a write to it
+/// conflicts), three macros on ticket 1 (51 tags it and adds a note, 50 solves
+/// it with a public reply, 52 moves it to group 200), a customer (10) and an
+/// agent (11).
+fn zendesk_answer(
+    method: &str,
+    path: &str,
+    _query: &str,
+) -> (&'static str, Option<serde_json::Value>) {
+    use serde_json::json;
+    let ticket = |id: u64, group: u64| {
+        json!({ "id": id, "subject": "Help", "status": "open", "group_id": group, "organization_id": 7,
+            "brand_id": 1, "assignee_id": null, "requester_id": 10, "tags": ["vip"], "custom_fields": [],
+            "updated_at": ZENDESK_UPDATED, "via": { "channel": "email" } })
+    };
+    let not_found = || json!({ "error": "RecordNotFound", "description": "Not found" });
+    let macro_result = |changes: serde_json::Value| json!({ "result": { "ticket": changes } });
+    let mut tagged = ticket(1, 100);
+    tagged["tags"] = json!(["vip", "billing"]);
+    tagged["comment"] = json!({ "body": "Tagged for billing", "public": "false" });
+    let mut solved = ticket(1, 100);
+    solved["status"] = json!("solved");
+    solved["comment"] = json!({ "body": "We fixed it", "public": "true" });
+    let mut moved = ticket(1, 200);
+    moved["comment"] = json!(null);
+    match (method, path) {
+        ("GET" | "PUT", "/api/v2/tickets/1.json") => {
+            ("200 OK", Some(json!({ "ticket": ticket(1, 100) })))
+        }
+        ("GET" | "PUT", "/api/v2/tickets/2.json") => {
+            ("200 OK", Some(json!({ "ticket": ticket(2, 200) })))
+        }
+        ("GET", "/api/v2/tickets/4.json") => ("200 OK", Some(json!({ "ticket": ticket(4, 100) }))),
+        ("PUT", "/api/v2/tickets/4.json") => (
+            "409 Conflict",
+            Some(
+                json!({ "error": "UpdateConflict", "description": "Ticket changed since it was read" }),
+            ),
+        ),
+        ("GET", "/api/v2/tickets/1/macros/51/apply.json") => ("200 OK", Some(macro_result(tagged))),
+        ("GET", "/api/v2/tickets/1/macros/50/apply.json") => ("200 OK", Some(macro_result(solved))),
+        ("GET", "/api/v2/tickets/1/macros/52/apply.json") => ("200 OK", Some(macro_result(moved))),
+        ("GET", "/api/v2/users/10.json") => (
+            "200 OK",
+            Some(
+                json!({ "user": { "id": 10, "name": "Dana", "role": "end-user", "organization_id": 7 } }),
+            ),
+        ),
+        ("GET", "/api/v2/users/11.json") => (
+            "200 OK",
+            Some(
+                json!({ "user": { "id": 11, "name": "Lee", "role": "agent", "organization_id": null } }),
+            ),
+        ),
+        _ => ("404 Not Found", Some(not_found())),
+    }
 }
 
 fn put_secret(home: &Path, name: &str, value: &str) {

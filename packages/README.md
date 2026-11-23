@@ -30,3 +30,4 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/typesafe`](typesafe/readme.md) | TypeSafe's Jev model for yes/no, choice, and scoring judgments with typed answers and probabilities. |
 | [`@submilli/x`](x/readme.md) | Official X API tweet lookup, recent/archive search, and conversation replies with structured source data. |
 | [`@submilli/xai`](xai/readme.md) | Grok X Search research and tweet summaries with citations and usage. |
+| [`@submilli/zendesk`](zendesk/readme.md) | Zendesk Support tickets, public replies and internal notes, attachments, users, organizations, groups, views, macros, Help Center articles, satisfaction ratings and ticket metrics. |

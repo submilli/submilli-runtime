@@ -26,13 +26,22 @@ fn every_repo_package_ships_a_compiling_example() {
     let store_root = TempDir::new().expect("tempdir");
     let store = PackageStore::new(store_root.path());
     // Required build settings, as the packages' own tests set them.
-    let settings = BTreeMap::from([(
-        PackageName::new("@submilli/salesforce"),
-        BTreeMap::from([(
-            "orgUrl".to_owned(),
-            "https://example.my.salesforce.com".to_owned(),
-        )]),
-    )]);
+    let settings = BTreeMap::from([
+        (
+            PackageName::new("@submilli/salesforce"),
+            BTreeMap::from([(
+                "orgUrl".to_owned(),
+                "https://example.my.salesforce.com".to_owned(),
+            )]),
+        ),
+        (
+            PackageName::new("@submilli/zendesk"),
+            BTreeMap::from([(
+                "accountUrl".to_owned(),
+                "https://example.zendesk.com".to_owned(),
+            )]),
+        ),
+    ]);
     let built = build_packages_configured(&manifest, root, &store, None, &settings)
         .expect("packages build");
     assert!(!built.is_empty(), "the repo manifest declares packages");

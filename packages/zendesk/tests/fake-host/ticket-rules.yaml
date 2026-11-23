@@ -1,0 +1,45 @@
+# Run by `zendesk_ticket_rules_hold_against_a_fake_zendesk` in
+# crates/submilli/tests/package_policy.rs, against the package installed with its account URL set
+# to a fake Zendesk on 127.0.0.1.
+kind: blueprint
+name: zendesk-ticket-rules-fake-host-test
+allow_insecure_http: true
+packages:
+  - '@submilli/zendesk'
+secrets:
+  ZENDESK_ACCESS_TOKEN:
+    store: policy-token
+default: deny
+permissions:
+  main:
+    # Group 100's tickets: read, notes, status and tags but not priority, and moves within the group.
+    - capability: zendesk.com/tickets.get
+      filter: group == "100"
+      action: allow
+    - capability: zendesk.com/tickets.update
+      filter: group == "100" and not (fields contains "priority")
+      action: allow
+    - capability: zendesk.com/comments.note
+      filter: group == "100"
+      action: allow
+    - capability: zendesk.com/tickets.assign
+      filter: group == "100" and (toGroup == "" or toGroup == "100")
+      action: allow
+    # Macros that do not move the ticket; a public reply is never allowed, so neither is a
+    # macro that adds one.
+    - capability: zendesk.com/macros.apply
+      filter: group == "100" and not (fields contains "group")
+      action: allow
+    - capability: zendesk.com/users.get
+      filter: role == "end-user"
+      action: allow
+  '@submilli/zendesk':
+    - capability: http.get
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.put
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: secrets.get
+      filter: name == "ZENDESK_ACCESS_TOKEN"
+      action: allow
