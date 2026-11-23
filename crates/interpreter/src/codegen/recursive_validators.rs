@@ -344,6 +344,8 @@ fn base_fields(
 ) -> Result<Option<BTreeMap<String, ObjectField>>, TypeTooLarge> {
     budget.charge_copy(ty, depth)?;
     match ty.peel() {
+        // Call signatures have no data fields for structural validation.
+        Type::Function { .. } => Ok(Some(BTreeMap::new())),
         Type::Object { fields, .. } => Ok(Some(fields.clone())),
         Type::InterfaceRef {
             package: owner,
