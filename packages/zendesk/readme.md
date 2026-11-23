@@ -100,12 +100,12 @@ Every check field is normalized before the check and sent exactly as checked:
 | Capability | Operation | Fields |
 | --- | --- | --- |
 | `zendesk.com/tickets.get` | `getTicket`, each ticket of `viewTickets` | `group`, `organization`, `brand`, `assignee`, `requester`, `status` (looked up) |
-| `zendesk.com/tickets.find` | `findTickets` | `group`, `organization`, `brand`, `assignee`, `requester`, `status` (a list), `tags` (as given) |
+| `zendesk.com/tickets.find` | `findTickets` | `group`, `organization`, `brand`, `assignee`, `requester`, `status` (a list), `tag` (as given, or `""`) |
 | `zendesk.com/tickets.count` | `countTickets` | as `tickets.find` |
 | `zendesk.com/tickets.create` | `createTicket` | `group`, `organization`, `brand`, `assignee`, `requester` (as given, or `""`), `public` (the first comment's), `fields` |
 | `zendesk.com/tickets.update` | `updateTicket` | the ticket's facts and `previousStatus` (looked up), `status`, `fields` |
 | `zendesk.com/tickets.assign` | `assignTicket` | the ticket's facts (looked up), `toGroup`, `toAssignee` (`"none"` to unassign, `""` when unchanged) |
-| `zendesk.com/tickets.merge` | `mergeTickets` | checked once for the target and once per source: `role` (`target` or `source`) and that ticket's facts (looked up) |
+| `zendesk.com/tickets.merge` | `mergeTickets` | checked once for the target and once per source: `role` (`target` or `source`) and that ticket's facts (looked up); with `public: true`, `comments.reply` too for each |
 | `zendesk.com/tickets.metrics` | `ticketMetrics` | the ticket's facts (looked up) |
 | `zendesk.com/comments.list` | `listComments` | the ticket's facts (looked up) |
 | `zendesk.com/comments.note` | `addNote`, a macro's internal comment | the ticket's facts (looked up) |
@@ -135,12 +135,15 @@ Every check field is normalized before the check and sent exactly as checked:
 - `updateTicket` never changes a ticket's group, assignee, requester,
   organization or brand, so a group-scoped rule cannot be bypassed by moving a
   ticket; `assignTicket` is the one way to move it, checked with where it is and
-  where it goes. A macro that moves a ticket names `group` or `assignee` in
+  where it goes. Given an agent alone, it sends the ticket's current group with
+  it, so Zendesk refuses an agent outside that group rather than moving the
+  ticket to the agent's default group. A macro that moves a ticket names `group` or `assignee` in
   `macros.apply`'s `fields`.
 - A public comment emails the requester and everyone copied, so it is
   `comments.reply` wherever it comes from: `reply`, `createTicket` with a public
-  first comment (checked in addition to `tickets.create`), and a macro's public
-  comment (in addition to `macros.apply`). Ask a person before replies with
+  first comment (checked in addition to `tickets.create`), a macro's public
+  comment (in addition to `macros.apply`), and a public merge comment (for the
+  target and each source, in addition to `tickets.merge`). Ask a person before replies with
   `action: ask-human`.
 - `viewTickets` checks `views.read` and then `tickets.get` for each ticket the
   view returns, so a view cannot reveal a ticket a rule would not let the agent
@@ -197,7 +200,14 @@ permissions:
   replaces every tag.
 - `applyMacro` reads what the macro would change (Zendesk's apply endpoint,
   which saves nothing), writes the fields that differ from the ticket and the
-  comment it adds, in one conditional write.
+  comment it adds, in one conditional write. A macro that also changes what the
+  package cannot write (CCs, followers, the ticket form) is refused with
+  `unsupported_macro` rather than applied in part.
+- `mergeTickets` is not conditional: Zendesk's merge has no `safe_update`. The
+  target and sources are checked as read just before the merge.
+- `findTickets` and `countTickets` take one `tag`: Zendesk's search matches
+  repeated tag terms as any of them, so a check on several could not hold for
+  the results.
 - `mergeTickets` starts a Zendesk background job and returns it; the merge is
   done when the job is `completed`.
 - Nothing is retried. `ZendeskError.retryable` marks HTTP 429, 503 and 409;

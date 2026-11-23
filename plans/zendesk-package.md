@@ -216,3 +216,22 @@ for the read tests.
 - **`tickets/destroy_many` is a background job**, and a customer cannot be deleted while their
   tickets exist; the tests' cleanup deletes tickets one at a time.
 - Client-credentials tokens last 30 minutes and come without a refresh token, as expected.
+
+## Found in review
+
+- **A public merge escaped `comments.reply`.** `mergeTickets(…, { public: true })` emails every
+  requester but was checked only as `tickets.merge`. It is now also `comments.reply` for the
+  target (its status kept) and each source (`closed`).
+- **Repeated `tags:` terms match any of the tags** (checked live: `tags:a tags:b` returns tickets
+  with either). A rule on the tags given would not hold for the results, so `findTickets` and
+  `countTickets` take one `tag`, checked as `tag`.
+- **An agent outside the ticket's group** would move the ticket to the agent's default group,
+  which `toGroup: ""` never showed the check. `assignTicket` with an agent alone sends the
+  ticket's current group, so Zendesk refuses the agent; a ticket with no group needs `groupId`.
+- **A macro could be applied in part.** The preview returns the whole ticket; a macro that changes
+  anything beyond the writable fields, custom fields, the comment and values Zendesk derives
+  (CCs, followers, the ticket form) is refused with `unsupported_macro`.
+- A ticket created with an assignee is `open`, not `new`: the reply check of its public first
+  comment says so. A macro's reply check sees the ticket's status when the macro leaves it.
+- Merging is the one unconditional ticket write (Zendesk's merge has no `safe_update`); the
+  readme says so.

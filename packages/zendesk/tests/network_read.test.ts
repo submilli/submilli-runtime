@@ -62,7 +62,7 @@ function main(): void {
     // The account keeps a ticket tagged `submilli-seed` for these steps; another
     // is used when it has none, filtered by status so that a ticket the write
     // tests just deleted (status "deleted" in search) is not picked.
-    const seeded = findTickets({ tags: ["submilli-seed"] }, { pageSize: 1 });
+    const seeded = findTickets({ tag: "submilli-seed" }, { pageSize: 1 });
     const any = seeded.items.length > 0 ? seeded : findTickets({ status: ["new", "open", "pending", "hold", "solved"] }, { pageSize: 1 });
     if (any.items.length === 0) {
         label("skip: the account has no tickets");
@@ -88,11 +88,11 @@ function main(): void {
     label("people search");
     const users = findUsers("*", { pageSize: 5 });
     assert(users.items.length > 0, "users");
-    const someone = users.items[0].name;
-    if (someone.length >= 2) {
-        const named = findUsers(someone, { pageSize: 5 });
-        assert(named.items.some((user) => user.name === someone), "found by name");
-    }
+    // By the seed ticket's requester, who stays: the first user of a wildcard
+    // search may be one the write tests just deleted, still in the search index.
+    const named = findUsers("Submilli Test Customer", { pageSize: 5 });
+    if (named.items.length === 0) label("skip: no seed customer");
+    else assert(named.items.some((user) => user.email === "zd-seed@example.com"), "found by name");
     findOrganizations("ex");
 
     label("views and macros");

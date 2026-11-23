@@ -743,7 +743,7 @@ fn zendesk_ticket_rules_hold_against_a_fake_zendesk() {
             (
                 "PUT".to_string(),
                 first.clone(),
-                stamped(serde_json::json!({ "assignee_id": 20 }))
+                stamped(serde_json::json!({ "assignee_id": 20, "group_id": 100 }))
             ),
             (
                 "PUT".to_string(),

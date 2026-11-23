@@ -39,7 +39,7 @@ the same write, such as `{ status: "pending" }` to wait for the customer or
 
 `findTickets(filter, options)` searches tickets; every filter given must match:
 `status` (a list, any of them), `groupId`, `assigneeId` (`null` for
-unassigned), `requesterId`, `organizationId`, `brandId`, `tags` (all of them),
+unassigned), `requesterId`, `organizationId`, `brandId`, `tag` (one tag),
 `createdAfter`, `createdBefore`, `updatedAfter`, `updatedBefore` (`YYYY-MM-DD`
 or a date-time with a zone), and `text`, a phrase to find. Results come most
 recently changed first; `options.sortBy` and `sortOrder` change that. A page
@@ -76,10 +76,10 @@ function main(): { id: string; subject: string; waitingSince: string }[] {
 - `updateTicket(id, { subject, status, priority, type, tags, addTags, removeTags, customFields, dueAt })`: only what is given changes; `null` clears priority, type or due date. Prefer `addTags`/`removeTags` to `tags`, which replaces them all. Custom fields are `{ id, value }` with ids from `listTicketFields`; a drop-down's value is its option's tag.
 <!-- submilli:endif -->
 <!-- submilli:if capability="zendesk.com/tickets.assign" -->
-- `assignTicket(id, { groupId, assigneeId })`: move a ticket; `assigneeId: null` unassigns it. The agent must be in the group.
+- `assignTicket(id, { groupId, assigneeId })`: move a ticket; `assigneeId: null` unassigns it. The agent must be in the group: given alone, the agent must be in the ticket's current group.
 <!-- submilli:endif -->
 <!-- submilli:if capability="zendesk.com/tickets.merge" -->
-- `mergeTickets(targetId, sourceIds, { targetComment, sourceComment, public })`: up to 5 duplicates into one; the sources are closed.
+- `mergeTickets(targetId, sourceIds, { targetComment, sourceComment, public })`: up to 5 duplicates into one; the sources are closed. `public: true` emails every requester, so it is also checked as a reply.
 <!-- submilli:endif -->
 <!-- submilli:if capability="zendesk.com/tickets.metrics" -->
 - `ticketMetrics(id)`: replies, reopens, and minutes to first reply and to resolution.
@@ -124,7 +124,7 @@ function main(): { id: string; subject: string; waitingSince: string }[] {
 - `previewMacro(ticketId, macroId)`: what a macro would change and the comment it would add, without saving.
 <!-- submilli:endif -->
 <!-- submilli:if capability="zendesk.com/macros.apply" -->
-- `applyMacro(ticketId, macroId)`: apply it and save. A macro that adds a public comment replies to the customer.
+- `applyMacro(ticketId, macroId)`: apply it and save. A macro that adds a public comment replies to the customer. A macro that changes what the package cannot write (CCs, followers, the ticket form) is refused with `unsupported_macro`.
 <!-- submilli:endif -->
 <!-- submilli:if capability="zendesk.com/metadata.read" -->
 - `listTicketFields()` and `listBrands()`: field ids and drop-down options, and brands.

@@ -157,7 +157,7 @@ test('findTickets writes the search query and checks the filter', () => {
     reset();
     on('GET', /^search\.json\?/, reply(200, { results: [ticket(1)], count: 250, next_page: 'https://acme.zendesk.com/api/v2/search.json?page=2' }));
     const page = zd.findTickets(
-        { status: ['open', 'new', 'open'], groupId: '100', assigneeId: null, tags: ['VIP'], createdAfter: '2026-11-01', text: 'refund please' },
+        { status: ['open', 'new', 'open'], groupId: '100', assigneeId: null, tag: 'VIP', createdAfter: '2026-11-01', text: 'refund please' },
         { pageSize: 50 },
     );
     const query = new URL(requests[0].url).searchParams;
@@ -167,7 +167,7 @@ test('findTickets writes the search query and checks the filter', () => {
     assert.equal(query.get('per_page'), '50');
     assert.equal(query.get('page'), '1');
     assert.deepEqual(checks, [{ capability: 'tickets.find', context: {
-        group: '100', organization: '', brand: '', assignee: 'none', requester: '', status: ['new', 'open'], tags: ['vip'],
+        group: '100', organization: '', brand: '', assignee: 'none', requester: '', status: ['new', 'open'], tag: 'vip',
     } }]);
     assert.equal(page.count, 250);
     assert.equal(page.nextCursor, '2');
@@ -222,6 +222,18 @@ test('assignTicket checks where the ticket is and where it goes', () => {
     assert.deepEqual(writes()[0].body.ticket, { group_id: 200, assignee_id: null, safe_update: true, updated_stamp: UPDATED });
 });
 
+test('assignTicket given an agent alone keeps the ticket in its group', () => {
+    reset();
+    onTicket(1);
+    zd.assignTicket('1', { assigneeId: '7' });
+    assert.deepEqual(checks[0].context, { ...FACTS, toGroup: '', toAssignee: '7' });
+    assert.deepEqual(writes()[0].body.ticket, { assignee_id: 7, group_id: 100, safe_update: true, updated_stamp: UPDATED });
+    reset();
+    onTicket(2, { group_id: null });
+    assert.throws(() => zd.assignTicket('2', { assigneeId: '7' }), /no group/);
+    assert.deepEqual(writes(), []);
+});
+
 test('createTicket with a public first comment is also checked as a reply', () => {
     reset();
     on('POST', 'tickets.json', (sent) => reply(201, { ticket: ticket(5, sent.body.ticket) }));
@@ -249,6 +261,19 @@ test('mergeTickets checks the target and every source', () => {
     assert.deepEqual(checks.map((check) => check.context.role + ':' + check.context.group), ['target:100', 'source:200', 'source:100']);
     assert.deepEqual(writes()[0].body, { ids: [2, 3], target_comment: 'Merged', target_comment_is_public: false, source_comment_is_public: false });
     assert.equal(job.status, 'queued');
+});
+
+test('a public merge is also checked as a reply for every ticket', () => {
+    reset();
+    onTicket(1);
+    onTicket(2, { group_id: 200 });
+    on('POST', 'tickets/1/merge.json', reply(200, { job_status: { id: 'job1', status: 'queued' } }));
+    denied = (name, context) => name === 'comments.reply' && context.group === '200';
+    assert.throws(() => zd.mergeTickets('1', ['2'], { public: true }), /denied/);
+    assert.deepEqual(checks.map((check) => check.capability + ':' + check.context.group + ':' + (check.context.status ?? '')), [
+        'tickets.merge:100:open', 'comments.reply:100:open', 'tickets.merge:200:open', 'comments.reply:200:closed',
+    ]);
+    assert.deepEqual(writes(), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -339,6 +364,16 @@ test('a macro that moves the ticket names group and assignee', () => {
     denied = (name, context) => name === 'macros.apply' && context.fields.includes('group');
     assert.throws(() => zd.applyMacro('1', '52'), /denied/);
     assert.deepEqual(checks[0].context.fields, ['assignee', 'group']);
+    assert.deepEqual(writes(), []);
+});
+
+test('a macro that changes what the package cannot write is refused', () => {
+    reset();
+    onTicket(1);
+    on('GET', 'tickets/1/macros/53/apply.json', reply(200, { result: { ticket: {
+        ...ticket(1), status: 'pending', custom_status_id: 9, email_cc_ids: [44], comment: { body: 'Looping in billing', public: true },
+    } } }));
+    assert.throws(() => zd.applyMacro('1', '53'), /email_cc_ids/);
     assert.deepEqual(writes(), []);
 });
 

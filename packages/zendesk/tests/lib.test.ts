@@ -155,7 +155,7 @@ function main(): void {
     expectCode("invalid_id", () => { getTicket("ticket-1"); }, "a ticket id");
     expectCode("invalid_input", () => { findTickets({ text: "a\" OR \"b" }); }, "a phrase with quotes");
     expectCode("invalid_date", () => { findTickets({ createdAfter: "last week" }); }, "a date filter");
-    expectCode("invalid_tag", () => { findTickets({ tags: ["two words"] }); }, "a tag filter");
+    expectCode("invalid_tag", () => { findTickets({ tag: "two words" }); }, "a tag filter");
     expectCode("invalid_id", () => { countTickets({ groupId: "Billing" }); }, "a group by name");
     expectCode("invalid_input", () => { createTicket({ subject: " ", body: "x" }); }, "a blank subject");
     expectCode("invalid_input", () => { createTicket({ subject: "x", body: "y", customFields: [{ id: "1", value: 1 }, { id: "01", value: 2 }] }); }, "a repeated custom field");

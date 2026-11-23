@@ -117,7 +117,7 @@ function exercise(run: string, tickets: string[], users: string[], macros: strin
     label("finding the run's tickets and the customer");
     const byRequester = findTickets({ requesterId: customer.id });
     assert(byRequester.items.length <= 1, "search may lag; at most the one ticket");
-    countTickets({ requesterId: customer.id, tags: ["submilli-test"] });
+    countTickets({ requesterId: customer.id, tag: "submilli-test" });
     findUsers("zd-test-" + run + "@example.com");
 
     label("a duplicate merged into the first");

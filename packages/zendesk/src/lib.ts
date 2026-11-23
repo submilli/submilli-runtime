@@ -157,8 +157,9 @@ export interface TicketFilter {
     organizationId?: string;
     /** In this brand. */
     brandId?: string;
-    /** Carrying every one of these tags. */
-    tags?: string[];
+    /** Carrying this tag. One tag: Zendesk's search matches repeated tag terms as
+     * any of them, so a check on the tags given could not hold for the results. */
+    tag?: string;
     /** Created on or after this date, `YYYY-MM-DD` or a date-time with a zone. */
     createdAfter?: string;
     /** Created before this date. */
@@ -377,14 +378,13 @@ export function getTicket(id: string): Ticket | null {
  * @param filter Every filter given must match.
  * @param options Order and page.
  * @returns One page of tickets and how many match.
- * @capability zendesk.com/tickets.find { group: string, organization: string, brand: string, assignee: string, requester: string, status: string[], tags: string[] }
+ * @capability zendesk.com/tickets.find { group: string, organization: string, brand: string, assignee: string, requester: string, status: string[], tag: string }
  */
 export function findTickets(filter: TicketFilter = {}, options: FindOptions = {}): SearchPage<Ticket> {
-    const { status, groupId, assigneeId, requesterId, organizationId, brandId, tags, createdAfter, createdBefore, updatedAfter, updatedBefore, text } = filter;
+    const { status, groupId, assigneeId, requesterId, organizationId, brandId, tag, createdAfter, createdBefore, updatedAfter, updatedBefore, text } = filter;
     const statuses: string[] = [];
     for (const item of status ?? []) statuses.push(ticketStatus(item, "status"));
-    const tagList: string[] = [];
-    for (const item of tags ?? []) tagList.push(normalizeTag(item, "tags"));
+    const tagged = tag === undefined ? "" : normalizeTag(tag, "tag");
     const { sortBy, sortOrder, pageSize, cursor } = options;
     const window = searchWindow({ pageSize: pageSize, cursor: cursor });
     const group = optionalId(groupId, "groupId");
@@ -392,7 +392,7 @@ export function findTickets(filter: TicketFilter = {}, options: FindOptions = {}
     const requester = optionalId(requesterId, "requesterId");
     const organization = optionalId(organizationId, "organizationId");
     const brand = optionalId(brandId, "brandId");
-    const terms = ticketTerms(sortedDistinct(statuses), group, assignee, requester, organization, brand, sortedDistinct(tagList));
+    const terms = ticketTerms(sortedDistinct(statuses), group, assignee, requester, organization, brand, tagged);
     dateTerm(terms, "created>=", createdAfter, "createdAfter");
     dateTerm(terms, "created<", createdBefore, "createdBefore");
     dateTerm(terms, "updated>=", updatedAfter, "updatedAfter");
@@ -406,7 +406,7 @@ export function findTickets(filter: TicketFilter = {}, options: FindOptions = {}
     }
     check("zendesk.com/tickets.find", {
         group: group, organization: organization, brand: brand, assignee: assignee, requester: requester,
-        status: sortedDistinct(statuses), tags: sortedDistinct(tagList),
+        status: sortedDistinct(statuses), tag: tagged,
     });
     const answer = searchGet(terms.join(" "), window, "&sort_by=" + sort + "&sort_order=" + order);
     const items: Ticket[] = [];
@@ -418,20 +418,19 @@ export function findTickets(filter: TicketFilter = {}, options: FindOptions = {}
  * Count tickets without reading them.
  * @param filter Every filter given must match, as in `findTickets` (`text` included).
  * @returns How many tickets match.
- * @capability zendesk.com/tickets.count { group: string, organization: string, brand: string, assignee: string, requester: string, status: string[], tags: string[] }
+ * @capability zendesk.com/tickets.count { group: string, organization: string, brand: string, assignee: string, requester: string, status: string[], tag: string }
  */
 export function countTickets(filter: TicketFilter = {}): number {
-    const { status, groupId, assigneeId, requesterId, organizationId, brandId, tags, createdAfter, createdBefore, updatedAfter, updatedBefore, text } = filter;
+    const { status, groupId, assigneeId, requesterId, organizationId, brandId, tag, createdAfter, createdBefore, updatedAfter, updatedBefore, text } = filter;
     const statuses: string[] = [];
     for (const item of status ?? []) statuses.push(ticketStatus(item, "status"));
-    const tagList: string[] = [];
-    for (const item of tags ?? []) tagList.push(normalizeTag(item, "tags"));
+    const tagged = tag === undefined ? "" : normalizeTag(tag, "tag");
     const group = optionalId(groupId, "groupId");
     const assignee = assigneeId === null ? "none" : optionalId(assigneeId, "assigneeId");
     const requester = optionalId(requesterId, "requesterId");
     const organization = optionalId(organizationId, "organizationId");
     const brand = optionalId(brandId, "brandId");
-    const terms = ticketTerms(sortedDistinct(statuses), group, assignee, requester, organization, brand, sortedDistinct(tagList));
+    const terms = ticketTerms(sortedDistinct(statuses), group, assignee, requester, organization, brand, tagged);
     dateTerm(terms, "created>=", createdAfter, "createdAfter");
     dateTerm(terms, "created<", createdBefore, "createdBefore");
     dateTerm(terms, "updated>=", updatedAfter, "updatedAfter");
@@ -439,7 +438,7 @@ export function countTickets(filter: TicketFilter = {}): number {
     if (text !== undefined) terms.push(searchPhrase(text, "text"));
     check("zendesk.com/tickets.count", {
         group: group, organization: organization, brand: brand, assignee: assignee, requester: requester,
-        status: sortedDistinct(statuses), tags: sortedDistinct(tagList),
+        status: sortedDistinct(statuses), tag: tagged,
     });
     const answer = body(zdGet("search/count.json?query=" + encodeComponent(terms.join(" "))));
     return numberAt(answer, "count") ?? 0;
@@ -517,7 +516,8 @@ export function createTicket(input: TicketInput): Ticket {
     if (isPublic) {
         check("zendesk.com/comments.reply", {
             group: group, organization: organization, brand: brand, assignee: assignee, requester: requester,
-            status: "new", previousStatus: "",
+            // Zendesk opens a ticket created with an assignee.
+            status: assignee.length > 0 ? "open" : "new", previousStatus: "",
         });
     }
     const answer = body(zdPost("tickets.json", { ticket: ticket }));
@@ -623,6 +623,15 @@ export function assignTicket(id: string, assignment: Assignment): Ticket {
     else if (toAssignee.length > 0) ticket["assignee_id"] = Number(toAssignee);
     const raw = readTicket(ticketId);
     const facts = factsOf(raw);
+    // An agent outside the ticket's group would move it to the agent's default
+    // group, which the check never saw: the group is sent as it is, so Zendesk
+    // refuses the agent instead, and a ticket with no group needs one named.
+    if (toGroup.length === 0 && toAssignee.length > 0 && toAssignee !== "none") {
+        if (raw !== null && facts.group.length === 0) {
+            throw validationError("invalid_input", "the ticket has no group: give groupId with assigneeId");
+        }
+        if (facts.group.length > 0) ticket["group_id"] = Number(facts.group);
+    }
     check("zendesk.com/tickets.assign", {
         group: facts.group, organization: facts.organization, brand: facts.brand, assignee: facts.assignee,
         requester: facts.requester, status: facts.status, toGroup: toGroup, toAssignee: toAssignee,
@@ -638,6 +647,7 @@ export function assignTicket(id: string, assignment: Assignment): Ticket {
  * @param options The comments added to the target and the sources.
  * @returns The merge job.
  * @capability zendesk.com/tickets.merge { role: string, group: string, organization: string, brand: string, assignee: string, requester: string, status: string }
+ * @capability zendesk.com/comments.reply { group: string, organization: string, brand: string, assignee: string, requester: string, status: string, previousStatus: string }
  */
 export function mergeTickets(targetId: string, sourceIds: string[], options: MergeOptions = {}): MergeJob {
     const target = normalizeId(targetId, "targetId");
@@ -656,12 +666,25 @@ export function mergeTickets(targetId: string, sourceIds: string[], options: Mer
         role: "target", group: targetFacts.group, organization: targetFacts.organization, brand: targetFacts.brand,
         assignee: targetFacts.assignee, requester: targetFacts.requester, status: targetFacts.status,
     });
+    // Public merge comments reach every requester, so each is also a reply.
+    if (visible === true) {
+        check("zendesk.com/comments.reply", {
+            group: targetFacts.group, organization: targetFacts.organization, brand: targetFacts.brand,
+            assignee: targetFacts.assignee, requester: targetFacts.requester, status: targetFacts.status, previousStatus: targetFacts.status,
+        });
+    }
     for (const source of sortedDistinct(sources)) {
         const facts = factsOf(readTicket(source));
         check("zendesk.com/tickets.merge", {
             role: "source", group: facts.group, organization: facts.organization, brand: facts.brand,
             assignee: facts.assignee, requester: facts.requester, status: facts.status,
         });
+        if (visible === true) {
+            check("zendesk.com/comments.reply", {
+                group: facts.group, organization: facts.organization, brand: facts.brand,
+                assignee: facts.assignee, requester: facts.requester, status: "closed", previousStatus: facts.status,
+            });
+        }
     }
     return mergeJobFrom(body(zdPost("tickets/" + target + "/merge.json", request)));
 }
@@ -1134,7 +1157,7 @@ export function applyMacro(ticketId: string, macroId: string): Ticket {
         macro: macro, group: facts.group, organization: facts.organization, brand: facts.brand,
         assignee: facts.assignee, requester: facts.requester, status: facts.status, fields: changes.fields,
     });
-    const newStatus = textAt(changes.body, "status") ?? "";
+    const newStatus = textAt(changes.body, "status") ?? facts.status;
     if (added !== null && added.public) {
         check("zendesk.com/comments.reply", {
             group: facts.group, organization: facts.organization, brand: facts.brand,
@@ -1392,7 +1415,19 @@ const MACRO_FIELDS: string[][] = [
     ["group_id", "group"], ["assignee_id", "assignee"], ["due_at", "due_at"], ["problem_id", "problem"],
 ];
 
+// What a macro's preview may change besides MACRO_FIELDS and custom fields:
+// the comment, and values Zendesk derives from what is written.
+const MACRO_DERIVED: string[] = ["comment", "custom_fields", "fields", "raw_subject", "updated_at", "generated_timestamp", "custom_status_id"];
+
 function macroChanges(current: Record<string, unknown>, after: Record<string, unknown>): MacroChanges {
+    const unsupported: string[] = [];
+    for (const key of Object.keys(after)) {
+        if (MACRO_DERIVED.includes(key) || MACRO_FIELDS.some((pair) => pair[0] === key)) continue;
+        if (JSON.stringify(after[key] ?? null) !== JSON.stringify(current[key] ?? null)) unsupported.push(key);
+    }
+    if (unsupported.length > 0) {
+        throw validationError("unsupported_macro", "the macro also changes " + sortedDistinct(unsupported).join(", ") + ", which applyMacro cannot write; apply it in Zendesk");
+    }
     const changed: Record<string, unknown> = {};
     const fields: string[] = [];
     for (const pair of MACRO_FIELDS) {
@@ -1421,7 +1456,7 @@ function macroChanges(current: Record<string, unknown>, after: Record<string, un
 }
 
 function ticketTerms(
-    statuses: string[], group: string, assignee: string, requester: string, organization: string, brand: string, tags: string[],
+    statuses: string[], group: string, assignee: string, requester: string, organization: string, brand: string, tag: string,
 ): string[] {
     const terms: string[] = ["type:ticket"];
     for (const status of statuses) terms.push("status:" + status);
@@ -1430,7 +1465,7 @@ function ticketTerms(
     if (requester.length > 0) terms.push("requester:" + requester);
     if (organization.length > 0) terms.push("organization:" + organization);
     if (brand.length > 0) terms.push("brand:" + brand);
-    for (const tag of tags) terms.push("tags:" + tag);
+    if (tag.length > 0) terms.push("tags:" + tag);
     return terms;
 }
 

@@ -183,8 +183,8 @@ provides:
       type: string
     status:
       type: string[]
-    tags:
-      type: string[]
+    tag:
+      type: string
 - name: zendesk.com/tickets.create
   description: Create a ticket. A public first comment is also checked as a reply, since the requester sees it.
   fields:
@@ -217,8 +217,8 @@ provides:
       type: string
     status:
       type: string[]
-    tags:
-      type: string[]
+    tag:
+      type: string
 - name: zendesk.com/tickets.get
   description: Get a ticket; null when it does not exist.
   fields:
