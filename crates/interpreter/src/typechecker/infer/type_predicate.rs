@@ -273,13 +273,34 @@ impl Inferer<'_> {
             Type::Union(members) => Type::union(
                 members
                     .iter()
-                    .filter(|member| !assignable(member, asserted, self.resolver()))
-                    .cloned()
+                    .filter_map(|member| self.subtract_asserted_member(member, asserted))
                     .collect(),
             ),
-            shape if assignable(shape, asserted, self.resolver()) => Type::Error,
-            _ => ty.clone(),
+            _ => self
+                .subtract_asserted_member(ty, asserted)
+                .unwrap_or(Type::Error),
         }
+    }
+
+    fn subtract_asserted_member(&self, member: &Type, asserted: &Type) -> Option<Type> {
+        if assignable(member, asserted, self.resolver()) {
+            return None;
+        }
+        let asserted_members = match asserted.peel() {
+            Type::Union(members) => members.as_slice(),
+            single => std::slice::from_ref(single),
+        };
+        let Some(variants) =
+            assignable::enum_as_member_union(member, asserted_members, self.resolver())
+        else {
+            return Some(member.clone());
+        };
+        Some(Type::union(
+            variants
+                .into_iter()
+                .filter(|variant| !assignable(variant, asserted, self.resolver()))
+                .collect(),
+        ))
     }
 
     /// Checks that a type guard's returned value proves its predicate, and

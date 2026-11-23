@@ -790,21 +790,20 @@ pub(crate) fn rest_function_accepts(
 }
 
 /// Whether a value of an enum, or of its member `actual`, is one of `expected`:
-/// the whole enum, or that same member.
-fn enum_member_fits<V>(
+/// the whole enum, or a member of that enum with the same value.
+fn enum_member_fits<V: PartialEq>(
     actual: Option<&crate::types::EnumMember<V>>,
     expected: Option<&crate::types::EnumMember<V>>,
 ) -> bool {
     match (actual, expected) {
         (_, None) => true,
-        (Some(actual), Some(expected)) => actual.name == expected.name,
+        (Some(actual), Some(expected)) => actual.value == expected.value,
         (None, Some(_)) => false,
     }
 }
 
-/// The members of the enum `actual` as member literal types, when the union
-/// `expected` names one of them: only then can it need them all.
-fn enum_as_member_union(
+/// Expand a whole enum when at least one expected type names a member of that enum.
+pub(super) fn enum_as_member_union(
     actual: &Type,
     expected: &[Type],
     types: TypeResolver,
