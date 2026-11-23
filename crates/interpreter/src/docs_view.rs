@@ -585,6 +585,79 @@ mod tests {
     }
 
     #[test]
+    fn selected_docs_preserve_type_predicates_and_their_references() {
+        let defs = declaration(
+            r#"
+            export interface Choice { label: string; }
+            export interface ChoiceAnswer { choice: Choice; }
+            export function isChoiceAnswer(answer: unknown): answer is ChoiceAnswer {
+                return typeof answer === "object" && answer !== null && "choice" in answer;
+            }
+        "#,
+        );
+        let selected = select_documentation(&defs, &["isChoiceAnswer".into()]).unwrap();
+        let text = crate::packages::render_selected_declarations(&selected);
+        assert!(
+            text.contains("function isChoiceAnswer(answer: unknown): answer is ChoiceAnswer;"),
+            "{text}"
+        );
+        assert!(text.contains("interface ChoiceAnswer {"), "{text}");
+        assert!(text.contains("interface Choice {"), "{text}");
+    }
+
+    #[test]
+    fn selected_docs_preserve_enum_members_in_type_predicates() {
+        let defs = declaration(
+            r#"
+            export enum AnswerKind { Choice = "choice", Score = "score" }
+            export function isChoice(kind: AnswerKind): kind is AnswerKind.Choice {
+                return kind === AnswerKind.Choice;
+            }
+        "#,
+        );
+        let selected = select_documentation(&defs, &["isChoice".into()]).unwrap();
+        let text = crate::packages::render_selected_declarations(&selected);
+        assert!(
+            text.contains("function isChoice(kind: AnswerKind): kind is AnswerKind.Choice;"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn selected_docs_preserve_generic_function_types_in_predicates() {
+        let defs = declaration(
+            r#"
+            export function isIdentity(value: unknown): value is <T>(item: T) => T {
+                return false;
+            }
+        "#,
+        );
+        let selected = select_documentation(&defs, &["isIdentity".into()]).unwrap();
+        let text = crate::packages::render_selected_declarations(&selected);
+        assert!(
+            text.contains("function isIdentity(value: unknown): value is <T>(arg0: T) => T;"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn selected_docs_group_union_targets_for_generic_predicates() {
+        let defs = declaration(
+            r#"
+            export function isPrimitive<T>(value: T): value is string | number {
+                return typeof value === "string" || typeof value === "number";
+            }
+        "#,
+        );
+        let selected = select_documentation(&defs, &["isPrimitive".into()]).unwrap();
+        let text = crate::packages::render_selected_declarations(&selected);
+        assert!(
+            text.contains("function isPrimitive<T>(value: T): value is T & (number | string);"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn selected_docs_follow_transitive_types_and_scope() {
         let defs = declaration(
             r#"
