@@ -176,9 +176,8 @@ tests; the same client's auth-code flow for the Agents run); `ZENDESK_ACCOUNT_UR
   use cursor pagination.
 - **Ids are 1–16 digits and a safe integer**, sent as JSON numbers; checks see the decimal
   text without leading zeros.
-- **`addTags` and `removeTags` are options of `updateTicket`** (Zendesk's `additional_tags` and
-  `remove_tags`, sent with `safe_update`), not separate operations; `tags` replaces all and
-  cannot be combined with them.
+- **`addTags` and `removeTags` are options of `updateTicket`**, not separate operations; `tags`
+  replaces all and cannot be combined with them. (How they are written: see below.)
 - **No `getAttachment`.** Attachments are served from another host
   (`*.zdusercontent.com`), which the account-URL grant does not name. Comments return each
   attachment's `contentUrl`; downloading waits for a second build setting or a runtime change.
@@ -197,3 +196,23 @@ tests; the same client's auth-code flow for the Agents run); `ZENDESK_ACCOUNT_UR
 - **Enum inputs** (status, priority, type, sort, score) are type-checked by the runtime before
   the package sees them; the package's own validation also covers values built at run time.
 - The fake-host helper `copy_package` in `package_policy.rs` now serves Salesforce and Zendesk.
+
+## Found by the live tests
+
+Run 2026-11-23 against `submilliaihelp.zendesk.com` (Doron's account; the package's own trial
+was locked by Zendesk at signup), client-credentials token from a confidential OAuth client
+"Submilli". All read and write tests pass; the account keeps ticket #2, tagged `submilli-seed`,
+for the read tests.
+
+- **`views/active.json` pages by number only**; `listViews` uses `views.json?active=true`, which
+  takes cursor paging.
+- **A single ticket's update ignores `additional_tags` and `remove_tags`** (only Zendesk's bulk
+  update applies them). The package writes the whole tag list, computed from the tags read for
+  the check, in the same `safe_update` write, so a concurrent tag change is refused with 409
+  rather than lost.
+- **A macro preview gives the comment's `public` as text** (`"false"`), not a boolean. The
+  package read it as public, so a macro's note was checked as a reply (safe, but wrong); now
+  only `false` or `"false"` is private.
+- **`tickets/destroy_many` is a background job**, and a customer cannot be deleted while their
+  tickets exist; the tests' cleanup deletes tickets one at a time.
+- Client-credentials tokens last 30 minutes and come without a refresh token, as expected.

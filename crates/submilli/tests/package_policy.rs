@@ -731,7 +731,7 @@ fn zendesk_ticket_rules_hold_against_a_fake_zendesk() {
             (
                 "PUT".to_string(),
                 first.clone(),
-                stamped(serde_json::json!({ "status": "pending", "additional_tags": ["vip"] }))
+                stamped(serde_json::json!({ "status": "pending", "tags": ["vip"] }))
             ),
             (
                 "PUT".to_string(),
@@ -784,10 +784,10 @@ fn zendesk_answer(
     let macro_result = |changes: serde_json::Value| json!({ "result": { "ticket": changes } });
     let mut tagged = ticket(1, 100);
     tagged["tags"] = json!(["vip", "billing"]);
-    tagged["comment"] = json!({ "body": "Tagged for billing", "public": false });
+    tagged["comment"] = json!({ "body": "Tagged for billing", "public": "false" });
     let mut solved = ticket(1, 100);
     solved["status"] = json!("solved");
-    solved["comment"] = json!({ "body": "We fixed it", "public": true });
+    solved["comment"] = json!({ "body": "We fixed it", "public": "true" });
     let mut moved = ticket(1, 200);
     moved["comment"] = json!(null);
     match (method, path) {

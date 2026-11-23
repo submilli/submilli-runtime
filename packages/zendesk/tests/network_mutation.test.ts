@@ -1,13 +1,13 @@
 // Live writes against the account installed with `--config accountUrl=…`. Runs
 // only with ZENDESK_ACCESS_TOKEN and ZENDESK_LIVE_MUTATIONS=true bound, with an
 // admin's token. It creates a customer at example.com, tickets for that customer
-// and a macro, all named with a run id, and deletes them at the end, also when a
-// step fails. Deleting is not a package operation, so the cleanup calls the API
+// a macro and a Help Center category with a section and an article, all named
+// with a run id, and deletes them at the end, also when a step fails. Deleting is not a package operation, so the cleanup calls the API
 // directly. The reply goes to the test customer's example.com address.
 import { label } from "submilli:test";
 import secrets from "submilli:secrets";
 import { writeText } from "submilli:fs";
-import { delete as httpDelete, post } from "submilli:http";
+import { delete as httpDelete, get, post } from "submilli:http";
 import { v4 } from "submilli:uuid";
 import { accountUrl } from "../src/config";
 import {
@@ -19,10 +19,12 @@ import {
     createUser,
     findTickets,
     findUsers,
+    getArticle,
     getTicket,
     listAgents,
     listComments,
     listGroups,
+    listSections,
     mergeTickets,
     previewMacro,
     reply,
@@ -42,10 +44,12 @@ function main(): void {
     const tickets: string[] = [];
     const users: string[] = [];
     const macros: string[] = [];
+    const categories: string[] = [];
     try {
         exercise(run, tickets, users, macros);
+        helpCenter(run, categories);
     } finally {
-        cleanUp(tickets, users, macros);
+        cleanUp(tickets, users, macros, categories);
     }
 }
 
@@ -123,13 +127,38 @@ function exercise(run: string, tickets: string[], users: string[], macros: strin
     assert(job.id.length > 0, "a merge job " + job.status);
 }
 
-// Deletes what the run created: tickets, then the customer, then the macro. Each
-// failure is reported, not thrown, so the rest still goes.
-function cleanUp(tickets: string[], users: string[], macros: string[]): void {
+// An article in a new section of a new category, written through the API (the
+// package only reads the Help Center), then read back through the package.
+function helpCenter(run: string, categories: string[]): void {
+    label("a Help Center article");
+    const category = body(post(API + "help_center/categories.json", { category: { name: "Submilli test " + run, locale: "en-us" } }, headers()));
+    const categoryId = idOf(category["category"]);
+    categories.push(categoryId);
+    const section = body(post(API + "help_center/categories/" + categoryId + "/sections.json", { section: { name: "Submilli test " + run, locale: "en-us" } }, headers()));
+    const sectionId = idOf(section["section"]);
+    const groups = body(get(API + "guide/permission_groups.json", headers()));
+    const permissionGroup = idOf((groups["permission_groups"] as unknown[])[0]);
+    const created = body(post(API + "help_center/sections/" + sectionId + "/articles.json", { article: {
+        title: "Submilli test article " + run, body: "<p>Resetting a password, run " + run + ".</p>", locale: "en-us",
+        permission_group_id: Number(permissionGroup), user_segment_id: null,
+    } }, headers()));
+    const articleId = idOf(created["article"]);
+    const article = getArticle(articleId);
+    assert(article !== null && article.sectionId === sectionId && article.body.includes(run), "read the article back");
+    assert(listSections({ categoryId: categoryId }).some((one) => one.id === sectionId), "the category's section");
+}
+
+// Deletes what the run created: tickets, then the customer, the macro and the Help
+// Center category (with its section and article). Each failure is reported, not
+// thrown, so the rest still goes.
+function cleanUp(tickets: string[], users: string[], macros: string[], categories: string[]): void {
     label("clean up");
-    if (tickets.length > 0) report("tickets", httpDelete(API + "tickets/destroy_many.json?ids=" + tickets.join(","), headers()).status);
+    // One at a time: `destroy_many` is a background job, and a customer cannot be
+    // deleted while their tickets still exist.
+    for (const ticket of tickets) report("ticket " + ticket, httpDelete(API + "tickets/" + ticket + ".json", headers()).status);
     for (const user of users) report("user " + user, httpDelete(API + "users/" + user + ".json", headers()).status);
     for (const macro of macros) report("macro " + macro, httpDelete(API + "macros/" + macro + ".json", headers()).status);
+    for (const category of categories) report("category " + category, httpDelete(API + "help_center/categories/" + category + ".json", headers()).status);
 }
 
 function report(what: string, status: number): void {

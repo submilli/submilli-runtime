@@ -187,8 +187,8 @@ test('updateTicket writes only the changes, conditional on the ticket read', () 
         ...FACTS, status: 'pending', previousStatus: 'open', fields: ['custom.360001', 'status', 'tags'],
     } }]);
     assert.deepEqual(writes(), [{ method: 'PUT', path: 'tickets/1.json', body: { ticket: {
-        status: 'pending', additional_tags: ['waiting'], custom_fields: [{ id: 360001, value: ['gold'] }],
-        safe_update: true, updated_stamp: UPDATED,
+        status: 'pending', custom_fields: [{ id: 360001, value: ['gold'] }],
+        tags: ['vip', 'waiting'], safe_update: true, updated_stamp: UPDATED,
     } } }]);
 });
 

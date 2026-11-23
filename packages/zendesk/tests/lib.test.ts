@@ -133,6 +133,10 @@ function main(): void {
     const preview = macroPreviewFrom({ result: { ticket: { status: "solved", comment: { body: "Thanks", public: true } } } });
     assert(preview.changes["status"] === "solved" && preview.comment !== null && preview.comment.public, "a macro preview");
     assert(macroPreviewFrom({ result: { ticket: { status: "open" } } }).comment === null, "a macro without a comment");
+    const internal = macroPreviewFrom({ result: { ticket: { comment: { body: "Checked", public: "false" } } } }).comment;
+    assert(internal !== null && !internal.public, "Zendesk sends a macro comment's visibility as text");
+    const visible = macroPreviewFrom({ result: { ticket: { comment: { body: "Thanks", public: "true" } } } }).comment;
+    assert(visible !== null && visible.public, "and \"true\" is public");
 
     label("errors");
     const invalid = failureFrom(422, "Unprocessable", "{\"error\":\"RecordInvalid\",\"description\":\"Record validation errors\",\"details\":{\"requester\":[{\"description\":\"Requester: is invalid\"}]}}");

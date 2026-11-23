@@ -89,6 +89,7 @@ import {
     Section,
     sectionFrom,
     textAt,
+    textsAt,
     Ticket,
     TicketField,
     ticketFieldFrom,
@@ -578,14 +579,7 @@ export function updateTicket(id: string, changes: TicketUpdate): Ticket {
         ticket["tags"] = tagList;
         fields.push("tags");
     }
-    if (added.length > 0) {
-        ticket["additional_tags"] = added;
-        fields.push("tags");
-    }
-    if (removed.length > 0) {
-        ticket["remove_tags"] = removed;
-        fields.push("tags");
-    }
+    if (added.length > 0 || removed.length > 0) fields.push("tags");
     if (dueAt !== undefined) {
         ticket["due_at"] = dueAt === null ? null : requireDate(dueAt, "dueAt");
         fields.push("due_at");
@@ -598,6 +592,15 @@ export function updateTicket(id: string, changes: TicketUpdate): Ticket {
         group: facts.group, organization: facts.organization, brand: facts.brand, assignee: facts.assignee,
         requester: facts.requester, status: newStatus, previousStatus: facts.status, fields: sortedDistinct(fields),
     });
+    // Zendesk ignores `additional_tags` and `remove_tags` on a single ticket's
+    // update, so the whole list is written, computed from the tags read for the
+    // check; `safe_update` refuses it if they changed since.
+    if (raw !== null && (added.length > 0 || removed.length > 0)) {
+        const next: string[] = [];
+        for (const tag of textsAt(raw, "tags")) if (!removed.includes(tag) && !next.includes(tag)) next.push(tag);
+        for (const tag of added) if (!removed.includes(tag) && !next.includes(tag)) next.push(tag);
+        ticket["tags"] = next;
+    }
     return writeTicket(ticketId, raw, ticket);
 }
 
@@ -1021,7 +1024,7 @@ export function listViews(page: PageOptions = {}): Page<View> {
     const { pageSize, cursor } = page;
     const window = pageWindow({ pageSize: pageSize, cursor: cursor });
     check("zendesk.com/views.list", {});
-    const answer = body(zdGet("views/active.json?" + pageQuery(window)));
+    const answer = body(zdGet("views.json?active=true&" + pageQuery(window)));
     const items: View[] = [];
     for (const raw of arrayAt(answer, "views")) items.push(viewFrom(raw));
     return { items: items, nextCursor: afterCursor(answer) };

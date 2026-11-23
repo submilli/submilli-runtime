@@ -537,8 +537,10 @@ export function macroPreviewFrom(raw: unknown): MacroPreview {
         const body = textAt(raw_comment, "body") ?? "";
         const html = textAt(raw_comment, "html_body") ?? "";
         if (body.length > 0 || html.length > 0) {
+            // Zendesk's preview gives `public` as the text "false" or "true"; anything
+            // but a clear false is taken as public, the stricter check.
             const visibility = (raw_comment as Record<string, unknown>)["public"];
-            comment = { body: body, htmlBody: html, public: visibility !== false };
+            comment = { body: body, htmlBody: html, public: visibility !== false && visibility !== "false" };
         }
     }
     return { changes: changes, comment: comment };

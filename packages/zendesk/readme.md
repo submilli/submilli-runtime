@@ -191,8 +191,10 @@ permissions:
   read for its check. If the ticket changed in between, Zendesk refuses it with
   409 and the package throws `ZendeskError` `UpdateConflict` (`retryable`):
   read the ticket again and decide again.
-- `addTags` and `removeTags` change only those tags (Zendesk's
-  `additional_tags` and `remove_tags`); `tags` replaces every tag.
+- `addTags` and `removeTags` change only those tags: the package writes the
+  ticket's tags as read for the check, plus and minus them, under the same
+  `safe_update`, so a tag someone added meanwhile is never lost; `tags`
+  replaces every tag.
 - `applyMacro` reads what the macro would change (Zendesk's apply endpoint,
   which saves nothing), writes the fields that differ from the ticket and the
   comment it adds, in one conditional write.

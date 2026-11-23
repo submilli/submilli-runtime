@@ -59,7 +59,11 @@ function main(): void {
     }
     assert(getTicket("999999999") === null, "a missing ticket reads as null");
 
-    const any = findTickets({}, { pageSize: 1 });
+    // The account keeps a ticket tagged `submilli-seed` for these steps; another
+    // is used when it has none, filtered by status so that a ticket the write
+    // tests just deleted (status "deleted" in search) is not picked.
+    const seeded = findTickets({ tags: ["submilli-seed"] }, { pageSize: 1 });
+    const any = seeded.items.length > 0 ? seeded : findTickets({ status: ["new", "open", "pending", "hold", "solved"] }, { pageSize: 1 });
     if (any.items.length === 0) {
         label("skip: the account has no tickets");
     } else {
