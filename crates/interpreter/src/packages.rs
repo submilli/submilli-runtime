@@ -1843,7 +1843,7 @@ fn render_ts_value(
             let _ = writeln!(
                 out,
                 "{indent}{decl_export_prefix}function {declared_name}{}({}): {ret};",
-                generics_str(generics),
+                ts_generics(generics),
                 ts_params_str(params, value_doc(kind).as_ref())
             );
         }
@@ -1960,7 +1960,7 @@ fn render_ts_interface_parents(
         let _ = writeln!(
             out,
             "{indent}{export_prefix}type {alias}{} = {};",
-            generics_str(generics),
+            ts_generics(generics),
             ts_type(base)
         );
         let args = if generics.is_empty() {
@@ -2058,7 +2058,7 @@ fn render_ts_type(
                     out,
                     "{inner}{}{}({}): {ret};",
                     prefix,
-                    generics_str(&m.generics),
+                    ts_generics(&m.generics),
                     ts_params_str(&m.params, m.doc.as_ref())
                 );
             }
@@ -2082,7 +2082,7 @@ fn render_ts_type(
                     let _ = writeln!(
                         out,
                         "{inner}{mname}{optional}{}({}): {ret};",
-                        generics_str(&m.generics),
+                        ts_generics(&m.generics),
                         ts_params_str(&m.params, m.doc.as_ref())
                     );
                 }
@@ -2112,7 +2112,7 @@ fn render_ts_type(
             let _ = writeln!(
                 out,
                 "{indent}{export_prefix}type {name}{} = {};\n",
-                generics_str(generics),
+                ts_generics(generics),
                 ts_type(ty)
             );
         }
@@ -2137,7 +2137,7 @@ fn render_ts_type(
             let _ = writeln!(
                 out,
                 "{indent}{export_prefix}class {name}{}{} {{",
-                generics_str(generics),
+                ts_generics(generics),
                 extends.unwrap_or_default()
             );
             for (fname, field) in static_fields {
@@ -2166,7 +2166,7 @@ fn render_ts_type(
                     let _ = writeln!(
                         out,
                         "{inner}{modifier}static {mname}{}({}): {ret};",
-                        generics_str(&m.generics),
+                        ts_generics(&m.generics),
                         ts_params_str(&m.params, m.doc.as_ref())
                     );
                 }
@@ -2218,7 +2218,7 @@ fn render_ts_type(
                     let _ = writeln!(
                         out,
                         "{inner}{modifier}{mname}{optional}{}({}): {ret};",
-                        generics_str(&m.generics),
+                        ts_generics(&m.generics),
                         ts_params_str(&m.params, m.doc.as_ref())
                     );
                 }
@@ -2372,7 +2372,7 @@ fn ts_callable_property_type(method: &crate::MethodSig, value: &Type) -> String 
         .map(|signature| {
             format!(
                 "{}({}): {};",
-                generics_str(&signature.generics),
+                ts_generics(&signature.generics),
                 ts_params_str(&signature.params, signature.doc.as_ref()),
                 ts_return_type(
                     &signature.params,
@@ -2473,7 +2473,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Unknown => "unknown".to_string(),
         Type::NonPrimitive => "object".to_string(),
         Type::Function {
-            generics: _,
+            generics,
             params,
             ret,
             predicate,
@@ -2506,7 +2506,7 @@ fn ts_type(ty: &Type) -> String {
                     ts_predicate(p, &name, || ts_type(&p.asserted_type))
                 },
             );
-            format!("({params}) => {ret}")
+            format!("{}({params}) => {ret}", ts_generics(generics))
         }
         Type::Object {
             fields,
@@ -2571,7 +2571,12 @@ fn ts_type(ty: &Type) -> String {
         Type::InterfaceRef { name, args, .. }
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. } => ts_named_type(name, args),
-        Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => name.clone(),
+        Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => {
+            match ty.enum_member_name() {
+                Some((_, member, _)) => format!("{name}.{member}"),
+                None => name.clone(),
+            }
+        }
         Type::Union(members) => crate::types::union_display_order(members)
             .into_iter()
             .map(ts_type_union_member)
@@ -2930,7 +2935,18 @@ fn render_namespace(out: &mut String, name: &str, ns: &NamespaceSymbol, indent: 
     let _ = writeln!(out, "{indent}}}\n");
 }
 
+fn ts_generics(generics: &crate::GenericParameters) -> String {
+    format_generics(generics, ts_type)
+}
+
 fn generics_str(generics: &crate::GenericParameters) -> String {
+    format_generics(generics, Type::to_string)
+}
+
+fn format_generics(
+    generics: &crate::GenericParameters,
+    format_type: impl Fn(&Type) -> String,
+) -> String {
     if generics.is_empty() {
         String::new()
     } else {
@@ -2939,7 +2955,7 @@ fn generics_str(generics: &crate::GenericParameters) -> String {
             generics
                 .iter()
                 .map(|name| match generics.constraints.get(name) {
-                    Some(constraint) => format!("{name} extends {constraint}"),
+                    Some(constraint) => format!("{name} extends {}", format_type(constraint)),
                     None => name.clone(),
                 })
                 .collect::<Vec<_>>()
@@ -2962,7 +2978,7 @@ fn ts_interface_generics(
     {
         return format!("<{t}, TReturn = any, TNext = any>");
     }
-    generics_str(generics)
+    ts_generics(generics)
 }
 
 fn params_str(params: &[Param], doc: Option<&DocComment>) -> String {
@@ -4119,6 +4135,26 @@ mod tests {
         )
         .unwrap_or_else(|errors| panic!("{errors:#?}"))
         .declaration
+    }
+
+    #[test]
+    fn editor_predicates_preserve_enum_members_and_callable_binders() {
+        // Editor declarations must retain bounds longer than the diagnostic display budget.
+        let bound = "x".repeat(70_000);
+        let source = r#"
+            export enum Kind { Choice, Score }
+            export function isChoice(kind: Kind): kind is Kind.Choice {
+                return kind === Kind.Choice;
+            }
+            export function isIdentity(value: unknown): value is <T extends "BOUND">(item: T) => T {
+                return false;
+            }
+        "#
+        .replace("BOUND", &bound);
+        let defs = inheritance_package("@test/guards", &source, &[]);
+        let editor = render_packages_d_ts(&[&defs], &[]);
+        assert!(editor.contains("kind is Kind.Choice;"));
+        assert!(editor.contains(&format!(r#"value is <T extends "{bound}">(arg0: T) => T;"#)));
     }
 
     #[test]
