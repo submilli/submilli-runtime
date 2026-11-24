@@ -10,6 +10,7 @@ use submilli_engine::runtime::session_announcements::{
     AnnouncementFuture, ResourceState, SessionAnnouncements,
 };
 use submilli_engine::runtime::session_finalizers::{FinalizerFuture, SessionFinalizers};
+use submilli_engine::runtime::session_kv::{SessionKvError, SessionKvLimitKind};
 use submilli_engine::runtime::{
     CheckOutcome, FinalizerCall, FinalizerError, LinkedPackageModule, SecurityCheck, StoreData,
     Vfs, install_tenant_limits, invoke_finalizer_async,
@@ -118,7 +119,7 @@ struct Run {
     config: RuntimeConfig,
     policy: Arc<Policy>,
     console: Console,
-    announcements: Option<Arc<Announcements>>,
+    announcements: Option<Arc<dyn SessionAnnouncements>>,
 }
 
 impl Default for Run {
@@ -681,4 +682,73 @@ async fn a_denied_announcement_records_nothing() {
         .await;
     assert!(outcome.result.is_err(), "{:?}", outcome.result);
     assert!(announcements.0.lock().unwrap().is_empty());
+}
+
+const CATCHING: &str = r#"import * as session from "submilli:session";
+export function finalizer(key: string, value: string): void {
+    try {
+        session.announceClosed(value, key);
+        console.log("recorded");
+    } catch (error) {
+        console.log(error instanceof RangeError ? "range" : error instanceof TypeError ? "type" : "other");
+    }
+}"#;
+
+#[tokio::test]
+async fn an_empty_or_overlong_name_is_a_catchable_error_that_records_nothing() {
+    let long = "k".repeat(257);
+    for (key, kind, expected) in [
+        ("bb-1", r#""""#, "type\n"),
+        (long.as_str(), r#""browser""#, "range\n"),
+        (&long[..256], r#""browser""#, "recorded\n"),
+    ] {
+        let announcements = Arc::new(Announcements::default());
+        let run = Run {
+            announcements: Some(announcements.clone()),
+            ..Run::default()
+        };
+        let outcome = run
+            .invoke(&cleanup(CATCHING), &units(key), &units(kind))
+            .await;
+        outcome.result.unwrap();
+        assert_eq!(outcome.console, expected, "{kind}");
+        assert_eq!(
+            announcements.0.lock().unwrap().len(),
+            usize::from(expected == "recorded\n")
+        );
+    }
+}
+
+/// A host that holds too many resources for the session.
+struct Full;
+
+impl SessionAnnouncements for Full {
+    fn announce<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a [u16],
+        _: &'a [u16],
+        _: ResourceState,
+    ) -> AnnouncementFuture<'a> {
+        Box::pin(async {
+            Err(SessionKvError::LimitExceeded {
+                operation: "announce",
+                key: "bb-1".into(),
+                limit: SessionKvLimitKind::EntryCount { limit: 1024 },
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_hosts_refusal_is_a_catchable_error() {
+    let run = Run {
+        announcements: Some(Arc::new(Full)),
+        ..Run::default()
+    };
+    let outcome = run
+        .invoke(&cleanup(CATCHING), &units("bb-1"), &units(r#""browser""#))
+        .await;
+    outcome.result.unwrap();
+    assert_eq!(outcome.console, "range\n");
 }

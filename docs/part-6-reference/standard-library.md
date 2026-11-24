@@ -310,8 +310,11 @@ when it releases it, including from its finalizer. For example,
 `@submilli/browserbase-stagehand` announces each browser as kind `"browser"`,
 keyed by the browser id, and a console shows the live browser. The host keeps the
 latest state per package, kind and key; the program never reads it back, and a
-host that does not track announcements ignores them. Both require the
-package-only `session.announce { kind, key }` capability, which the build derives.
+host that does not track announcements ignores them. A kind or key is 1 to 256
+UTF-16 units: an empty one throws a `TypeError`, a longer one a `RangeError`, as
+does a host that holds too many resources for the session; nothing is recorded
+then. Both require the package-only `session.announce { kind, key }` capability,
+which the build derives.
 
 Recorded test runs, including their live-call modes, refuse registration with a
 catchable error because replay cannot durably own resources. Package code must

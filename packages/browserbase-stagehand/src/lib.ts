@@ -225,8 +225,10 @@ export class StagehandSession {
                     persistContext: request.persistContext,
                     viewport: ownedViewport,
                 });
-                kv.unregisterFinalizer(sessionId);
+                // Closed before unregistering: if the announcement fails, the finalizer still
+                // announces it when the session closes.
                 kv.announceClosed(BROWSER, sessionId);
+                kv.unregisterFinalizer(sessionId);
                 kv.set("stagehand", { sessionId: created.sessionId, region: created.region });
                 return created;
             }
@@ -378,8 +380,9 @@ export class StagehandSession {
         const sessionId = resourceId(this.sessionId, "sessionId");
         const regionName = this.region;
         endStagehandRemote(sessionId, regionName);
-        kv.unregisterFinalizer(sessionId);
+        // Closed before unregistering: if the announcement fails, the finalizer still announces it.
         kv.announceClosed(BROWSER, sessionId);
+        kv.unregisterFinalizer(sessionId);
         forgetCurrent(sessionId);
     }
 

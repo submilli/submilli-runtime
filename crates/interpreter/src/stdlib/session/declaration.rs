@@ -157,7 +157,7 @@ pub fn package_declaration() -> PackageDeclaration {
     for (name, doc) in [
         (
             "announceOpen",
-            "/** Tell the host that this package holds the resource `key` of `kind` open for the session, so the host can show it: for example a cloud browser a console can watch. Packages only. The host keeps the latest state per kind and key of the calling package; the program never reads it back. A host that does not track announcements ignores them.\n * @param kind What the resource is, such as `\"browser\"`.\n * @param key The resource's id, such as the provider's browser id.\n * @capability session.announce { kind: $kind, key: $key }\n */",
+            "/** Tell the host that this package holds the resource `key` of `kind` open for the session, so the host can show it: for example a cloud browser a console can watch. Packages only. The host keeps the latest state per kind and key of the calling package; the program never reads it back. A host that does not track announcements ignores them. Throws a `TypeError` for an empty kind or key and a `RangeError` for one longer than 256 UTF-16 units or when the host holds too many resources for the session; nothing is recorded then.\n * @param kind What the resource is, such as `\"browser\"`.\n * @param key The resource's id, such as the provider's browser id.\n * @capability session.announce { kind: $kind, key: $key }\n */",
         ),
         (
             "announceClosed",
