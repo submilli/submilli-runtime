@@ -272,6 +272,7 @@ read checks the requested alias name and grants no access to its target name.
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
 | `session.finalize` | `key: string` | Register or unregister durable package-owned session cleanup | `key glob "browser/*"` |
+| `session.announce` | `kind: string`, `key: string` | Tell the host which resources a package holds open for the session | `kind == "browser"` |
 | `session.read` | `key: string` | Read session state (get, has), and decide which keys a list may reveal | `key glob "triage/*"` |
 | `session.write` | `key: string` | Store or overwrite a session value (set) | `key glob "triage/*"` |
 | `session.remove` | `key: string` | Delete a session key | `key glob "triage/*"` |

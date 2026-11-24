@@ -14,6 +14,7 @@
 
 use crate::runtime::effects;
 use crate::runtime::host::{abi_arg, register_host_fn_async, register_host_value_async};
+mod announcements;
 mod cursor;
 pub mod declaration;
 mod finalizers;
@@ -67,6 +68,7 @@ struct ListedPage {
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     finalizers::install(linker)?;
+    announcements::install(linker)?;
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
     // `key: string` takes the whole `$string` struct rather than the raw payload
@@ -599,6 +601,24 @@ mod tests {
         dispatch_main_async(&mut store, &inst)
             .await
             .map(Option::unwrap_or_default)
+    }
+
+    #[tokio::test]
+    async fn the_main_module_cannot_announce_resources() {
+        for call in [
+            r#"session.announceOpen("browser", "bb-1")"#,
+            r#"session.announceClosed("browser", "bb-1")"#,
+        ] {
+            let source = format!(
+                r#"import * as session from "submilli:session";
+export function main(): string {{ {call}; return "ran"; }}"#
+            );
+            let error = run(&source, None).await.expect_err(call);
+            assert!(
+                format!("{error:#}").contains("session.announce"),
+                "{error:#}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 use submilli_engine::runtime::security::AuditDecision;
+use submilli_engine::runtime::session_announcements::{
+    AnnouncementFuture, ResourceState, SessionAnnouncements,
+};
 use submilli_engine::runtime::session_finalizers::{FinalizerFuture, SessionFinalizers};
 use submilli_engine::runtime::{
     CheckOutcome, FinalizerCall, FinalizerError, LinkedPackageModule, SecurityCheck, StoreData,
@@ -76,6 +79,28 @@ impl SessionFinalizers for Registry {
     }
 }
 
+/// Records every announcement, as `(package, kind, key, state)`.
+#[derive(Default)]
+struct Announcements(Mutex<Vec<(String, String, String, ResourceState)>>);
+
+impl SessionAnnouncements for Announcements {
+    fn announce<'a>(
+        &'a self,
+        package: &'a str,
+        kind: &'a [u16],
+        key: &'a [u16],
+        state: ResourceState,
+    ) -> AnnouncementFuture<'a> {
+        self.0.lock().unwrap().push((
+            package.to_owned(),
+            String::from_utf16(kind).unwrap(),
+            String::from_utf16(key).unwrap(),
+            state,
+        ));
+        Box::pin(async { Ok(()) })
+    }
+}
+
 #[derive(Clone, Default)]
 struct Console(Arc<Mutex<Vec<u8>>>);
 
@@ -93,6 +118,7 @@ struct Run {
     config: RuntimeConfig,
     policy: Arc<Policy>,
     console: Console,
+    announcements: Option<Arc<Announcements>>,
 }
 
 impl Default for Run {
@@ -101,6 +127,7 @@ impl Default for Run {
             config: RuntimeConfig::default(),
             policy: Arc::new(Policy::default()),
             console: Console::default(),
+            announcements: None,
         }
     }
 }
@@ -118,6 +145,9 @@ impl Run {
         data.console = Box::new(self.console.clone());
         data.security_check = self.policy.clone();
         data.session_finalizers = Some(Arc::new(Registry));
+        if let Some(announcements) = &self.announcements {
+            data.session_announcements = Some(announcements.clone());
+        }
         let mut store = self.config.store_async(&engine, data).unwrap();
         install_tenant_limits(&mut store);
         let _watchdog = self.config.arm_timeout(&engine).unwrap();
@@ -590,4 +620,65 @@ export function finalizer(key: string, value: Lease): void { console.log(value.o
         panic!("{:?}", outcome.result);
     };
     assert!(message.contains(r#"$["owner"]["name"]"#), "{message}");
+}
+
+const ANNOUNCING: &str = r#"import * as session from "submilli:session";
+export function finalizer(key: string, value: string): void {
+    session.announceClosed("browser", key);
+    console.log("closed");
+}"#;
+
+#[tokio::test]
+async fn a_package_announces_a_resource_closed_under_its_own_name() {
+    let announcements = Arc::new(Announcements::default());
+    let run = Run {
+        announcements: Some(announcements.clone()),
+        ..Run::default()
+    };
+    let policy = run.policy.clone();
+    let outcome = run
+        .invoke(&cleanup(ANNOUNCING), &units("bb-1"), &units(r#""v""#))
+        .await;
+    outcome.result.unwrap();
+    assert_eq!(
+        *announcements.0.lock().unwrap(),
+        vec![(
+            CLEANUP.to_owned(),
+            "browser".to_owned(),
+            "bb-1".to_owned(),
+            ResourceState::Closed
+        )]
+    );
+    assert!(
+        policy
+            .calls
+            .lock()
+            .unwrap()
+            .contains(&(CLEANUP.to_owned(), "session.announce".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn a_host_that_tracks_no_announcements_ignores_them() {
+    let outcome = invoke(&cleanup(ANNOUNCING), r#""v""#).await;
+    outcome.result.unwrap();
+    assert_eq!(outcome.console, "closed\n");
+}
+
+#[tokio::test]
+async fn a_denied_announcement_records_nothing() {
+    let announcements = Arc::new(Announcements::default());
+    let run = Run {
+        policy: Arc::new(Policy {
+            deny: vec![(CLEANUP, "session.announce")],
+            ..Policy::default()
+        }),
+        announcements: Some(announcements.clone()),
+        ..Run::default()
+    };
+    let outcome = run
+        .invoke(&cleanup(ANNOUNCING), &units("bb-1"), &units(r#""v""#))
+        .await;
+    assert!(outcome.result.is_err(), "{:?}", outcome.result);
+    assert!(announcements.0.lock().unwrap().is_empty());
 }

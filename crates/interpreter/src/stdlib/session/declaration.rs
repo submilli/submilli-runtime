@@ -154,6 +154,27 @@ pub fn package_declaration() -> PackageDeclaration {
         Type::Void,
         "/** Forget cleanup after releasing the resource. Packages only; keys are local to the calling package.\n * @capability session.finalize { key: $key }\n */",
     );
+    for (name, doc) in [
+        (
+            "announceOpen",
+            "/** Tell the host that this package holds the resource `key` of `kind` open for the session, so the host can show it: for example a cloud browser a console can watch. Packages only. The host keeps the latest state per kind and key of the calling package; the program never reads it back. A host that does not track announcements ignores them.\n * @param kind What the resource is, such as `\"browser\"`.\n * @param key The resource's id, such as the provider's browser id.\n * @capability session.announce { kind: $kind, key: $key }\n */",
+        ),
+        (
+            "announceClosed",
+            "/** Tell the host that the resource `key` of `kind` this package announced open is closed. Packages only. Announce it when the resource is released, including from the package's finalizer.\n * @param kind What the resource is, as announced open.\n * @param key The resource's id, as announced open.\n * @capability session.announce { kind: $kind, key: $key }\n */",
+        ),
+    ] {
+        insert_fn(
+            &mut defs,
+            name,
+            vec![
+                Param::new("kind", Type::String),
+                Param::new("key", Type::String),
+            ],
+            Type::Void,
+            doc,
+        );
+    }
     defs
 }
 

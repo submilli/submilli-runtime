@@ -60,6 +60,10 @@ export {
     LiveView,
 } from "./internal";
 
+/** The kind this package announces its browsers under, keyed by the browser id, so a host can
+ * show a session's open browser. */
+const BROWSER = "browser";
+
 /** Cleanup arguments registered for a Stagehand browser this package created. */
 export interface BrowserCleanup {
     /** Browser id. The finalizer key is this id. */
@@ -158,6 +162,7 @@ export class StagehandSession {
             try { endStagehandRemote(sessionId, regionName); } catch (ignored: Error) { /* keep the registration error */ }
             throw error;
         }
+        kv.announceOpen(BROWSER, sessionId);
         return new StagehandSession(sessionId, regionName);
     }
 
@@ -221,6 +226,7 @@ export class StagehandSession {
                     viewport: ownedViewport,
                 });
                 kv.unregisterFinalizer(sessionId);
+                kv.announceClosed(BROWSER, sessionId);
                 kv.set("stagehand", { sessionId: created.sessionId, region: created.region });
                 return created;
             }
@@ -373,6 +379,7 @@ export class StagehandSession {
         const regionName = this.region;
         endStagehandRemote(sessionId, regionName);
         kv.unregisterFinalizer(sessionId);
+        kv.announceClosed(BROWSER, sessionId);
         forgetCurrent(sessionId);
     }
 
@@ -401,6 +408,7 @@ export function finalizer(key: string, value: BrowserCleanup): void {
     const regionName = value.region;
     if (id !== key) throw new BrowserbaseError("invalid_argument", "cleanup key does not match the browser id");
     endStagehandRemote(id, regionName);
+    kv.announceClosed(BROWSER, id);
 }
 
 function stagehandAlive(sessionId: string): boolean {

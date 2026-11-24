@@ -49,6 +49,8 @@ requires:
   filter: host == "api.use1.stagehand.browserbase.com"
 - capability: secrets.get
   filter: name == "BROWSERBASE_API_KEY"
+- capability: session.announce
+  filter: kind == "browser"
 - capability: session.finalize
 - capability: session.read
   filter: key == "stagehand"

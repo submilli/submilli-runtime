@@ -33,6 +33,7 @@ pub mod package_costs;
 pub mod prelude;
 pub mod secrets;
 pub mod security;
+pub mod session_announcements;
 pub mod session_finalizers;
 pub mod session_kv;
 pub mod skills;
@@ -217,6 +218,9 @@ pub struct StoreData {
     pub session_kv: Option<Arc<dyn SessionKvStore>>,
     /// Durable package-owned resource cleanup supplied by the embedder.
     pub session_finalizers: Option<Arc<dyn session_finalizers::SessionFinalizers>>,
+    /// Where packages announce the resources they hold open, for the host to show. `None`
+    /// makes an announcement a no-op: it informs the host and changes nothing the program sees.
+    pub session_announcements: Option<Arc<dyn session_announcements::SessionAnnouncements>>,
     pub finalizing: bool,
     /// The keys `session.list` cursors are sealed with. `None` seals them with a
     /// per-process key, so they stop working when the process restarts.
@@ -365,6 +369,7 @@ impl StoreData {
             package_costs: PackageCosts::default(),
             session_kv: None,
             session_finalizers: None,
+            session_announcements: None,
             finalizing: false,
             cursor_keys: None,
             agent_provider: None,

@@ -580,6 +580,7 @@ mod tests {
         "session.write",
         "session.remove",
         "session.finalize",
+        "session.announce",
     ];
 
     #[test]
@@ -696,6 +697,10 @@ mod tests {
         ),
         (
             "src/stdlib/session/mod.rs",
+            Some(crate::stdlib::session::MODULE_NAME),
+        ),
+        (
+            "src/stdlib/session/announcements.rs",
             Some(crate::stdlib::session::MODULE_NAME),
         ),
         (

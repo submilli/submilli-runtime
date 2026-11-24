@@ -540,6 +540,18 @@ const SESSION: &[Capability] = &[
         example_filter: "key glob \"browser/*\"",
     },
     Capability {
+        name: "session.announce",
+        main_denial: Some(
+            "resource announcements belong to packages; main-module access cannot be granted",
+        ),
+        summary: "Tell the host which resources a package holds open for the session",
+        filter_fields: &[
+            field("kind", "string", "What the resource is, such as browser"),
+            KEY,
+        ],
+        example_filter: "kind == \"browser\"",
+    },
+    Capability {
         name: "session.read",
         main_denial: None,
         summary: "Read session state (get, has), and decide which keys a list may reveal",
@@ -746,6 +758,7 @@ mod tests {
                 "cost.report",
                 "secrets.get",
                 "session.finalize",
+                "session.announce",
                 "variables.get"
             ]
         );
@@ -832,6 +845,7 @@ mod tests {
             names,
             [
                 "session.finalize",
+                "session.announce",
                 "session.read",
                 "session.write",
                 "session.remove",

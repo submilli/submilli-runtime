@@ -304,6 +304,15 @@ the local key; the finalizer receives that original key. Identical keys in
 different packages do not conflict. Duplicate live keys within one package/session
 are rejected, including across package versions.
 
+A package can also announce the resources it holds open, so the host can show
+them: `announceOpen(kind, key)` when it opens one and `announceClosed(kind, key)`
+when it releases it, including from its finalizer. For example,
+`@submilli/browserbase-stagehand` announces each browser as kind `"browser"`,
+keyed by the browser id, and a console shows the live browser. The host keeps the
+latest state per package, kind and key; the program never reads it back, and a
+host that does not track announcements ignores them. Both require the
+package-only `session.announce { kind, key }` capability, which the build derives.
+
 Recorded test runs, including their live-call modes, refuse registration with a
 catchable error because replay cannot durably own resources. Package code must
 compensate for that refusal through its normal immediate-cleanup path. Replay
@@ -705,6 +714,8 @@ Session-scoped key-value state and durable package-owned resource cleanup.
 | `get<T>(key: string): T \| undefined` | `session.read { key }` | Read a session value, checked against `T`. |
 | `has(key: string): boolean` | `session.read { key }` | Whether the session holds an entry for `key`. |
 | `list(prefix: string, limit: number, cursor?: string): Page` | `session.list { prefix }`<br>`session.read { key } - per candidate key` | Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. |
+| `announceClosed(kind: string, key: string): void` | `session.announce { kind, key }` | Tell the host that a resource this package announced open is closed. |
+| `announceOpen(kind: string, key: string): void` | `session.announce { kind, key }` | Tell the host that this package holds a resource open for the session, so the host can show it. |
 | `registerFinalizer(key: string, value: unknown): void` | `session.finalize { key }` | Register durable cleanup using this package's finalizer(key, value). |
 | `remove(key: string): boolean` | `session.remove { key }` | Delete `key`. |
 | `set(key: string, value: unknown): void` | `session.write { key }` | Store `value` under `key`, replacing any previous entry. |
