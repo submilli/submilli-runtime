@@ -13,6 +13,7 @@
 //! [`StoreData::clock_paused`]. The provider bounds the wait itself. Dropping the
 //! future returned by [`ApprovalProvider::request`] is how the engine cancels it.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
@@ -131,6 +132,12 @@ pub struct Choice {
     pub description: Option<String>,
 }
 
+/// The longest choice `value`, in bytes.
+pub const MAX_CHOICE_VALUE_BYTES: usize = 256;
+/// The longest answer text, `other` text or decline message a host may hand back.
+/// Anything past it would make the recorded outcome unbounded.
+pub const MAX_ANSWER_BYTES: usize = 64 * 1024;
+
 /// What a program asks a person, as `ask` received it and checked it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
@@ -170,6 +177,67 @@ impl QuestionSpec {
         match self {
             Self::Text { .. } => "text",
             Self::Choice { .. } => "choice",
+        }
+    }
+
+    /// Whether `answer` answers this question: of its kind, within the bounds, and
+    /// picking only offered choices as the question allows. The problem, in words,
+    /// when not; it never quotes answer text.
+    pub fn check(&self, answer: &AnswerValue) -> Result<(), String> {
+        let written = match answer {
+            AnswerValue::Text { text } => Some(text),
+            AnswerValue::Choice { other, .. } => other.as_ref(),
+        };
+        if written.is_some_and(|text| text.len() > MAX_ANSWER_BYTES) {
+            return Err(format!(
+                "the answer is longer than {MAX_ANSWER_BYTES} bytes"
+            ));
+        }
+        match (self, answer) {
+            (Self::Text { .. }, AnswerValue::Text { text }) if text.trim().is_empty() => {
+                Err("the text is empty".into())
+            }
+            (Self::Text { .. }, AnswerValue::Text { .. }) => Ok(()),
+            (
+                Self::Choice {
+                    choices,
+                    multiple,
+                    other: allows_other,
+                    ..
+                },
+                AnswerValue::Choice { selected, other },
+            ) => {
+                if selected
+                    .iter()
+                    .any(|value| value.len() > MAX_CHOICE_VALUE_BYTES)
+                {
+                    return Err("a selected value is longer than any choice's".into());
+                }
+                let offered: BTreeSet<&str> = choices.iter().map(|c| c.value.as_str()).collect();
+                let picked: BTreeSet<&str> = selected.iter().map(String::as_str).collect();
+                if picked.len() != selected.len() {
+                    return Err("a choice is selected twice".into());
+                }
+                if let Some(unknown) = picked.difference(&offered).next() {
+                    return Err(format!("{unknown:?} is not one of the choices"));
+                }
+                if !multiple && selected.len() > 1 {
+                    return Err("several choices are selected, but only one is allowed".into());
+                }
+                match other {
+                    Some(_) if !allows_other => Err("the question does not allow `other`".into()),
+                    // A blank `other` beside a pick is no `other`: `answer_value` leaves it out.
+                    Some(text) if text.trim().is_empty() && selected.is_empty() => {
+                        Err("nothing is selected and `other` is empty".into())
+                    }
+                    None if selected.is_empty() => Err("nothing is selected".into()),
+                    _ => Ok(()),
+                }
+            }
+            (question, _) => Err(format!(
+                "it does not answer a {} question",
+                question.answer_kind()
+            )),
         }
     }
 }

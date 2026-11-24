@@ -48,13 +48,10 @@ const SENSITIVE_MAIN_REFUSAL: &str = "a sensitive question asks for a credential
 /// Bounds that let every host show a question: they match what the embedders store.
 const MAX_TEXT_BYTES: usize = 4 * 1024;
 const MAX_CHOICES: usize = 20;
-const MAX_CHOICE_VALUE_BYTES: usize = 256;
+use crate::runtime::approvals::{MAX_ANSWER_BYTES, MAX_CHOICE_VALUE_BYTES};
 const MAX_CHOICE_LABEL_BYTES: usize = 256;
 const MAX_CHOICE_DESCRIPTION_BYTES: usize = 1024;
 /// The longest a program may ask a host to wait.
-/// The longest answer text, `other` text or decline message a host may hand back.
-/// Anything past it would make the recorded outcome unbounded.
-const MAX_ANSWER_BYTES: usize = 64 * 1024;
 const MAX_TIMEOUT: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 pub fn package_declaration() -> PackageDeclaration {
@@ -209,69 +206,11 @@ fn fitting(question: &QuestionSpec, outcome: QuestionOutcome) -> QuestionOutcome
     let QuestionOutcome::Answered(answer) = &outcome else {
         return outcome;
     };
-    match check_answer(question, &answer.value) {
+    match question.check(&answer.value) {
         Ok(()) => outcome,
         Err(problem) => QuestionOutcome::Unanswerable {
             message: format!("the host's answer does not fit the question: {problem}"),
         },
-    }
-}
-
-fn check_answer(question: &QuestionSpec, answer: &AnswerValue) -> Result<(), String> {
-    let written = match answer {
-        AnswerValue::Text { text } => Some(text),
-        AnswerValue::Choice { other, .. } => other.as_ref(),
-    };
-    if written.is_some_and(|text| text.len() > MAX_ANSWER_BYTES) {
-        return Err(format!(
-            "the answer is longer than {MAX_ANSWER_BYTES} bytes"
-        ));
-    }
-    match (question, answer) {
-        (QuestionSpec::Text { .. }, AnswerValue::Text { text }) if text.trim().is_empty() => {
-            Err("the text is empty".into())
-        }
-        (QuestionSpec::Text { .. }, AnswerValue::Text { .. }) => Ok(()),
-        (
-            QuestionSpec::Choice {
-                choices,
-                multiple,
-                other: allows_other,
-                ..
-            },
-            AnswerValue::Choice { selected, other },
-        ) => {
-            if selected
-                .iter()
-                .any(|value| value.len() > MAX_CHOICE_VALUE_BYTES)
-            {
-                return Err("a selected value is longer than any choice's".into());
-            }
-            let offered: BTreeSet<&str> = choices.iter().map(|c| c.value.as_str()).collect();
-            let picked: BTreeSet<&str> = selected.iter().map(String::as_str).collect();
-            if picked.len() != selected.len() {
-                return Err("a choice is selected twice".into());
-            }
-            if let Some(unknown) = picked.difference(&offered).next() {
-                return Err(format!("{unknown:?} is not one of the choices"));
-            }
-            if !multiple && selected.len() > 1 {
-                return Err("several choices are selected, but only one is allowed".into());
-            }
-            match other {
-                Some(_) if !allows_other => Err("the question does not allow `other`".into()),
-                // A blank `other` beside a pick is no `other`: `answer_value` leaves it out.
-                Some(text) if text.trim().is_empty() && selected.is_empty() => {
-                    Err("nothing is selected and `other` is empty".into())
-                }
-                None if selected.is_empty() => Err("nothing is selected".into()),
-                _ => Ok(()),
-            }
-        }
-        (question, _) => Err(format!(
-            "it does not answer a {} question",
-            question.answer_kind()
-        )),
     }
 }
 
