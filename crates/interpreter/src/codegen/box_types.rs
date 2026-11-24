@@ -289,11 +289,15 @@ impl Collector<'_> {
                 self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.walk_expr(*callee)?;
+                if let Some(receiver) = receiver {
+                    self.walk_expr(*receiver)?;
+                }
                 for &a in args {
                     self.walk_expr(a)?;
                 }

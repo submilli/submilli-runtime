@@ -160,11 +160,15 @@ impl Reachable {
                 self.walk_authored_call_arguments(ta, span);
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.walk_expr(ta, *callee);
+                if let Some(receiver) = receiver {
+                    self.walk_expr(ta, *receiver);
+                }
                 for &arg in args {
                     self.walk_expr(ta, arg);
                 }

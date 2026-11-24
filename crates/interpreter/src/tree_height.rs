@@ -1133,11 +1133,15 @@ impl TypedChildren {
                 self.authored_call_arguments(ta, span);
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.expr(*callee);
+                if let Some(receiver) = receiver {
+                    self.expr(*receiver);
+                }
                 self.exprs(args);
                 self.authored_call_arguments(ta, span);
             }

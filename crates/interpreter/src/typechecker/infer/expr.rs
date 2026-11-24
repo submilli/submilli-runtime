@@ -3689,6 +3689,7 @@ impl Inferer<'_> {
             return self.static_call_expr(target, typed_args, type_predicate, &ret_ty, span);
         } else {
             TypedExprKind::CallClosure {
+                receiver: None,
                 type_args: Vec::new(),
                 callee: typed_callee,
                 args: typed_args,
@@ -4963,6 +4964,7 @@ impl Inferer<'_> {
                     )?;
                     (
                         TypedExprKind::CallClosure {
+                            receiver: None,
                             type_args: Vec::new(),
                             callee,
                             args: typed_args,

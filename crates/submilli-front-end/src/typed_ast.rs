@@ -110,6 +110,9 @@ pub enum TypedExprKind {
     /// `call_ref` dispatch; distinct from `Call` (direct `call` instruction).
     CallClosure {
         callee: ExprId,
+        /// Explicit `this`, evaluated after the callee and before the arguments.
+        /// When absent, a property-reference callee supplies its own receiver.
+        receiver: Option<ExprId>,
         args: Vec<ExprId>,
         /// The call's type arguments for the callee's static type when that
         /// is a generic function type, one per type parameter, in order;

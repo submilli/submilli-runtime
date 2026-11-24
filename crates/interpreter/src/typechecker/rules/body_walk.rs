@@ -270,11 +270,15 @@ impl<V: Visitor> Walk<'_, V> {
                 self.authored_call_arguments(span)?;
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.expr(*callee)?;
+                if let Some(receiver) = receiver {
+                    self.expr(*receiver)?;
+                }
                 for &a in args {
                     self.expr(a)?;
                 }

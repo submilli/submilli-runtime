@@ -746,6 +746,7 @@ fn synthesize_close_finally(
         .ta
         .try_push_expr(TypedExpr {
             kind: TypedExprKind::CallClosure {
+                receiver: None,
                 type_args: Vec::new(),
                 callee: close_narrow_ref,
                 args: Vec::new(),
