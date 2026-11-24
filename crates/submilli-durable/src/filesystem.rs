@@ -179,23 +179,38 @@ pub(crate) async fn finish_owned<T: Send + 'static>(
 /// Uncertain I/O leaves the operation pending so a retry can inspect disk state.
 pub(crate) fn preflight_refusal(error: &RecoveryError) -> bool {
     match error {
+        RecoveryError::Containment(fs::ContainError::Io(error))
+            if error.raw_os_error().is_some() =>
+        {
+            definite_io_refusal(error)
+        }
         RecoveryError::Unsupported(_)
         | RecoveryError::Containment(_)
         | RecoveryError::Quota
         | RecoveryError::QuotaRefused(_)
         | RecoveryError::Limit
         | RecoveryError::InvalidRecord => true,
-        RecoveryError::Io(error) => matches!(
-            error.kind(),
-            std::io::ErrorKind::NotFound
-                | std::io::ErrorKind::AlreadyExists
-                | std::io::ErrorKind::NotADirectory
-                | std::io::ErrorKind::IsADirectory
-                | std::io::ErrorKind::DirectoryNotEmpty
-                | std::io::ErrorKind::PermissionDenied
-        ),
+        RecoveryError::Io(error) => definite_io_refusal(error),
         RecoveryError::Conflict | RecoveryError::Fuel(_) => false,
     }
+}
+
+fn definite_io_refusal(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ELOOP) {
+        return true;
+    }
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::InvalidFilename
+            | std::io::ErrorKind::ReadOnlyFilesystem
+            | std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::AlreadyExists
+            | std::io::ErrorKind::NotADirectory
+            | std::io::ErrorKind::IsADirectory
+            | std::io::ErrorKind::DirectoryNotEmpty
+            | std::io::ErrorKind::PermissionDenied
+    )
 }
 
 pub(crate) fn validate_id(id: &str) -> Result<(), FilesystemError> {
@@ -400,13 +415,8 @@ impl Filesystem for DurableFilesystem {
         recursive: bool,
     ) -> Result<(), PortError> {
         let operation = self.operation(work);
-        if recursive {
-            return Err(PortError::Unsupported(
-                "recursive directory creation requires caller-orchestrated primitive operations",
-            ));
-        }
         operation
-            .create_directory(effect_id, path)
+            .mkdir(effect_id, path, recursive)
             .await
             .map_err(backend)?;
         Ok(())

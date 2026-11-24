@@ -8,6 +8,8 @@
 //! Its callers supply retry facts and retain the mutation gate while disk work
 //! runs. Sync barriers make artifacts durable before the journal refers to them.
 //! The quota registry at the end shares counters across reopened VFS values.
+mod directory_tree;
+
 use cap_std::fs::Dir;
 use interpreter::runtime::Vfs;
 use interpreter::runtime::durable::EffectId;
@@ -197,10 +199,14 @@ pub(crate) fn validate_id(id: &str) -> Result<(), RecoveryError> {
 }
 
 pub(crate) fn validate_guest_path(path: &str) -> Result<(), RecoveryError> {
+    validate_guest_path_at("/", path)
+}
+
+pub(crate) fn validate_guest_path_at(cwd: &str, path: &str) -> Result<(), RecoveryError> {
     if path.len() > 4096 || path.is_empty() || path.contains('\0') {
         return Err(RecoveryError::InvalidRecord);
     }
-    fs::guest_normalize("/", path).map_err(interpreter::runtime::fs::ContainError::from)?;
+    fs::guest_normalize(cwd, path).map_err(interpreter::runtime::fs::ContainError::from)?;
     Ok(())
 }
 
@@ -324,6 +330,29 @@ pub(crate) fn sync(dir: &Dir) -> Result<(), RecoveryError> {
     Ok(())
 }
 
+/// Persist every entry on the canonical path in a single walk from its volume.
+fn sync_ancestors(
+    root: &Dir,
+    directory: &Path,
+    work: Option<&WorkBudget>,
+) -> Result<(), RecoveryError> {
+    let components = directory
+        .components()
+        .filter(|part| *part != std::path::Component::CurDir);
+    if let Some(work) = work {
+        // Open the directory handle and its sync descriptor, then fsync it.
+        let directories = (components.clone().count() as u64).saturating_add(1);
+        work.charge(fuel::SYSCALL, directories.saturating_mul(3))?;
+    }
+    let mut parent = root.try_clone()?;
+    sync(&parent)?;
+    for component in components {
+        parent = parent.open_dir_nofollow(component.as_os_str())?;
+        sync(&parent)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn identity(metadata: &Metadata) -> Result<FileIdentity, RecoveryError> {
     Ok(FileIdentity::of(metadata)?)
 }
@@ -411,14 +440,7 @@ impl Files {
         let parent_identity = identity(&root.open_dir(parent)?.dir_metadata()?)?;
         // The primitive models assume the starting namespace survives a crash.
         // Establish that before preparing a public mutation.
-        for ancestor in parent.ancestors() {
-            let ancestor = if ancestor.as_os_str().is_empty() {
-                Path::new(".")
-            } else {
-                ancestor
-            };
-            sync(&root.open_dir(ancestor)?)?;
-        }
+        sync_ancestors(&root, parent, None)?;
         let entry = Entry {
             mount: placement.mount_point().into(),
             parent: parent_name.into(),
