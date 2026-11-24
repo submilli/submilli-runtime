@@ -162,7 +162,13 @@ export class StagehandSession {
             try { endStagehandRemote(sessionId, regionName); } catch (ignored: Error) { /* keep the registration error */ }
             throw error;
         }
-        kv.announceOpen(BROWSER, sessionId);
+        try {
+            kv.announceOpen(BROWSER, sessionId);
+        } catch (error: Error) {
+            // A browser the program would hold no handle to is ended rather than left billing.
+            try { endStagehandRemote(sessionId, regionName); kv.unregisterFinalizer(sessionId); } catch (ignored: Error) { /* keep the announcement error */ }
+            throw error;
+        }
         return new StagehandSession(sessionId, regionName);
     }
 

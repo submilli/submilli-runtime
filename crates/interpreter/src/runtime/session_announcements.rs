@@ -11,7 +11,7 @@ pub type AnnouncementFuture<'a> =
 /// Whether the announced resource is open or closed now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ResourceState {
+pub enum AnnouncedState {
     Open,
     Closed,
 }
@@ -25,6 +25,6 @@ pub trait SessionAnnouncements: Send + Sync {
         package: &'a str,
         kind: &'a [u16],
         key: &'a [u16],
-        state: ResourceState,
+        state: AnnouncedState,
     ) -> AnnouncementFuture<'a>;
 }

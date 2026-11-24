@@ -2,9 +2,11 @@
 //! for the session. Package attribution is checked at the host boundary, as for finalizers.
 use super::{MODULE_NAME, read_key, trap};
 use crate::runtime::effects;
-use crate::runtime::host::{abi_arg, range_error, register_host_fn_async, type_error};
+use crate::runtime::host::{
+    abi_arg, quota_exceeded_error, range_error, register_host_fn_async, type_error,
+};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
-use crate::runtime::session_announcements::ResourceState;
+use crate::runtime::session_announcements::AnnouncedState;
 use crate::runtime::session_kv::SessionKvError;
 use crate::runtime::{StoreData, fuel};
 use crate::stdlib::shared::{check_and_approve_call, running_package};
@@ -19,7 +21,7 @@ struct Announcement {
     package: String,
     kind: Vec<u16>,
     key: Vec<u16>,
-    state: ResourceState,
+    state: AnnouncedState,
 }
 
 pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -27,8 +29,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let intr = build_intrinsic_types(&engine)?;
     let string = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(intr.string)));
     for (name, state) in [
-        ("announceOpen", ResourceState::Open),
-        ("announceClosed", ResourceState::Closed),
+        ("announceOpen", AnnouncedState::Open),
+        ("announceClosed", AnnouncedState::Closed),
     ] {
         register_host_fn_async(
             linker,
@@ -60,7 +62,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     };
                     effects::execute(
                         caller,
-                        if state == ResourceState::Open {
+                        if state == AnnouncedState::Open {
                             "session.announceOpen"
                         } else {
                             "session.announceClosed"
@@ -120,7 +122,9 @@ fn check_name(operation: &str, part: &str, units: &[u16]) -> wasmtime::Result<()
 fn refusal(caller: &wasmtime::Caller<'_, StoreData>, error: &SessionKvError) -> wasmtime::Error {
     match error {
         SessionKvError::InvalidKey { .. } => type_error(error.to_string()),
-        SessionKvError::LimitExceeded { .. } => range_error(error.to_string()),
+        // Too many resources for the session: the class `session.set` and `registerFinalizer`
+        // throw for their entry bounds.
+        SessionKvError::LimitExceeded { .. } => quota_exceeded_error(error.to_string()),
         SessionKvError::SessionClosed { .. } | SessionKvError::Backend { .. } => {
             trap(caller, None, error)
         }

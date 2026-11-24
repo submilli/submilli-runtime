@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::Value;
 use submilli_engine::runtime::security::AuditDecision;
 use submilli_engine::runtime::session_announcements::{
-    AnnouncementFuture, ResourceState, SessionAnnouncements,
+    AnnouncedState, AnnouncementFuture, SessionAnnouncements,
 };
 use submilli_engine::runtime::session_finalizers::{FinalizerFuture, SessionFinalizers};
 use submilli_engine::runtime::session_kv::{SessionKvError, SessionKvLimitKind};
@@ -82,7 +82,7 @@ impl SessionFinalizers for Registry {
 
 /// Records every announcement, as `(package, kind, key, state)`.
 #[derive(Default)]
-struct Announcements(Mutex<Vec<(String, String, String, ResourceState)>>);
+struct Announcements(Mutex<Vec<(String, String, String, AnnouncedState)>>);
 
 impl SessionAnnouncements for Announcements {
     fn announce<'a>(
@@ -90,7 +90,7 @@ impl SessionAnnouncements for Announcements {
         package: &'a str,
         kind: &'a [u16],
         key: &'a [u16],
-        state: ResourceState,
+        state: AnnouncedState,
     ) -> AnnouncementFuture<'a> {
         self.0.lock().unwrap().push((
             package.to_owned(),
@@ -647,7 +647,7 @@ async fn a_package_announces_a_resource_closed_under_its_own_name() {
             CLEANUP.to_owned(),
             "browser".to_owned(),
             "bb-1".to_owned(),
-            ResourceState::Closed
+            AnnouncedState::Closed
         )]
     );
     assert!(
@@ -684,19 +684,21 @@ async fn a_denied_announcement_records_nothing() {
     assert!(announcements.0.lock().unwrap().is_empty());
 }
 
+/// Announces closed with the finalizer's value as the kind, so a test picks the kind and key.
 const CATCHING: &str = r#"import * as session from "submilli:session";
 export function finalizer(key: string, value: string): void {
     try {
         session.announceClosed(value, key);
         console.log("recorded");
     } catch (error) {
-        console.log(error instanceof RangeError ? "range" : error instanceof TypeError ? "type" : "other");
+        console.log(error instanceof RangeError ? "range" : error instanceof TypeError ? "type" : error instanceof QuotaExceededError ? "quota" : "other");
     }
 }"#;
 
 #[tokio::test]
 async fn an_empty_or_overlong_name_is_a_catchable_error_that_records_nothing() {
     let long = "k".repeat(257);
+    // (key, kind as the finalizer's JSON value, what the program logs)
     for (key, kind, expected) in [
         ("bb-1", r#""""#, "type\n"),
         (long.as_str(), r#""browser""#, "range\n"),
@@ -728,7 +730,7 @@ impl SessionAnnouncements for Full {
         _: &'a str,
         _: &'a [u16],
         _: &'a [u16],
-        _: ResourceState,
+        _: AnnouncedState,
     ) -> AnnouncementFuture<'a> {
         Box::pin(async {
             Err(SessionKvError::LimitExceeded {
@@ -750,5 +752,5 @@ async fn a_hosts_refusal_is_a_catchable_error() {
         .invoke(&cleanup(CATCHING), &units("bb-1"), &units(r#""browser""#))
         .await;
     outcome.result.unwrap();
-    assert_eq!(outcome.console, "range\n");
+    assert_eq!(outcome.console, "quota\n");
 }
