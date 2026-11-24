@@ -947,3 +947,31 @@ fn template_objects_reject_writes_where_javascript_does() {
         .join("|")
     );
 }
+
+#[test]
+fn calls_a_saved_closure_with_an_explicit_receiver() {
+    let source = include_str!("typed_value_sources/closure-receiver.ts")
+        .replace("Reflect.apply(f, receiver, [x])", "f(x)")
+        .replace("Reflect.apply(f, receiver, [])", "f()");
+    assert_eq!(
+        run(&source, |ast| {
+            let mut replaced = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                if let TypedExprKind::Call { mangled, args, .. } = &expr.kind
+                    && matches!(mangled.as_str(), "main#applyMarker" | "main#nullMarker")
+                {
+                    expr.kind = TypedExprKind::CallClosure {
+                        callee: args[0],
+                        receiver: Some(args[1]),
+                        args: args[2..].to_vec(),
+                        type_args: vec![],
+                    };
+                    replaced += 1;
+                }
+            }
+            assert_eq!(replaced, 5);
+        }),
+        "1231442"
+    );
+}

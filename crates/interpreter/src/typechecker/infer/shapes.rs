@@ -418,11 +418,15 @@ pub(super) fn collect_from_expr(
             collect_from_authored_arguments(ast, expr.span, c)?;
         }
         TypedExprKind::CallClosure {
+            receiver,
             type_args: _,
             callee,
             args,
         } => {
             collect_from_expr(ast, *callee, c)?;
+            if let Some(receiver) = receiver {
+                collect_from_expr(ast, *receiver, c)?;
+            }
             for a in args {
                 collect_from_expr(ast, *a, c)?;
             }

@@ -64,6 +64,7 @@ pub struct SymbolTable {
     /// their declaration precedes.
     class_declaration_flags: BTreeMap<usize, Vec<u32>>,
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
+    pub(crate) null_receiver_type: Option<u32>,
     pub(crate) this_environment_type: Option<u32>,
     pub(crate) call_metadata_type: Option<u32>,
     /// `$generic_environment`, the wrapper a generic closure's environment

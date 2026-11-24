@@ -672,11 +672,15 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.walk_expr(ta, *callee)?;
+                if let Some(receiver) = receiver {
+                    self.walk_expr(ta, *receiver)?;
+                }
                 if args.is_empty() {
                     self.walk_authored_call_arguments(ta, expr.span)?;
                 } else {
@@ -1426,6 +1430,15 @@ impl CodegenAnalysis {
                     self.string_pool.intern_text(text);
                 }
             }
+            TypedExprKind::This => {
+                self.string_pool
+                    .intern_text("Unbound function has no this receiver");
+                self.string_pool
+                    .intern_text(&cast_check::error_prefix(&expr.ty));
+                for tag in cast_check::TYPE_TAG_STRINGS {
+                    self.string_pool.intern_text(tag);
+                }
+            }
             TypedExprKind::CallClosure { callee, .. } => {
                 self.dependency_usage
                     .note_value(crate::mangle::prelude("__value_invoke_defaults"));
@@ -1446,7 +1459,6 @@ impl CodegenAnalysis {
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
             | TypedExprKind::Undefined
-            | TypedExprKind::This
             | TypedExprKind::EffectThen { .. }
             | TypedExprKind::Sequence { .. }
             | TypedExprKind::LocalRef { .. }

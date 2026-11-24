@@ -1253,14 +1253,14 @@ fn ref_null(idx: u32) -> ValType {
     })
 }
 
-fn fieldtype_ref(idx: u32) -> FieldType {
+pub(super) fn fieldtype_ref(idx: u32) -> FieldType {
     FieldType {
         element_type: StorageType::Val(ref_to(idx)),
         mutable: false,
     }
 }
 
-fn substruct(fields: Vec<FieldType>, supertype: Option<u32>) -> SubType {
+pub(super) fn substruct(fields: Vec<FieldType>, supertype: Option<u32>) -> SubType {
     SubType {
         is_final: false,
         supertype_idx: supertype,

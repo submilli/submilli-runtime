@@ -318,19 +318,27 @@ fn emit_expr_value(
             super::virtual_call::emit_virtual_call(emitter, ctx, target, tool, args)?;
         }
         TypedExprKind::CallClosure {
+            receiver,
             type_args,
             callee,
             args,
         } => {
-            // Indirect dispatch via `call_ref` through a closure
-            // struct: `LocalRef` to a function-typed binding, an
-            // inline `Closure` expression, a function-typed field,
-            // etc. The typechecker decided this isn't a static
-            // top-level call.
-            emit_indirect_closure_call(
+            let callee_ty = ctx
+                .ta
+                .source_type(*callee)
+                .map_err(crate::codegen::arena_failure)?;
+            emitter.call_receiver = if let Some(receiver) = receiver {
+                emit_expr(emitter, ctx, *callee)?;
+                let slot = emit_boxed_local(emitter, ctx, *receiver)?;
+                crate::codegen::this_binding::preserve_explicit_null(emitter, ctx, slot)?;
+                Some(slot)
+            } else {
+                emit_callee(emitter, ctx, *callee)?
+            };
+            emit_indirect_closure_call_with_receiver_on_stack(
                 emitter,
                 ctx,
-                *callee,
+                callee_ty,
                 args,
                 type_args,
                 &expr.ty,
@@ -487,15 +495,15 @@ fn emit_expr_value(
                     "Unbound function has no this receiver",
                 );
                 emitter.emit_end();
-            }
-            emitter.instruction(Instruction::LocalGet(slot));
-            if emitter.dynamic_this {
+                crate::codegen::this_binding::read_bound_receiver(emitter, ctx, slot)?;
                 crate::codegen::cast_check::emit_operation_cast_on_stack(
                     emitter,
                     ctx,
                     &Type::Unknown,
                     &expr.ty,
                 )?;
+            } else {
+                emitter.instruction(Instruction::LocalGet(slot));
             }
         }
         TypedExprKind::NumberEnumMember { value, .. } => {
@@ -6081,36 +6089,6 @@ fn emit_direct_call(
     Ok(())
 }
 
-/// Emit an indirect call via `call_ref` through a closure value
-/// (`LocalRef` / `GlobalRef` to a function-typed binding, an inline
-/// `Closure`, etc.).
-///
-/// Under uniform closure ABI, every closure param and the
-/// return are erased to `(ref $Object)` at the Wasm boundary. This
-/// call site evaluates and boxes arguments before checking the callable. The
-/// result uses the physical type chosen by runtime-value propagation.
-fn emit_indirect_closure_call(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    callee: ExprId,
-    args: &[ExprId],
-    type_args: &[Type],
-    result_ty: &Type,
-    call_span: Option<crate::Span>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let callee_ty = ctx
-        .ta
-        .source_type(callee)
-        .map_err(crate::codegen::arena_failure)?
-        .clone();
-    let receiver = emit_callee(emitter, ctx, callee)?;
-    emitter.call_receiver = receiver;
-    emit_indirect_closure_call_with_receiver_on_stack(
-        emitter, ctx, &callee_ty, args, type_args, result_ty, call_span,
-    )?;
-    Ok(())
-}
-
 /// Preserve a property reference until invocation without evaluating its object twice.
 fn emit_callee(
     emitter: &mut FunctionEmitter,
@@ -6183,11 +6161,24 @@ fn reference_expression(
     }
 }
 
-/// Same as [`emit_indirect_closure_call`], but assumes the closure
-/// value is already on the stack (cast to its per-signature struct
-/// type). Used optional-chain `Call` arm, where
-/// `emit_chain_parts` has already evaluated, null-checked, and
-/// ref-cast the receiver before dispatching.
+fn emit_boxed_local(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value: ExprId,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    emit_expr(emitter, ctx, value)?;
+    let ty = &ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?
+        .ty;
+    cast::emit_box(emitter, ctx, ty)?;
+    let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(slot));
+    Ok(slot)
+}
+
+/// Save the closure from the stack and its receiver before evaluating the arguments.
 fn emit_indirect_closure_call_with_receiver_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -6207,18 +6198,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     }
     let mut arguments = Vec::with_capacity(args.len());
     for &arg in args {
-        emit_expr(emitter, ctx, arg)?;
-        cast::emit_box(
-            emitter,
-            ctx,
-            &ctx.ta
-                .try_expr(arg)
-                .map_err(crate::codegen::arena_failure)?
-                .ty,
-        )?;
-        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
-        emitter.instruction(Instruction::LocalSet(slot));
-        arguments.push(slot);
+        arguments.push(emit_boxed_local(emitter, ctx, arg)?);
     }
     emitter.instruction(Instruction::LocalGet(callee));
     crate::codegen::cast_check::emit_operation_cast_on_stack(

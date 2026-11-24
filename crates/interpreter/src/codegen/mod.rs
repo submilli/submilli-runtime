@@ -6597,11 +6597,15 @@ function main(): void {
                 }
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 box_walk_expr(ta, callee, names);
+                if let Some(receiver) = receiver {
+                    box_walk_expr(ta, receiver, names);
+                }
                 for a in args {
                     box_walk_expr(ta, a, names);
                 }

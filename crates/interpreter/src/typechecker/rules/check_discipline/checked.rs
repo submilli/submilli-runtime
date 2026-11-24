@@ -1335,11 +1335,15 @@ impl Walker<'_, '_> {
                 }
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.parts_of(*callee, &mut parts)?;
+                if let Some(receiver) = receiver {
+                    self.parts_of(*receiver, &mut parts)?;
+                }
                 for arg in self.package.authored(expr.span, args).iter() {
                     self.parts_of(*arg, &mut parts)?;
                 }
@@ -1445,13 +1449,17 @@ impl<'a> Walker<'a, '_> {
                 self.method_call(self.this(), None, false, &args, &name.name, span)?
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 let (name, calls_itself) = self.function_value_name(*callee)?;
                 let callee = self.eval(*callee)?;
-                let args = self.package.authored(span, args);
+                let mut args = self.package.authored(span, args);
+                if let Some(receiver) = receiver {
+                    args.to_mut().insert(0, *receiver);
+                }
                 self.call_function_value(callee, name, calls_itself, &args, span)?
             }
             TypedExprKind::MethodCall {

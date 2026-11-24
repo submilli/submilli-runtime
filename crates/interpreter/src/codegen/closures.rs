@@ -583,7 +583,7 @@ pub fn emit_env_types(
     symbols: &mut SymbolTable,
     next_type_idx: &mut u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    ensure_index_capacity(*next_type_idx, Some(metas.len()), 4)?;
+    ensure_index_capacity(*next_type_idx, Some(metas.len()), 5)?;
     let string = symbols
         .string_type_idx()
         .ok_or_else(|| crate::codegen::internal_failure("string intrinsic"))?;
@@ -629,7 +629,14 @@ pub fn emit_env_types(
             mutable: false,
         },
     ]);
-    symbols.this_environment_type = Some(*next_type_idx);
+    let wrapper = *next_type_idx;
+    symbols.this_environment_type = Some(wrapper);
+    *next_type_idx += 1;
+    let intr = symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
+    super::this_binding::declare_null_receiver(types, intr, wrapper);
+    symbols.null_receiver_type = Some(*next_type_idx);
     *next_type_idx += 1;
     if generic {
         super::generic_binding::declare_environment_type(types, symbols, next_type_idx)?;

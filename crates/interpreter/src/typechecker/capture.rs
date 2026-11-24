@@ -787,11 +787,15 @@ impl State<'_> {
                 }
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.walk_expr(callee)?;
+                if let Some(receiver) = receiver {
+                    self.walk_expr(receiver)?;
+                }
                 for a in args {
                     self.walk_expr(a)?;
                 }
@@ -1605,11 +1609,15 @@ mod tests {
                 }
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 walk_expr(ta, *callee, out);
+                if let Some(receiver) = receiver {
+                    walk_expr(ta, *receiver, out);
+                }
                 for &a in args {
                     walk_expr(ta, a, out);
                 }
@@ -1831,10 +1839,13 @@ mod tests {
                 args.iter().find_map(|&a| scan_expr(ta, a))
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
-            } => scan_expr(ta, *callee).or_else(|| args.iter().find_map(|&a| scan_expr(ta, a))),
+            } => scan_expr(ta, *callee)
+                .or_else(|| receiver.and_then(|id| scan_expr(ta, id)))
+                .or_else(|| args.iter().find_map(|&a| scan_expr(ta, a))),
             TypedExprKind::GenericCall { args, .. } => {
                 args.iter().find_map(|a| scan_expr(ta, a.expr))
             }

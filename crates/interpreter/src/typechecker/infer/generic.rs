@@ -3497,6 +3497,7 @@ impl Inferer<'_> {
         if let GenericCallee::Value(callee) = callee {
             return Ok((
                 TypedExprKind::CallClosure {
+                    receiver: None,
                     callee,
                     args: generic_args.into_iter().map(|arg| arg.expr).collect(),
                     type_args: runtime_args,
@@ -4793,11 +4794,15 @@ mod tests {
                 }
             }
             crate::TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 collect_expr_types(ta, *callee, out);
+                if let Some(receiver) = receiver {
+                    collect_expr_types(ta, *receiver, out);
+                }
                 for a in args {
                     collect_expr_types(ta, *a, out);
                 }

@@ -538,6 +538,7 @@ fn rewrite_generic_member_call(
     ast.try_expr_mut(id)
         .map_err(crate::codegen::arena_failure)?
         .kind = TypedExprKind::CallClosure {
+        receiver: None,
         callee,
         args,
         type_args,

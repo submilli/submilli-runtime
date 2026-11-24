@@ -499,11 +499,15 @@ impl<'a> Walker<'a, '_, '_> {
                 stable()
             }
             TypedExprKind::CallClosure {
+                receiver,
                 type_args: _,
                 callee,
                 args,
             } => {
                 self.consume(*callee, Use::Escape(Usage::Called))?;
+                if let Some(receiver) = receiver {
+                    self.consume(*receiver, Use::Escape(Usage::PassedToFunctionValue))?;
+                }
                 let args = self.package.authored(span, args);
                 self.consume_all(&args, || Usage::PassedToFunctionValue)?;
                 stable()
