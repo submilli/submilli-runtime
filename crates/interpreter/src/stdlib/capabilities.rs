@@ -532,7 +532,7 @@ const VARIABLES: &[Capability] = &[Capability {
 const HUMAN: &[Capability] = &[Capability {
     name: "human.ask",
     main_denial: None,
-    summary: "Ask a person a question and wait for the answer (a sensitive question is refused to main whatever the policy says)",
+    summary: "Ask a person a question and wait for the answer (a sensitive question is refused to main, including a Function, whatever the policy says)",
     filter_fields: &[
         field(
             "to",

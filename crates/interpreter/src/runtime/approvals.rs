@@ -183,7 +183,7 @@ impl QuestionSpec {
     /// Whether `answer` answers this question: of its kind, within the bounds, and
     /// picking only offered choices as the question allows. The problem, in words,
     /// when not; it never quotes answer text.
-    pub fn check(&self, answer: &AnswerValue) -> Result<(), String> {
+    pub fn check_answer(&self, answer: &AnswerValue) -> Result<(), String> {
         let written = match answer {
             AnswerValue::Text { text } => Some(text),
             AnswerValue::Choice { other, .. } => other.as_ref(),
@@ -224,12 +224,11 @@ impl QuestionSpec {
                 if !multiple && selected.len() > 1 {
                     return Err("several choices are selected, but only one is allowed".into());
                 }
+                // A blank `other` is no `other`, whether or not the question allows one:
+                // `answer_value` leaves it out.
+                let other = other.as_deref().filter(|text| !text.trim().is_empty());
                 match other {
                     Some(_) if !allows_other => Err("the question does not allow `other`".into()),
-                    // A blank `other` beside a pick is no `other`: `answer_value` leaves it out.
-                    Some(text) if text.trim().is_empty() && selected.is_empty() => {
-                        Err("nothing is selected and `other` is empty".into())
-                    }
                     None if selected.is_empty() => Err("nothing is selected".into()),
                     _ => Ok(()),
                 }
@@ -414,13 +413,17 @@ pub(crate) fn refuse(
 }
 
 /// The approval outcome recorded in `bytes`, for an embedder that tracks waiting
-/// runs from their history. `None` when the bytes hold something else.
+/// runs from their history. Decode only an approval effect's outcome, chosen by its
+/// operation: a `human.ask` outcome's `Expired` or `Unanswerable` also decodes here.
+/// `None` when the bytes hold no approval outcome.
 pub fn recorded_outcome(bytes: &super::effects::OutcomeBytes) -> Option<ApprovalOutcome> {
     super::effects::decode(&bytes.0).ok()
 }
 
-/// The question outcome recorded in `bytes` (a `human.ask` effect), for an embedder
-/// that tracks waiting runs from their history. `None` when the bytes hold something else.
+/// The question outcome recorded in `bytes`, for an embedder that tracks waiting runs
+/// from their history. Decode only a [`QUESTION_OPERATION`] effect's outcome: an
+/// approval's `Expired` or `Unanswerable` also decodes here. `None` when the bytes
+/// hold no question outcome.
 pub fn recorded_question_outcome(bytes: &super::effects::OutcomeBytes) -> Option<QuestionOutcome> {
     super::effects::decode(&bytes.0).ok()
 }

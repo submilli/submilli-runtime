@@ -20,8 +20,8 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::approvals::{
-    AnswerSpec, AnswerValue, ApprovalError, Approver, Choice, QUESTION_OPERATION, QuestionOutcome,
-    QuestionRequest, QuestionSpec,
+    AnswerSpec, AnswerValue, ApprovalError, Approver, Choice, MAX_ANSWER_BYTES,
+    MAX_CHOICE_VALUE_BYTES, QUESTION_OPERATION, QuestionOutcome, QuestionRequest, QuestionSpec,
 };
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::effects;
@@ -42,13 +42,14 @@ pub const MODULE_NAME: &str = "submilli:human";
 /// The capability every `ask` is checked against.
 pub const CAPABILITY: &str = "human.ask";
 
-/// Why a sensitive question is refused to `main` whatever the policy says.
+/// Why a sensitive question is refused to `main`, a Function included, whatever the policy says.
 const SENSITIVE_MAIN_REFUSAL: &str = "a sensitive question asks for a credential, which only a package may receive; no policy can grant main-module access";
 
-/// Bounds that let every host show a question: they match what the embedders store.
+/// Bounds on the question a program writes, so every host can show it; they match
+/// what the embedders store. The bounds on what a host hands back (an answer, a choice
+/// value) are public beside [`QuestionSpec::check_answer`], which embedders use too.
 const MAX_TEXT_BYTES: usize = 4 * 1024;
 const MAX_CHOICES: usize = 20;
-use crate::runtime::approvals::{MAX_ANSWER_BYTES, MAX_CHOICE_VALUE_BYTES};
 const MAX_CHOICE_LABEL_BYTES: usize = 256;
 const MAX_CHOICE_DESCRIPTION_BYTES: usize = 1024;
 /// The longest a program may ask a host to wait.
@@ -79,7 +80,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 ret: alias_ref("Answer"),
                 type_predicate: None,
                 doc: doc(
-                    "/**\n * Ask a person `question` and wait for the answer: text, or what they picked from `choices`.\n *\n * The question goes to the person the run acts for (`to: \"human\"`, the default), or to an administrator (`to: \"admin\"`). The wait survives restarts and does not count as running time. It lasts until `timeout` (such as `\"10m\"`), which the host caps by its own approval timeout, its default.\n *\n * Throws a catchable `NoAnswerError` when there is no answer: `reason` is `\"declined\"` (the person said no; `message` holds what they said instead), `\"expired\"`, or `\"unanswerable\"` (this run cannot ask anyone). A question that is empty, marks a choice question `sensitive`, or breaks a bound (text 4 KiB; 1 to 20 choices with unique values; a value or label non-empty and at most 256 bytes, a description 1 KiB) throws a `TypeError`, and so does a `timeout` over 30 days.\n *\n * `sensitive: true` asks for a credential, such as a sign-in code. Only a package may ask one: from `main` it throws `PermissionDeniedError` whatever the policy says. Its answer is never logged.\n * @param question What to ask, and how it is answered.\n * @param options Whom to ask, and how long to wait.\n * @capability human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive }\n */",
+                    "/**\n * Ask a person `question` and wait for the answer: text, or what they picked from `choices`.\n *\n * The question goes to the person the run acts for (`to: \"human\"`, the default), or to an administrator (`to: \"admin\"`). The wait survives restarts and does not count as running time. It lasts until `timeout` (such as `\"10m\"`), which the host caps by its own approval timeout, its default.\n *\n * Throws a catchable `NoAnswerError` when there is no answer: `reason` is `\"declined\"` (the person said no; `message` holds what they said instead), `\"expired\"`, or `\"unanswerable\"` (this run cannot ask anyone). A question that is empty, marks a choice question `sensitive`, or breaks a bound (text 4 KiB; 1 to 20 choices with unique values; a value or label non-empty and at most 256 bytes, a description 1 KiB) throws a `TypeError`, and so does a `timeout` over 30 days.\n *\n * `sensitive: true` asks for a credential, such as a sign-in code. Only a package may ask one: from `main`, including a Function (which runs as `main`), it throws `PermissionDeniedError` whatever the policy says. Its answer is never logged.\n * @param question What to ask, and how it is answered.\n * @param options Whom to ask, and how long to wait.\n * @capability human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive }\n */",
                 ),
             },
         },
@@ -193,25 +194,53 @@ async fn ask(
 }
 
 /// `outcome`, unless it is an answer that does not fit `question`: a host defect,
-/// recorded as unanswerable so the program never sees a choice it did not offer.
-/// A sensitive question's decline loses its message, which may be the credential
-/// typed in the wrong place, before the history records it; so does a decline
-/// message longer than [`MAX_ANSWER_BYTES`].
+/// recorded as unanswerable so the program never sees a choice it did not offer, nor
+/// who answered or when beyond what a host can hold. A sensitive question's decline
+/// loses its message, which may be the credential typed in the wrong place, before the
+/// history records it; so does a decline message longer than [`MAX_ANSWER_BYTES`]. An
+/// unanswerable outcome's message is cut to that bound.
 fn fitting(question: &QuestionSpec, outcome: QuestionOutcome) -> QuestionOutcome {
-    if let QuestionOutcome::Declined { message } = &outcome
-        && (question.is_sensitive() || message.as_ref().is_some_and(|m| m.len() > MAX_ANSWER_BYTES))
-    {
-        return QuestionOutcome::Declined { message: None };
-    }
-    let QuestionOutcome::Answered(answer) = &outcome else {
-        return outcome;
-    };
-    match question.check(&answer.value) {
-        Ok(()) => outcome,
-        Err(problem) => QuestionOutcome::Unanswerable {
-            message: format!("the host's answer does not fit the question: {problem}"),
+    match outcome {
+        QuestionOutcome::Declined { message }
+            if question.is_sensitive()
+                || message.as_ref().is_some_and(|m| m.len() > MAX_ANSWER_BYTES) =>
+        {
+            QuestionOutcome::Declined { message: None }
+        }
+        QuestionOutcome::Unanswerable { message } => QuestionOutcome::Unanswerable {
+            message: bounded(message),
         },
+        QuestionOutcome::Answered(answer) => match answer_problem(question, &answer) {
+            None => QuestionOutcome::Answered(answer),
+            Some(problem) => QuestionOutcome::Unanswerable {
+                message: format!("the host's answer does not fit the question: {problem}"),
+            },
+        },
+        outcome => outcome,
     }
+}
+
+/// What makes the host's `answer` unusable, in words that never quote it.
+fn answer_problem(question: &QuestionSpec, answer: &AnswerSpec) -> Option<String> {
+    if answer.answered_by.len() > MAX_ANSWER_BYTES {
+        return Some("who answered is longer than any answer".into());
+    }
+    if instant(answer.answered_at_unix_ms).is_none() {
+        return Some("when it was answered is past any time a timestamp holds".into());
+    }
+    question.check_answer(&answer.value).err()
+}
+
+/// `message`, cut at a character boundary to [`MAX_ANSWER_BYTES`].
+fn bounded(mut message: String) -> String {
+    if message.len() > MAX_ANSWER_BYTES {
+        let end = (0..=MAX_ANSWER_BYTES)
+            .rev()
+            .find(|&at| message.is_char_boundary(at))
+            .unwrap_or(0);
+        message.truncate(end);
+    }
+    message
 }
 
 /// What the call log keeps of an outcome: never a sensitive answer's value.
@@ -258,10 +287,13 @@ fn answer_value(
         }
     }
     fields.insert("answeredBy".into(), answer.answered_by.clone().into());
-    fields.insert(
-        "answeredAt".into(),
-        iso_instant(answer.answered_at_unix_ms).into(),
-    );
+    // `fitting` refused an answer whose time a timestamp cannot hold before it was recorded.
+    let Some(answered_at) = instant(answer.answered_at_unix_ms) else {
+        return Err(fatal_host_error(format!(
+            "{CAPABILITY}: the recorded answer's time is out of range"
+        )));
+    };
+    fields.insert("answeredAt".into(), iso(answered_at).into());
     let units: Vec<u16> = serde_json::Value::Object(fields)
         .to_string()
         .encode_utf16()
@@ -269,14 +301,17 @@ fn answer_value(
     fuel::settle_result(caller, |caller| value::deserialize(caller, &units))
 }
 
-/// `2026-11-24T09:30:00.000Z`, from Unix milliseconds. An instant past what a
-/// timestamp can hold is a host defect, reported as the latest one.
-fn iso_instant(unix_ms: u64) -> String {
-    let timestamp = i64::try_from(unix_ms)
+/// The instant `unix_ms` milliseconds after the Unix epoch; `None` past what a
+/// timestamp holds.
+fn instant(unix_ms: u64) -> Option<jiff::Timestamp> {
+    i64::try_from(unix_ms)
         .ok()
         .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
-        .unwrap_or(jiff::Timestamp::MAX);
-    timestamp.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// `2026-11-24T09:30:00.000Z`.
+fn iso(at: jiff::Timestamp) -> String {
+    at.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
 /// The question as a program wrote it. A value of a wider type may carry other keys,

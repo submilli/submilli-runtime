@@ -516,9 +516,11 @@ fn timeouts_read_like_blueprint_durations() {
 
 #[test]
 fn instants_are_iso_utc() {
-    assert_eq!(iso_instant(0), "1970-01-01T00:00:00.000Z");
-    assert_eq!(iso_instant(951_782_400_123), "2000-02-29T00:00:00.123Z");
-    assert_eq!(iso_instant(1_795_512_600_000), "2026-11-24T09:30:00.000Z");
+    let at = |unix_ms| iso(instant(unix_ms).unwrap());
+    assert_eq!(at(0), "1970-01-01T00:00:00.000Z");
+    assert_eq!(at(951_782_400_123), "2000-02-29T00:00:00.123Z");
+    assert_eq!(at(1_795_512_600_000), "2026-11-24T09:30:00.000Z");
+    assert_eq!(instant(u64::MAX), None);
 }
 
 /// `main` returning `kind: message` for whatever `ask(question, options)` throws.
@@ -718,6 +720,75 @@ async fn an_answer_that_does_not_fit_the_question_is_unanswerable() {
             "{answer:?}: {result}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_blank_other_is_no_other_even_where_the_question_allows_none() {
+    let run = run(
+        None,
+        &catching(
+            r#"{ text: "Pick", answer: "choice", choices: [{ value: "a" }] }"#,
+            "undefined",
+        ),
+        Some(Person::new(answered(AnswerValue::Choice {
+            selected: vec!["a".into()],
+            other: Some("  ".into()),
+        }))),
+        None,
+    )
+    .await;
+    assert_eq!(run.result.unwrap().as_deref(), Some("asked"));
+}
+
+#[tokio::test]
+async fn who_answered_and_when_must_be_what_a_host_can_hold() {
+    let question = r#"{ text: "Go?", answer: "text" }"#;
+    let value = AnswerValue::Text { text: "yes".into() };
+    for answer in [
+        AnswerSpec {
+            value: value.clone(),
+            answered_by: "x".repeat(MAX_ANSWER_BYTES + 1),
+            answered_at_unix_ms: 1_795_512_600_000,
+        },
+        AnswerSpec {
+            value: value.clone(),
+            answered_by: "user:dana".into(),
+            answered_at_unix_ms: u64::MAX,
+        },
+    ] {
+        let run = run(
+            None,
+            &catching(question, "undefined"),
+            Some(Person::new(QuestionOutcome::Answered(answer))),
+            None,
+        )
+        .await;
+        let result = run.result.unwrap().unwrap_or_default();
+        assert!(
+            result.starts_with("no answer unanswerable: the host's answer does not fit"),
+            "{result}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_hosts_unanswerable_message_is_cut_to_the_answer_bound() {
+    let person = Person::new(QuestionOutcome::Unanswerable {
+        message: "é".repeat(MAX_ANSWER_BYTES),
+    });
+    let run = run(
+        None,
+        &catching(r#"{ text: "Go?", answer: "text" }"#, "undefined"),
+        Some(person),
+        None,
+    )
+    .await;
+    let result = run.result.unwrap().unwrap_or_default();
+    let message = result
+        .strip_prefix("no answer unanswerable: ")
+        .expect("unanswerable");
+    assert_eq!(message.len(), MAX_ANSWER_BYTES);
+    assert!(message.chars().all(|c| c == 'é'));
 }
 
 #[tokio::test]

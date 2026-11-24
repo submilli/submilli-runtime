@@ -198,8 +198,9 @@ out, and a condition on a missing field is false.
   would return as `session.read`. A refused key is left out.
 - **Questions to a person:** `human.ask` is checked with `to` (`"human"` or
   `"admin"`), `answer` (`"text"` or `"choice"`), and `sensitive`. A
-  sensitive question, which asks for a credential, is refused to `main`
-  regardless of policy, as `secrets.get` is.
+  sensitive question, which asks for a credential, is refused to `main`,
+  including a Function (which runs as `main`), regardless of policy, as
+  `secrets.get` is.
 - **MCP tools:** the tool is a field, not part of the name. Write
   `capability: mcp.linear` with `filter: tool == "save_issue"`.
 
@@ -263,7 +264,7 @@ read checks the requested alias name and grants no access to its target name.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
-| `human.ask` | `to: string`, `answer: string`, `sensitive: boolean` | Ask a person a question and wait for the answer (a sensitive question is refused to main whatever the policy says) | `to == "human"` |
+| `human.ask` | `to: string`, `answer: string`, `sensitive: boolean` | Ask a person a question and wait for the answer (a sensitive question is refused to main, including a Function, whatever the policy says) | `to == "human"` |
 
 ### `submilli:llm`
 
