@@ -50,7 +50,7 @@ async fn search_lists_all_and_filters_by_symbol() {
     // models declared, and `submilli:secrets` and `submilli:variables`, whose
     // reads the runtime refuses to programs.
     let listed = all["results"].as_array().unwrap();
-    assert_eq!(listed.len(), 7, "got: {all}");
+    assert_eq!(listed.len(), 8, "got: {all}");
     assert!(
         !listed
             .iter()

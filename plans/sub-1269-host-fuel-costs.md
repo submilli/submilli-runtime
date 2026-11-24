@@ -1920,6 +1920,12 @@ Common notes for the verbs:
 - Verbs send `decompress: false`, and the workspace builds reqwest with only the `rustls` and `stream` features (`Cargo.toml:48`), so there is no transparent gzip/brotli decoding: `R` is wire bytes.
 - Request timeout is fixed at 30 s for verbs (`stdlib/http/mod.rs:60`).
 
+### submilli:human
+
+| Function | Work | Formula | Timing | Notes |
+| --- | --- | --- | --- | --- |
+| `submilli:human#ask` | Serialize the question and options through their `toJSON` slots, parse them, gate, run the `human.ask` effect (the provider's wait), and decode the answer into a guest object (`stdlib/human.rs`) | `CALL + PARSE(len(question JSON) + len(options JSON)) + GATE + HASH(len(request)) + COPY(len(outcome)) + ELEM(answer nodes)`; on replay `PARSE(len(outcome))` replaces `COPY(len(outcome))` | before + output | The parse and the request fingerprint are charged before anything is asked. The answer arrives after the effect, so `session::value::deserialize` runs under `settle_result` and never refuses it. The wait costs nothing and is added to `clock_paused`. Bounded: question text 4 KiB, at most 20 choices, value and label 256 bytes, description 1 KiB; an answer, `other` text or decline message 64 KiB. |
+
 ### submilli:llm
 
 Variables: `n` = number of prompts (1 for `call`); `P` = total bytes of all prompts; `S = len(schema)`; `T` = total bytes of completion text returned; `m` = models declared.

@@ -552,6 +552,8 @@ mod tests {
         "agent.run",
         "skill.load",
         "cost.report",
+        // A sensitive answer's value is left out; see `stdlib::human`.
+        "human.ask",
     ];
     /// The request is the decision's context; the response is kept for whole reads and
     /// session reads.
@@ -683,6 +685,10 @@ mod tests {
             Some(crate::stdlib::llm::MODULE_NAME),
         ),
         (
+            "src/stdlib/human.rs",
+            Some(crate::stdlib::human::MODULE_NAME),
+        ),
+        (
             "src/stdlib/secrets.rs",
             Some(crate::stdlib::secrets::MODULE_NAME),
         ),
@@ -741,6 +747,7 @@ mod tests {
             "check_security_call(",
             "check_security(",
             "check_and_approve_call(",
+            "check_and_approve_call_refusing_main(",
             "check_or_ask(",
             "check_candidate(",
             "begin_call(",

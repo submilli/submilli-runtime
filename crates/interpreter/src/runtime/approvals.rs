@@ -118,6 +118,112 @@ pub enum ApprovalOutcome {
     },
 }
 
+/// The effect every question from `submilli:human`'s `ask` is recorded under.
+pub const QUESTION_OPERATION: &str = "human.ask";
+
+/// One option of a choice question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Choice {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// What a program asks a person, as `ask` received it and checked it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "answer", rename_all = "snake_case")]
+pub enum QuestionSpec {
+    /// Answered with text. A `sensitive` answer is a credential such as a sign-in code:
+    /// only a package may ask for one, and its value never reaches the call log.
+    Text { text: String, sensitive: bool },
+    /// Answered by picking `choices`: one, or several when `multiple`, plus free text
+    /// when `other`.
+    Choice {
+        text: String,
+        choices: Vec<Choice>,
+        multiple: bool,
+        other: bool,
+    },
+}
+
+impl QuestionSpec {
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Text { text, .. } | Self::Choice { text, .. } => text,
+        }
+    }
+
+    pub fn is_sensitive(&self) -> bool {
+        matches!(
+            self,
+            Self::Text {
+                sensitive: true,
+                ..
+            }
+        )
+    }
+
+    /// How it is answered, as `ask`'s `answer` field and `human.ask`'s context name it.
+    pub fn answer_kind(&self) -> &'static str {
+        match self {
+            Self::Text { .. } => "text",
+            Self::Choice { .. } => "choice",
+        }
+    }
+}
+
+/// One question waiting for a person's answer. `timeout` is the program's own bound;
+/// the embedder caps it by its approval timeout, which applies when it is absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionRequest {
+    pub approver: Approver,
+    pub caller: String,
+    pub question: QuestionSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<std::time::Duration>,
+}
+
+/// What the person gave, in the form the question asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "answer", rename_all = "snake_case")]
+pub enum AnswerValue {
+    Text {
+        text: String,
+    },
+    Choice {
+        selected: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        other: Option<String>,
+    },
+}
+
+/// An answer, with who gave it and when. The embedder names the person.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerSpec {
+    pub value: AnswerValue,
+    pub answered_by: String,
+    pub answered_at_unix_ms: u64,
+}
+
+/// What became of a question. Every variant but `Answered` throws a catchable
+/// `NoAnswerError`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuestionOutcome {
+    Answered(AnswerSpec),
+    /// The person declined. `message` holds what they said instead, if anything.
+    Declined {
+        message: Option<String>,
+    },
+    /// No answer came in time.
+    Expired,
+    /// The question could not be put to anyone, as when the host cannot show it.
+    Unanswerable {
+        message: String,
+    },
+}
+
 /// Why the embedder gave no outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApprovalError {
@@ -137,6 +243,28 @@ pub trait ApprovalProvider: Send + Sync {
         effect_id: EffectId,
         request: &'a ApprovalRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ApprovalOutcome, ApprovalError>> + Send + 'a>>;
+
+    /// Puts a program's question to its person and waits for the outcome, which the
+    /// engine records under [`QUESTION_OPERATION`]. A host that cannot ask keeps this
+    /// default, and the program's `ask` throws `NoAnswerError("unanswerable")`.
+    fn ask<'a>(
+        &'a self,
+        _effect_id: EffectId,
+        _request: &'a QuestionRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<QuestionOutcome, ApprovalError>> + Send + 'a>> {
+        Box::pin(async {
+            Ok(QuestionOutcome::Unanswerable {
+                message: "this host cannot ask a person".to_owned(),
+            })
+        })
+    }
+
+    /// The outcome of the question asked under `effect_id` is now in the run's history,
+    /// so the embedder no longer needs its own copy of a sensitive answer. Not called
+    /// on replay, nor without a history. A crash between the history's commit and this
+    /// call loses it, so an embedder that keeps sensitive answers also erases them when
+    /// the run or session ends.
+    fn recorded(&self, _effect_id: &EffectId) {}
 }
 
 /// Why a call that needs approval was denied without asking anyone.
@@ -220,6 +348,12 @@ pub(crate) fn refuse(
 /// The approval outcome recorded in `bytes`, for an embedder that tracks waiting
 /// runs from their history. `None` when the bytes hold something else.
 pub fn recorded_outcome(bytes: &super::effects::OutcomeBytes) -> Option<ApprovalOutcome> {
+    super::effects::decode(&bytes.0).ok()
+}
+
+/// The question outcome recorded in `bytes` (a `human.ask` effect), for an embedder
+/// that tracks waiting runs from their history. `None` when the bytes hold something else.
+pub fn recorded_question_outcome(bytes: &super::effects::OutcomeBytes) -> Option<QuestionOutcome> {
     super::effects::decode(&bytes.0).ok()
 }
 

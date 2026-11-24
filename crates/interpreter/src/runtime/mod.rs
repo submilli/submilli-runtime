@@ -46,8 +46,9 @@ pub use agents::{
     AgentUsage,
 };
 pub use approvals::{
-    APPROVAL_OPERATION, ApprovalError, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
-    Approver, AskRule, Unasked,
+    APPROVAL_OPERATION, AnswerSpec, AnswerValue, ApprovalError, ApprovalOutcome, ApprovalProvider,
+    ApprovalRequest, Approver, AskRule, Choice, QUESTION_OPERATION, QuestionOutcome,
+    QuestionRequest, QuestionSpec, Unasked,
 };
 pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{

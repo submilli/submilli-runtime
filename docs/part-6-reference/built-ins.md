@@ -404,6 +404,15 @@ A read found no value (`extends Error`): an array or string index out of range, 
 | --- | --- |
 | `constructor(message?: string, options?: ErrorOptions)` |  |
 
+## `NoAnswerError`
+
+A question `ask` (`submilli:human`) put to a person got no answer (`extends Error`, `name` = `"NoAnswerError"`).
+
+| Member | Description |
+| --- | --- |
+| `reason: "declined" \| "expired" \| "unanswerable"` | Why there is no answer: `"declined"` (the person said no; `message` holds what they said, if anything), `"expired"` (nobody answered before the deadline), or `"unanswerable"` (this run cannot ask anyone). |
+| `constructor(message: string, reason: "declined" \| "expired" \| "unanswerable")` |  |
+
 ## `NoInfer`
 
 ### `NoInfer`
