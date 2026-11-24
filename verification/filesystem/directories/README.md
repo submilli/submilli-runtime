@@ -16,9 +16,8 @@ directory synchronization; errors cannot be ignored. A pending I/O error stays
 pending, rather than becoming a definitive failed outcome after a mutation.
 Completed calls replay from SQL even when a later operation reused the path.
 
-No directory handles, concurrent writers or tree rename are proved here. A
-recursive operation follows the caller code and each child receipt, using
-these empty-directory operations and the separately verified file primitives.
+No directory handles, concurrent writers or tree rename are proved here. Recursive mkdir records one intent for its missing suffix and one receipt
+for the whole call. Its multi-directory recovery is covered by Rust tests.
 Progress assumes eventual successful storage operations and finite crashes.
 
 Run `python3 verification/check.py --model filesystem/directories`. Negative

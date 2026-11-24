@@ -313,8 +313,13 @@ impl ContentPath {
         if self.is_existing_dir() {
             return Ok(());
         }
-        self.check_mutation(false)?;
+        self.check_directory_creation()?;
         Ok(self.dir.create_dir_all(&self.rel)?)
+    }
+
+    /// Validate creation before a durable backend records its mutation intent.
+    pub fn check_directory_creation(&self) -> Result<(), ContainError> {
+        self.check_mutation(false)
     }
 
     pub fn open_dir(&self) -> Result<Dir, ContainError> {

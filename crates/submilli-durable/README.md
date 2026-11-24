@@ -58,7 +58,8 @@ reads remain observations; their result recording belongs to execution history.
 
 Mutation preparation retains only what retry needs. Append uses `Files::size`
 to obtain and synchronize the original length, saves `Prepared { offset }`, and
-rewrites the same range on retry; a missing file starts at zero. Other mutations
+rewrites the same range on retry; a missing file starts at zero. Recursive mkdir records the number of missing path components and syncs each
+created directory and its parent before completing. Other mutations
 save `Prepared {}` with no fields. Paths come from the replayed call or writer
 row, and each pending attempt resolves them again. Writer close retains its new
 candidate at a deterministic effect-derived location, never a backup/hash of the
@@ -126,9 +127,9 @@ filesystem receipts are independent of future execution history: retrying those
 calls reuses the receipt even before outer completion is recorded.
 The later execution layer owns replay, retry scheduling and run completion.
 
-The port supports replay-supplied writes/appends, primitive directory creation,
+The port supports replay-supplied writes/appends, single and recursive directory creation,
 remove/move, effect-aware readers, directory snapshots and chunked writers. Recursive
-mutations and copies require caller orchestration of primitives; the generic
+removal and copies require caller orchestration of primitives; the generic
 port refuses them before mutation. The caller also owns retention and cleanup:
 keep recovery artifacts and receipts while retries or retained resources remain
 possible, and drain native workers and handles before disposing of the roots.

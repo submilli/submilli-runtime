@@ -55,6 +55,125 @@ fn workspace(root: &std::path::Path) -> TestFilesystem {
 }
 
 #[test]
+fn recursive_mkdir_resumes_partial_creation() {
+    use interpreter::runtime::filesystem::Filesystem;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("memory")).unwrap();
+    let workspace = workspace(root.path());
+    let effect = uuid::Uuid::new_v4().to_string().into();
+    let target = "/memory/subject/notes";
+    workspace.store.lock().unwrap().stop_after_prepared = true;
+    assert!(
+        workspace
+            .runtime
+            .block_on(workspace.filesystem.mkdir(&effect, None, target, true))
+            .is_err()
+    );
+    fail("directory-created");
+    let result = workspace
+        .runtime
+        .block_on(workspace.filesystem.mkdir(&effect, None, target, true));
+    assert!(result.is_err());
+    assert!(root.path().join("memory/subject").is_dir(), "{result:?}");
+    assert!(!root.path().join("memory/subject/notes").exists());
+
+    let restored = workspace
+        .reopen(
+            Vfs::external(root.path().into()).unwrap(),
+            &workspace.identity(),
+        )
+        .unwrap();
+    let budget = Arc::new(interpreter::runtime::fuel::WorkBudget::new(0));
+    restored
+        .runtime
+        .block_on(
+            restored
+                .filesystem
+                .mkdir(&effect, Some(budget.clone()), target, true),
+        )
+        .unwrap();
+    assert_eq!(budget.spent(), interpreter::runtime::fuel::SYSCALL.cost(8));
+    assert!(root.path().join("memory/subject/notes").is_dir());
+    std::fs::remove_dir(root.path().join("memory/subject/notes")).unwrap();
+    restored
+        .runtime
+        .block_on(restored.filesystem.mkdir(&effect, None, target, true))
+        .unwrap();
+    assert!(!root.path().join("memory/subject/notes").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn preflight_keeps_transient_os_errors_retryable() {
+    for (errno, refused) in [
+        (libc::EIO, false),
+        (libc::EMFILE, false),
+        (libc::ELOOP, true),
+        (libc::ENAMETOOLONG, true),
+    ] {
+        let error = io::Error::from_raw_os_error(errno);
+        assert_eq!(
+            preflight_refusal(&RecoveryError::Containment(fs::ContainError::Io(error))),
+            refused
+        );
+    }
+}
+
+#[test]
+fn recursive_mkdir_obeys_mount_access_and_cwd() {
+    use interpreter::runtime::{
+        filesystem::Filesystem,
+        vfs::{Access, MountSpec},
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let volume = tempfile::tempdir().unwrap();
+    let vfs = Vfs::external(root.path().into())
+        .unwrap()
+        .with_mount(MountSpec {
+            guest_path: "/memory".into(),
+            host: volume.path().into(),
+            volume: "memory".into(),
+            access: Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap()
+        .with_access(Access::ReadOnly)
+        .with_cwd("/memory/work")
+        .unwrap();
+    let workspace = TestFilesystem::new(vfs);
+    let budget = Arc::new(interpreter::runtime::fuel::WorkBudget::new(0));
+    let effect = uuid::Uuid::new_v4().to_string().into();
+    assert!(matches!(
+        workspace
+            .runtime
+            .block_on(workspace.filesystem.mkdir(&effect, Some(budget), ".", true)),
+        Err(PortError::Exhausted(_))
+    ));
+    workspace
+        .runtime
+        .block_on(workspace.filesystem.mkdir(&effect, None, ".", true))
+        .unwrap();
+    let mkdir = |path: &str| {
+        workspace.runtime.block_on(workspace.filesystem.mkdir(
+            &uuid::Uuid::new_v4().to_string().into(),
+            None,
+            path,
+            true,
+        ))
+    };
+    mkdir("/").unwrap();
+    mkdir("/memory").unwrap();
+    mkdir("../subject/notes").unwrap();
+    assert!(volume.path().join("subject/notes").is_dir());
+    assert!(!root.path().join("memory/subject").exists());
+    assert!(mkdir("/readonly/notes").is_err());
+    assert!(mkdir("/memory/new/.git/objects").is_err());
+    assert!(!volume.path().join("new").exists());
+}
+
+#[test]
 fn directory_sync_uses_open_directory_after_rename() {
     use cap_fs_ext::DirExt;
 

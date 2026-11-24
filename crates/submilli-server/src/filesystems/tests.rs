@@ -552,14 +552,24 @@ async fn code_tools_use_durable_updates_and_transient_observations() {
 }
 
 #[tokio::test]
-async fn durable_backend_refuses_unprepared_recursive_mutations() {
+async fn durable_backend_creates_recursive_directories() {
     let fixture = Fixture::new().await;
+    let root = fixture.filesystem.vfs().root();
+    std::fs::write(root.join("file"), b"keep").unwrap();
     let source = r#"import { mkdir } from "submilli:fs";
-        function main(): void { mkdir("/unprepared/child", { recursive: true }); }"#;
-    assert!(run_backend(&fixture, source).await.is_err());
-    assert!(std::fs::read(fixture.filesystem.vfs().root().join("unprepared/child")).is_err());
+        function main(): void {
+            mkdir("/memory/subject/notes", { recursive: true });
+            mkdir("/memory/subject/notes", { recursive: true });
+            let refused = false;
+            try { mkdir("/file/notes", { recursive: true }); } catch (error: Error) { refused = true; }
+            assert(refused);
+        }"#;
+    run_backend(&fixture, source).await.unwrap();
+    assert!(root.join("memory/subject/notes").is_dir());
+    assert_eq!(std::fs::read(root.join("file")).unwrap(), b"keep");
     let mut unit = fixture.units()().await.unwrap();
-    assert_eq!(unit.journal_entry_count(&fixture.run).await.unwrap(), 0);
+    // Placement rejects the file parent before a mutation enters the journal.
+    assert_eq!(unit.journal_entry_count(&fixture.run).await.unwrap(), 2);
 }
 
 async fn sole_operation_id(fixture: &Fixture) -> EffectId {
