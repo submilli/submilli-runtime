@@ -367,6 +367,53 @@ async fn a_sensitive_question_is_refused_to_main_before_anyone_is_asked() {
     assert!(person.asked().is_empty());
 }
 
+/// A space Function is model- or user-written code that returns to `main`: it runs as `main`,
+/// so a sensitive question is refused to it too, whatever the policy allows.
+#[tokio::test]
+async fn a_sensitive_question_is_refused_to_a_function_as_to_main() {
+    let person = Person::new(answered(AnswerValue::Text {
+        text: "123456".into(),
+    }));
+    let config = RuntimeConfig::default();
+    let engine = config.engine().unwrap();
+    let set = crate::FunctionSet::new(vec![crate::FunctionDefinition {
+        name: "read-code".into(),
+        description: "Asks for a sign-in code.".into(),
+        source: r#"
+            import { ask } from "submilli:human";
+            export function run(): string {
+                try {
+                    const answer = ask({ text: "Enter the code", answer: "text", sensitive: true });
+                    return answer.answer === "text" ? "typed " + answer.text.length + " characters" : "wrong kind";
+                } catch (e) {
+                    if (e instanceof PermissionDeniedError) { return "denied: " + e.reason; }
+                    throw e;
+                }
+            }
+        "#
+        .into(),
+    }]);
+    let compiled =
+        crate::compile_function_set(&engine, &set, &[], &[], None).expect("function compiles");
+    let mut data = StoreData::with_vfs("function-run".into(), Vfs::none());
+    // A policy that would allow the ask: the refusal is the runtime's, not the policy's.
+    data.security_check = Arc::new(DeniesAdmin);
+    data.approval_provider = Some(person.clone());
+    let mut store = config.store_async(&engine, data).unwrap();
+    let out = crate::invoke_function_async::<&str>(&mut store, &compiled, &[], "read-code", &[])
+        .await
+        .expect("the function runs");
+    assert_eq!(
+        out.as_deref(),
+        Some(
+            serde_json::to_string(&format!("denied: {SENSITIVE_MAIN_REFUSAL}"))
+                .unwrap()
+                .as_str()
+        )
+    );
+    assert!(person.asked().is_empty());
+}
+
 #[tokio::test]
 async fn a_package_asks_a_sensitive_question_and_its_answer_stays_out_of_the_call_log() {
     let person = Person::new(answered(AnswerValue::Text {
