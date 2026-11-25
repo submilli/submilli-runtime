@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3b00ebc8ba5da974fb396ea00effb029cbcab5329cca64a308b0834cba6d00ad"
+  contentHash: "a87a09c60a856a4aee7fcaeae6514f462f2718881757bf77d161525343b4e075"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -134,7 +134,7 @@ These are refused before the rules are read, whatever `default` says:
 
 | Source | Names | Fields |
 | --- | --- | --- |
-| The standard library | `cost.report`, `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `variables.get`, `session.*` | In the tables below |
+| The standard library | `cost.report`, `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `human.ask`, `secrets.get`, `variables.get`, `session.*` | In the tables below |
 | A Package | Chosen by its author, such as `pied-piper.example/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
 | An MCP server the Blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
 | The application's tools a harness declares for a session | `tools.call` | `tool` ([Application tools](/docs/reference/http-api#application-tools)) |
@@ -196,6 +196,11 @@ out, and a condition on a missing field is false.
   the models a rule allows.
 - **Session state:** `session.list` is checked with `prefix`, and each key it
   would return as `session.read`. A refused key is left out.
+- **Questions to a person:** `human.ask` is checked with `to` (`"human"` or
+  `"admin"`), `answer` (`"text"` or `"choice"`), and `sensitive`. A
+  sensitive question, which asks for a credential, is refused to `main`,
+  including a Function (which runs as `main`), regardless of policy, as
+  `secrets.get` is.
 - **MCP tools:** the tool is a field, not part of the name. Write
   `capability: mcp.linear` with `filter: tool == "save_issue"`.
 
@@ -254,6 +259,12 @@ read checks the requested alias name and grants no access to its target name.
 | `http.options` | `host: string`, `path: string`, `body_size: number`, `timeout_ms: number` | HTTP OPTIONS | `host == "api.example.com"` |
 | `http.request` | `method: string`, `host: string`, `path: string`, `body_size: number`, `timeout_ms: number` | HTTP request with a method chosen at the call, through `http.request`. The per-method functions (`http.get`, …) check their own capability instead | `method == "GET" and host == "api.example.com"` |
 | `http.download` | `host: string`, `url_path: string`, `vfs_path: string`, `max_bytes: number`, `overwrite: boolean`, `decompress: boolean` | Download a URL straight to the VFS | `host == "cdn.example.com" and overwrite == false` |
+
+### `submilli:human`
+
+| Capability | Fields | Operation | Example filter |
+| --- | --- | --- | --- |
+| `human.ask` | `to: string`, `answer: string`, `sensitive: boolean` | Ask a person a question and wait for the answer (a sensitive question is refused to main, including a Function, whatever the policy says) | `to == "human"` |
 
 ### `submilli:llm`
 

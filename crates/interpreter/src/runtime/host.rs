@@ -131,8 +131,10 @@ fn install_prelude(
         permission_denied_vtable: error_host.permission_denied_vtable,
         timeout_error_vtable: error_host.timeout_vtable,
         missing_value_error_vtable: error_host.missing_value_vtable,
+        no_answer_error_vtable: error_host.no_answer_vtable,
         error_field_names: error_host.field_names,
         permission_denied_field_names: error_host.permission_denied_field_names,
+        no_answer_field_names: error_host.no_answer_field_names,
         error_tag: error_host.tag,
     });
     Ok(())
@@ -811,8 +813,10 @@ pub struct HostAbi {
     pub(crate) permission_denied_vtable: Global,
     pub(crate) timeout_error_vtable: Global,
     pub(crate) missing_value_error_vtable: Global,
+    pub(crate) no_answer_error_vtable: Global,
     pub(crate) error_field_names: Global,
     pub(crate) permission_denied_field_names: Global,
+    pub(crate) no_answer_field_names: Global,
     pub(crate) error_tag: wasmtime::Tag,
 }
 
@@ -831,8 +835,10 @@ pub(crate) struct HostAbiHandles {
     pub permission_denied_vtable: Global,
     pub timeout_vtable: Global,
     pub missing_value_vtable: Global,
+    pub no_answer_vtable: Global,
     pub error_field_names: Global,
     pub permission_denied_field_names: Global,
+    pub no_answer_field_names: Global,
 }
 
 pub(crate) fn error_abi(caller: &Caller<'_, StoreData>) -> wasmtime::Result<HostAbiHandles> {
@@ -855,8 +861,10 @@ pub(crate) fn error_abi(caller: &Caller<'_, StoreData>) -> wasmtime::Result<Host
         permission_denied_vtable: abi.permission_denied_vtable,
         timeout_vtable: abi.timeout_error_vtable,
         missing_value_vtable: abi.missing_value_error_vtable,
+        no_answer_vtable: abi.no_answer_error_vtable,
         error_field_names: abi.error_field_names,
         permission_denied_field_names: abi.permission_denied_field_names,
+        no_answer_field_names: abi.no_answer_field_names,
     })
 }
 
@@ -1192,6 +1200,54 @@ pub fn missing_value_error(message: impl Into<String>) -> wasmtime::Error {
     wasmtime::Error::new(MissingValueError(message.into()))
 }
 
+/// Why a question `ask` put to a person got no answer: `NoAnswerError.reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoAnswerReason {
+    /// The person said no.
+    Declined,
+    /// Nobody answered before the deadline.
+    Expired,
+    /// Nobody could be asked.
+    Unanswerable,
+}
+
+impl NoAnswerReason {
+    pub const ALL: [Self; 3] = [Self::Declined, Self::Expired, Self::Unanswerable];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Declined => "declined",
+            Self::Expired => "expired",
+            Self::Unanswerable => "unanswerable",
+        }
+    }
+}
+
+/// Marker for a question that got no answer, thrown at the guest boundary as the
+/// built-in `NoAnswerError` with its `reason`. Same contract as [`QuotaExceededError`].
+#[derive(Debug)]
+pub struct NoAnswer {
+    pub message: String,
+    pub reason: NoAnswerReason,
+}
+
+impl std::fmt::Display for NoAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for NoAnswer {}
+
+/// A host failure that throws the built-in `NoAnswerError` at the guest boundary.
+pub fn no_answer_error(reason: NoAnswerReason, message: impl Into<String>) -> wasmtime::Error {
+    wasmtime::Error::new(NoAnswer {
+        message: message.into(),
+        reason,
+    })
+}
+
 /// Marker for a host failure that should surface to the guest as the built-in
 /// `SyntaxError` subclass — same contract as [`RangeError`].
 #[derive(Debug)]
@@ -1512,6 +1568,8 @@ fn builtin_class_of(err: &wasmtime::Error) -> super::prelude::error::BuiltinErro
         super::prelude::error::BuiltinErrorClass::Uri
     } else if err.downcast_ref::<PermissionDenied>().is_some() {
         super::prelude::error::BuiltinErrorClass::PermissionDenied
+    } else if err.downcast_ref::<NoAnswer>().is_some() {
+        super::prelude::error::BuiltinErrorClass::NoAnswer
     } else {
         super::prelude::error::BuiltinErrorClass::Error
     }
@@ -1520,10 +1578,13 @@ fn builtin_class_of(err: &wasmtime::Error) -> super::prelude::error::BuiltinErro
 /// The own-field texts for the guest error instance, in payload-slot order
 /// (matching `BuiltinErrorClass::own_fields`). Empty for field-less classes.
 fn own_field_texts(err: &wasmtime::Error) -> Vec<&str> {
-    match err.downcast_ref::<PermissionDenied>() {
-        Some(pd) => vec![&pd.caller, &pd.capability, &pd.reason],
-        None => Vec::new(),
+    if let Some(pd) = err.downcast_ref::<PermissionDenied>() {
+        return vec![&pd.caller, &pd.capability, &pd.reason];
     }
+    if let Some(no_answer) = err.downcast_ref::<NoAnswer>() {
+        return vec![no_answer.reason.as_str()];
+    }
+    Vec::new()
 }
 
 /// Raise a catchable Submilli `Error` from inside a host function.
@@ -1863,6 +1924,7 @@ pub(crate) const CALL_MODULES: &[&str] = &[
     crate::stdlib::security::MODULE_NAME,
     crate::stdlib::agents::MODULE_NAME,
     crate::stdlib::skills::MODULE_NAME,
+    crate::stdlib::human::MODULE_NAME,
     super::mcp::MCP_MODULE_NAME,
     super::tools::TOOLS_MODULE_NAME,
 ];

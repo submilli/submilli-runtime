@@ -218,7 +218,10 @@ pub(crate) fn refuse(
 }
 
 /// The approval outcome recorded in `bytes`, for an embedder that tracks waiting
-/// runs from their history. `None` when the bytes hold something else.
+/// runs from their history. Decode only an approval effect's outcome, chosen by its
+/// operation: a [`QUESTION_OPERATION`](super::asks::QUESTION_OPERATION) outcome's
+/// `Expired` or `Unanswerable` also decodes here.
+/// `None` when the bytes hold no approval outcome.
 pub fn recorded_outcome(bytes: &super::effects::OutcomeBytes) -> Option<ApprovalOutcome> {
     super::effects::decode(&bytes.0).ok()
 }

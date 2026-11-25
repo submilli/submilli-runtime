@@ -53,6 +53,7 @@ fn services() -> HostServices {
         mcp_transport: Arc::new(UnusedMcp),
         tool_provider: None,
         approval_provider: None,
+        ask_provider: None,
         session_kv: Arc::new(interpreter::runtime::InMemorySessionKv::default()),
         session_finalizers: None,
         resource_use: None,

@@ -4,6 +4,7 @@ use crate::runtime::durable::RunId;
 pub mod agents;
 pub mod approvals;
 pub(crate) mod array_storage;
+pub mod asks;
 pub mod blocking;
 pub mod call_log;
 pub mod decision;
@@ -48,6 +49,10 @@ pub use agents::{
 pub use approvals::{
     APPROVAL_OPERATION, ApprovalError, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
     Approver, AskRule, Unasked,
+};
+pub use asks::{
+    AnswerSpec, AnswerValue, AskError, AskProvider, Choice, QUESTION_OPERATION, QuestionOutcome,
+    QuestionRequest, QuestionSpec,
 };
 pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{
@@ -179,6 +184,10 @@ pub struct StoreData {
     /// when the embedder can put such a call to its approver. `None` refuses
     /// every asked call as a policy denial.
     pub approval_provider: Option<Arc<dyn ApprovalProvider>>,
+    /// Who answers `submilli:human`'s `ask`, present only when the embedder can put
+    /// a question to a person. `None` makes every `ask` throw
+    /// `NoAnswerError("unanswerable")`.
+    pub ask_provider: Option<Arc<dyn AskProvider>>,
     /// Time this execution spent waiting outside the program on a host call
     /// that must not count against its time limit (an application tool call, or an
     /// approval).
@@ -356,6 +365,7 @@ impl StoreData {
             mcp_transport: None,
             tool_provider: None,
             approval_provider: None,
+            ask_provider: None,
             clock_paused: std::time::Duration::ZERO,
             llm_provider: None,
             llm_budget: None,

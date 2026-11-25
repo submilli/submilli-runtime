@@ -11,8 +11,7 @@ use crate::compiler_limits::{COMPILER_STACK_BYTES, MAX_TYPE_DEPTH};
 use crate::docs_view::{Availability, DocAvailability};
 use crate::packages::DocAudience;
 use crate::runtime::decision::{DecisionLog, DecisionLogConfig};
-use crate::runtime::durable::EffectId;
-use crate::runtime::effects::{EffectCall, EffectHistory, HistoryError, RecordedOutcome};
+use crate::runtime::effects::testing::MemoryHistory;
 use crate::runtime::secrets::SecretProvider;
 use crate::runtime::security::{CheckOutcome, SecurityCheck};
 use crate::runtime::{
@@ -201,96 +200,6 @@ impl HttpClient for MockHttp {
         _writer: &mut (dyn std::io::Write + Send),
     ) -> Result<DownloadMeta, HttpError> {
         Err(HttpError::Other("download not scripted".into()))
-    }
-}
-
-struct MemoryHistory {
-    state: Mutex<ReplayState>,
-}
-
-struct ReplayState {
-    outcomes: Vec<RecordedOutcome>,
-    cursor: usize,
-    replay: bool,
-}
-
-impl MemoryHistory {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            state: Mutex::new(ReplayState {
-                outcomes: Vec::new(),
-                cursor: 0,
-                replay: false,
-            }),
-        })
-    }
-
-    fn switch_to_replay(&self) {
-        let mut guard = self.state.lock().expect("history mutex");
-        guard.replay = true;
-        guard.cursor = 0;
-    }
-
-    fn recorded_len(&self) -> usize {
-        self.state.lock().expect("history mutex").outcomes.len()
-    }
-}
-
-#[async_trait::async_trait]
-impl EffectHistory for MemoryHistory {
-    async fn begin(
-        &self,
-        _operation: &str,
-        _fingerprint: [u8; 32],
-    ) -> Result<EffectCall, HistoryError> {
-        let mut guard = self.state.lock().expect("history mutex");
-        let id = EffectId::stub().map_err(|err| HistoryError(err.to_string()))?;
-        if guard.replay {
-            if let Some(recorded) = guard.outcomes.get(guard.cursor).cloned() {
-                let sequence = guard.cursor as u64;
-                guard.cursor += 1;
-                return Ok(EffectCall {
-                    id,
-                    sequence,
-                    recorded: Some(recorded),
-                });
-            }
-            // Past recorded prefix during continuation: execute live from here!
-            let sequence = guard.outcomes.len() as u64;
-            return Ok(EffectCall {
-                id,
-                sequence,
-                recorded: None,
-            });
-        }
-        Ok(EffectCall {
-            id,
-            sequence: guard.outcomes.len() as u64,
-            recorded: None,
-        })
-    }
-
-    async fn complete(
-        &self,
-        call: &EffectCall,
-        outcome: RecordedOutcome,
-    ) -> Result<(), HistoryError> {
-        let mut guard = self.state.lock().expect("history mutex");
-        if guard.replay && (call.sequence as usize) < guard.outcomes.len() {
-            return Ok(());
-        }
-        if call.sequence as usize != guard.outcomes.len() {
-            return Err(HistoryError("effect completed out of order".into()));
-        }
-        guard.outcomes.push(outcome);
-        if guard.replay {
-            guard.cursor = guard.outcomes.len();
-        }
-        Ok(())
-    }
-
-    async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
-        Ok(())
     }
 }
 
@@ -1430,7 +1339,7 @@ fn invoke_participates_in_effect_history_journal_and_replay() {
         )]);
         let compiled = compile_function_set(&engine, &set, &[], &[], None).expect("compile");
 
-        let history = MemoryHistory::new();
+        let history = Arc::new(MemoryHistory::default());
         let single_step_set = FunctionSet::new(vec![def(
             "fetch-once",
             "Fetches an item once.",
@@ -1471,7 +1380,7 @@ fn invoke_participates_in_effect_history_journal_and_replay() {
         // Switch history to replay: `two-step-sync` replays `step1/42` ("alpha") from the
         // journal WITHOUT calling `http` a second time for step 1, and executes `step2/42`
         // live against `continuation_http`!
-        history.switch_to_replay();
+        history.replay();
         let continuation_http = MockHttp::scripted(vec![MockHttp::ok_json(
             "https://sync.example/step2/42",
             "beta",

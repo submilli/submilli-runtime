@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dc806595073db912b048f252c9f26f02412c75349b7d1046aca529cb5a769393"
+  contentHash: "7a27c2ac5f3d5cc7e91f1f2d7b24c22f3ab36b46fad6290064d0b0fbbb7eed53"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -25,6 +25,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:llm` | Model calls: `text`, `texts`, `call`, `batch`, `models` | `llm.call`; `fs.read` for files |
 | `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
+| `submilli:human` | `ask`: put a question to a person and wait for a text or choice answer | `human.ask` |
 | `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull | `git.open`, `git.read`, `git.write`, `git.init`, `git.clone`, `git.fetch`, `git.commit` |
 | `submilli:code` | Numbered reads, search, glob, tree, anchored edits, and diffs over the program's files | `fs.read`, `fs.list`, `fs.stat`, `fs.write` |
 | `submilli:crypto` | SHA-256, SHA-512, HMAC-SHA-256, random bytes | Nothing |
@@ -621,6 +622,96 @@ Result of an HTTP call — status, headers, body, and the final URL after any re
 | `json<T>(): T` | Parse the response body as JSON and decode it as `T`, for example `r.json<User>()`. |
 | `throwForStatus(): void` | Throw if `ok` is `false`. |
 | `toString(): string` | Concise description of the response — `"Response(200 OK, https://...)"`. |
+
+## `submilli:human`
+
+Ask a person a question, answered with text or a choice, and wait durably for the answer.
+
+| Function | Capability | Description |
+| --- | --- | --- |
+| `ask(question: Question, options?: AskOptions): Answer` | `human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive }` | Ask a person `question` and wait for the answer: text, or what they picked from `choices`. |
+
+### `Answer`
+
+What `ask` returns: a `TextAnswer` or a `ChoiceAnswer`, told apart by `answer`.
+
+```typescript
+type Answer = ChoiceAnswer | TextAnswer;
+```
+
+### `AskOptions`
+
+Whom `ask` asks, and how long it waits.
+
+| Member | Description |
+| --- | --- |
+| `readonly timeout?: string` | How long to wait, such as `"90s"`, `"10m"` or `"2h"`, capped by the host's approval timeout, which is also the default. |
+| `readonly to?: "admin" \| "human"` | Whom to ask: the person the run acts for (`"human"`, the default) or an administrator (`"admin"`). |
+
+### `Choice`
+
+One option of a choice question.
+
+| Member | Description |
+| --- | --- |
+| `readonly description?: string` | A line under the label, saying what the choice means. |
+| `readonly label?: string` | What the person sees; `value` when absent. |
+| `readonly value: string` | What `selected` holds when this choice is picked. |
+
+### `ChoiceAnswer`
+
+The answer to a `ChoiceQuestion`.
+
+| Member | Description |
+| --- | --- |
+| `readonly answer: "choice"` | Answered by picking. |
+| `readonly answeredAt: string` | When they answered: an ISO 8601 instant in UTC. |
+| `readonly answeredBy: string` | Who answered, as the host names them, such as `"user:dana"`. |
+| `readonly other?: string` | The person's own answer, when the question allowed `other` and they wrote one, beside or instead of a pick. |
+| `readonly selected: string[]` | The `value` of each choice picked, at most one unless the question allowed `multiple`, and none only when the person wrote `other` instead. |
+
+### `ChoiceQuestion`
+
+A question answered by picking from choices.
+
+| Member | Description |
+| --- | --- |
+| `readonly answer: "choice"` | Answered by picking from `choices`. |
+| `readonly choices: Choice[]` | What the person may pick: 1 to 20, with unique values. |
+| `readonly multiple?: boolean` | Whether the person may pick several, rather than one (the default). |
+| `readonly other?: boolean` | The person may also write an answer of their own, in `other`. |
+| `readonly text: string` | The question, as the person reads it. |
+
+### `Question`
+
+What `ask` asks: a `TextQuestion` or a `ChoiceQuestion`, told apart by `answer`.
+
+```typescript
+type Question = ChoiceQuestion | TextQuestion;
+```
+
+### `TextAnswer`
+
+The answer to a `TextQuestion`.
+
+| Member | Description |
+| --- | --- |
+| `readonly answer: "text"` | Answered with text. |
+| `readonly answeredAt: string` | When they answered: an ISO 8601 instant in UTC. |
+| `readonly answeredBy: string` | Who answered, as the host names them, such as `"user:dana"`. |
+| `readonly text: string` | What the person wrote. |
+
+### `TextQuestion`
+
+A question answered with text.
+
+| Member | Description |
+| --- | --- |
+| `readonly answer: "text"` | Answered with text. |
+| `readonly initial?: string` | Text the answer starts from, which the person may edit or send as is; never on a `sensitive` question. |
+| `readonly maxLength?: number` | The longest answer, in UTF-16 code units as `string.length` counts them: a whole number from 1 to 65536. |
+| `readonly sensitive?: boolean` | The answer is a credential, such as a sign-in code: only a package may ask, and the answer is never logged or shown back. |
+| `readonly text: string` | The question, as the person reads it. |
 
 ## `submilli:llm`
 
