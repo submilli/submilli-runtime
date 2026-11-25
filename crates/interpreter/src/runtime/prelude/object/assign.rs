@@ -111,6 +111,10 @@ fn skips_method_copy(
     let Some((names, _)) = super::shape_arrays(caller, target)? else {
         return Ok(true);
     };
+    let target_struct = super::as_struct(caller, target, "Object.assign target")?;
+    if super::index::lookup_own_data(caller, &target_struct, &units, false)?.is_some() {
+        return Ok(true);
+    }
     if let Some(slot) = super::find_data_slot(caller, target, &units)? {
         let name = names.get(&mut *caller, slot)?;
         return Ok(!super::is_method_slot(caller, &name)?);
@@ -164,6 +168,7 @@ fn own_keys(caller: &mut Caller<'_, StoreData>, source: &Val) -> wasmtime::Resul
     fuel::charge(&mut *caller, fuel::ELEM, u64::from(count))?;
     let mut keys = OwnKeys::new(caller, count as usize)?;
     let hidden = super::super::error::non_enumerable_slots(caller, source)?;
+    let source_struct = super::super::iterator::as_struct(caller, source, "Object.assign source")?;
     for slot in 0..count {
         let name = names.get(&mut *caller, slot)?;
         let value = values.get(&mut *caller, slot)?;
@@ -174,6 +179,14 @@ fn own_keys(caller: &mut Caller<'_, StoreData>, source: &Val) -> wasmtime::Resul
             || !super::field_is_present(caller, &name, &value)?
         {
             continue;
+        }
+        if super::is_method_slot(caller, &name)? {
+            let units = read_string_units(caller, &name, "Object.assign source key")?;
+            if let Some((_, true)) =
+                super::index::lookup_own_data(caller, &source_struct, &units, true)?
+            {
+                continue;
+            }
         }
         keys.push(caller, name)?;
     }

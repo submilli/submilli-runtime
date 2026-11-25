@@ -1,0 +1,4 @@
+# Single-half accessor overrides across package boundaries.
+# name         dir   deps         root
+@test/acc      lib   -
+main           app   @test/acc    root

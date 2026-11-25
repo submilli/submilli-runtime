@@ -1,9 +1,11 @@
-// The two halves of an accessor property inherit independently: a subclass that
-// declares one half keeps the other from its nearest declaring ancestor, which is
-// what the vtable already dispatches.
+// Redeclaring one half of an accessor replaces the whole prototype descriptor:
+// the other half is absent, not inherited from an ancestor. Reading a
+// setter-only override through a parent-typed reference gives `undefined`, and
+// writing a getter-only override through a parent-typed reference throws a
+// `TypeError`.
 
 class GetOnly {
-  get g(): string {
+  get g(): string | undefined {
     return "go";
   }
 }
@@ -34,9 +36,8 @@ class AddsGetter extends SetOnly {
   }
 }
 
-// The declaring ancestor may be further than one level up.
 class Top {
-  get p(): number {
+  get p(): number | undefined {
     return 1;
   }
 }
@@ -51,10 +52,9 @@ class Bottom extends Middle {
   }
 }
 
-// An override of one half leaves the other inherited.
 class Pair {
   private v: number = 10;
-  get n(): number {
+  get n(): number | undefined {
     return this.v;
   }
   set n(x: number) {
@@ -69,32 +69,32 @@ class OverridesGetter extends Pair {
     return 99;
   }
 }
-
-// Halves may disagree about their types — the read type is the getter's.
-class StringGet {
-  private v: string = "a";
-  get p(): string {
-    return this.v;
+class OverridesSetter extends Pair {
+  private w: number = 0;
+  set n(x: number) {
+    this.w = x;
+  }
+  peekW(): number {
+    return this.w;
   }
 }
-class NumberSet extends StringGet {
-  private n: number = 0;
-  set p(x: number) {
-    this.n = x;
+class GrandChildKeepsCleared extends OverridesSetter {}
+class GrandChildRestoresBoth extends OverridesSetter {
+  private g: number = 77;
+  get n(): number {
+    return this.g;
   }
-  peekN(): number {
-    return this.n;
+  set n(x: number) {
+    this.g = x;
   }
 }
 
-// The inherited half's type is substituted at the bindings the declaring
-// ancestor sees, reached through the child's `extends` clause.
 class Holder<T> {
   private v: T;
   constructor(v: T) {
     this.v = v;
   }
-  get item(): T {
+  get item(): T | undefined {
     return this.v;
   }
 }
@@ -113,59 +113,86 @@ class Relay<U> extends Holder<U> {
   }
 }
 
-// The optional-chain read shares `class_field_read_ty`, so it has to agree with
-// the plain read about which half answers.
-function readVia(a: AddsSetter | null): string | undefined {
+function readViaBase(a: GetOnly | null): string | undefined {
   return a?.g;
+}
+
+function throwsTypeError(fn: () => void): boolean {
+  try {
+    fn();
+    return false;
+  } catch (e) {
+    return e instanceof TypeError;
+  }
 }
 
 export function main(): string {
   const a = new AddsSetter();
   a.g = "hi";
-  assert(a.g === "go", "inherited getter answers the child's own read");
   assert(a.peek() === "hi", "the child's setter ran");
+  const baseA: GetOnly = a;
+  assert(baseA.g === undefined, "parent-typed read of setter-only override gives undefined");
+  assert(readViaBase(a) === undefined, "optional chain through parent also gives undefined");
+  assert(readViaBase(null) === undefined, "null still short-circuits");
+  assert(JSON.stringify(a) === "{}", "cleared getter is omitted from JSON.stringify");
 
   const b = new AddsGetter();
-  b.g = "hi";
   assert(b.g === "child-get", "the child's getter answers");
-  assert(b.peek() === "hi", "inherited setter ran");
+  const baseB: SetOnly = b;
+  assert(
+    throwsTypeError(() => {
+      baseB.g = "hi";
+    }),
+    "parent-typed write to getter-only override throws TypeError",
+  );
+  assert(b.peek() === "s", "base setter did not run");
 
   const c = new Bottom();
   c.p = 7;
-  assert(c.p === 1, "getter two levels up still answers");
   assert(c.peek() === 7, "the child's setter ran");
+  const topC: Top = c;
+  assert(topC.p === undefined, "getter two levels up is cleared by setter-only subclass");
 
   const d = new OverridesGetter();
-  d.n = 5;
   assert(d.n === 99, "the overriding getter wins");
-  assert(d.peek() === 5, "the inherited setter ran");
-  d.n += 1;
-  assert(d.peek() === 100, "compound assignment reads the getter and writes the setter");
+  const pairD: Pair = d;
+  assert(pairD.n === 99, "parent-typed read dispatches to the overriding getter");
+  assert(
+    throwsTypeError(() => {
+      pairD.n = 5;
+    }),
+    "parent-typed write throws TypeError when getter-only subclass clears setter",
+  );
+  assert(d.peek() === 10, "base setter did not run");
 
-  const e = new NumberSet();
-  const s: string = e.p;
-  assert(s === "a", "the read type is the inherited getter's");
-  e.p = 3;
-  assert(e.peekN() === 3, "the setter takes its own parameter type");
+  const os = new OverridesSetter();
+  os.n = 55;
+  assert(os.peekW() === 55, "setter-only override runs its own setter");
+  const pairOs: Pair = os;
+  assert(pairOs.n === undefined, "parent-typed read of setter-only override yields undefined");
+  pairOs.n = 66;
+  assert(os.peekW() === 66, "parent-typed write dispatches to setter-only override");
 
-  // Through a parent-typed reference the inherited half answers the same way.
-  const base: GetOnly = a;
-  assert(base.g === "go", "parent-typed read agrees with the child-typed one");
+  const gcCleared: Pair = new GrandChildKeepsCleared();
+  assert(gcCleared.n === undefined, "grandchild inherits the cleared getter");
 
-  assert(readVia(a) === "go", "the optional chain reads the inherited getter too");
-  assert(readVia(null) === undefined, "and still short-circuits on null");
+  const gcRestored = new GrandChildRestoresBoth();
+  const pairGc: Pair = gcRestored;
+  assert(pairGc.n === 77, "grandchild declaring both halves restores the getter");
+  pairGc.n = 88;
+  assert(gcRestored.n === 88, "and its own setter");
 
   const rn = new Relay<number>(7);
   rn.item = 42;
-  const n: number = rn.item;
-  assert(n === 7, "a generic subclass reads the inherited getter at its own binding");
-  assert(rn.peek() === 42, "and writes through its own setter");
+  assert(rn.peek() === 42, "generic subclass writes through its own setter");
+  const hn: Holder<number> = rn;
+  assert(hn.item === undefined, "generic setter-only subclass clears inherited getter");
 
   const rs = new Relay<string>("a");
   rs.item = "b";
-  const t: string = rs.item;
-  assert(t === "a", "a second instantiation keeps its own binding");
-  assert(rs.peek() === "b", "and its own setter");
+  assert(rs.peek() === "b", "second generic instantiation keeps its own setter");
+  const hs: Holder<string> = rs;
+  assert(hs.item === undefined, "second generic instantiation also clears inherited getter");
 
   return "ok";
 }

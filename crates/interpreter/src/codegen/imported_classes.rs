@@ -38,6 +38,7 @@ pub struct ImportedClassLayout {
     /// Full data-field names (inherited prefix then own), object-payload order.
     pub fields: Vec<String>,
     pub optional_fields: std::collections::BTreeSet<String>,
+    pub over_prototype_fields: std::collections::BTreeSet<String>,
     pub narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
     /// Full vtable method slots (inherited prefix then own/override), in order.
     pub methods: Vec<ImportedSlot>,
@@ -57,6 +58,8 @@ pub struct ImportedSlot {
     pub argument_metadata: Option<String>,
     pub ret_ty: crate::Type,
     pub generic: bool,
+    pub accessor: Option<crate::AccessorKind>,
+    pub absent: bool,
 }
 
 /// Per-class data gathered from the dependency `PackageDeclaration`s. `fields`
@@ -100,34 +103,42 @@ impl<'a> ClassInfo<'a> {
 
 /// The producer's vtable-method set for an imported class: real methods plus the
 /// synthetic getter/setter methods derived from its accessors, each as
-/// `(name, params, ret)`. Mirrors `codegen::classes::accessor_methods` so slot
-/// indices and signatures line up across the package boundary.
-fn vtable_methods(class: &ClassInfo<'_>) -> BTreeMap<String, (Vec<crate::Type>, crate::Type)> {
-    let mut out: BTreeMap<String, (Vec<crate::Type>, crate::Type)> = class
-        .methods
-        .iter()
-        .map(|(name, sig)| {
-            (
-                name.clone(),
+/// `(name, params, ret, accessor)`. Mirrors `codegen::classes::accessor_methods`
+/// so slot indices and signatures line up across the package boundary.
+fn vtable_methods(
+    class: &ClassInfo<'_>,
+) -> BTreeMap<String, (Vec<crate::Type>, crate::Type, Option<crate::AccessorKind>)> {
+    let mut out: BTreeMap<String, (Vec<crate::Type>, crate::Type, Option<crate::AccessorKind>)> =
+        class
+            .methods
+            .iter()
+            .map(|(name, sig)| {
                 (
-                    sig.params.iter().map(|p| p.ty.clone()).collect(),
-                    sig.ret.clone(),
-                ),
-            )
-        })
-        .collect();
+                    name.clone(),
+                    (
+                        sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        sig.ret.clone(),
+                        None,
+                    ),
+                )
+            })
+            .collect();
     for acc in class.accessors {
         match acc {
             crate::AccessorSig::Getter { name, ret_ty } => {
                 out.insert(
                     crate::codegen::classes::accessor_getter_name(name),
-                    (Vec::new(), ret_ty.clone()),
+                    (Vec::new(), ret_ty.clone(), Some(crate::AccessorKind::Get)),
                 );
             }
             crate::AccessorSig::Setter { name, param } => {
                 out.insert(
                     crate::codegen::classes::accessor_setter_name(name),
-                    (vec![param.ty.clone()], crate::Type::Void),
+                    (
+                        vec![param.ty.clone()],
+                        crate::Type::Void,
+                        Some(crate::AccessorKind::Set),
+                    ),
                 );
             }
         }
@@ -464,11 +475,28 @@ fn reconstruct_one(
     let mut optional_fields = parent_layout
         .map(|layout| layout.optional_fields.clone())
         .unwrap_or_default();
+    let mut over_prototype_fields = parent_layout
+        .map(|layout| layout.over_prototype_fields.clone())
+        .unwrap_or_default();
     for (name, field) in class.fields {
         if field.optional {
             optional_fields.insert(name.clone());
         } else {
             optional_fields.remove(name);
+        }
+        let shadows_parent = parent_layout.is_some_and(|parent| {
+            crate::codegen::classes::has_prototype_member(
+                parent
+                    .methods
+                    .iter()
+                    .map(|slot| (slot.name.as_str(), slot.accessor)),
+                name,
+            )
+        });
+        if !class.accessors.iter().any(|a| a.name() == name.as_str())
+            && (field.over_prototype || (!field.method && shadows_parent))
+        {
+            over_prototype_fields.insert(name.clone());
         }
     }
     let mut narrowing_checks = parent_layout
@@ -493,34 +521,43 @@ fn reconstruct_one(
                     argument_metadata: s.argument_metadata.clone(),
                     ret_ty: s.ret_ty.clone(),
                     generic: s.generic,
+                    accessor: s.accessor,
+                    absent: s.absent,
                 })
                 .collect()
         })
         .unwrap_or_default();
-    for (name, (param_tys, ret_ty)) in &methods {
+    for (name, (param_tys, ret_ty, accessor)) in &methods {
         let argument_metadata = match class.methods.get(name) {
-            Some(sig) => super::call_arguments::metadata(sig.params.iter().map(|param| {
-                (
-                    param
-                        .default
-                        .as_ref()
-                        .or(param.optional.then_some(&crate::DefaultValue::Undefined)),
-                    param.rest,
-                )
-            })),
-            None => None,
+            Some(sig) if accessor.is_none() => {
+                super::call_arguments::metadata(sig.params.iter().map(|param| {
+                    (
+                        param
+                            .default
+                            .as_ref()
+                            .or(param.optional.then_some(&crate::DefaultValue::Undefined)),
+                        param.rest,
+                    )
+                }))
+            }
+            _ => None,
         };
-        let generic = class
-            .methods
-            .get(name)
-            .is_some_and(|sig| !sig.generics.is_empty());
-        if let Some(slot) = slots.iter_mut().find(|s| &s.name == name) {
+        let generic = accessor.is_none()
+            && class
+                .methods
+                .get(name)
+                .is_some_and(|sig| !sig.generics.is_empty());
+        if let Some(slot) = slots
+            .iter_mut()
+            .find(|s| &s.name == name && s.accessor == *accessor)
+        {
             // Override: this class supplies the body, so the slot must describe
             // it rather than the ancestor's.
             slot.owner = mangled.clone();
             slot.param_tys = param_tys.clone();
             slot.argument_metadata = argument_metadata;
             slot.ret_ty = ret_ty.clone();
+            slot.absent = false;
         } else {
             slots.push(ImportedSlot {
                 name: name.clone(),
@@ -529,14 +566,39 @@ fn reconstruct_one(
                 argument_metadata,
                 ret_ty: ret_ty.clone(),
                 generic,
+                accessor: *accessor,
+                absent: false,
             });
+        }
+    }
+    // Mirror the producer's single-half accessor rule: declaring one half
+    // replaces the whole prototype descriptor, clearing any inherited other half.
+    let missing_halves = crate::codegen::classes::unpaired_accessor_halves(
+        class.accessors.iter().map(|acc| match acc {
+            crate::AccessorSig::Getter { name, .. } => (name.as_str(), crate::AccessorKind::Get),
+            crate::AccessorSig::Setter { name, .. } => (name.as_str(), crate::AccessorKind::Set),
+        }),
+    );
+    let mut cleared_own_methods: Vec<String> = Vec::new();
+    for (prop, missing) in missing_halves {
+        let slot_name = match missing {
+            crate::AccessorKind::Get => crate::codegen::classes::accessor_getter_name(prop),
+            crate::AccessorKind::Set => crate::codegen::classes::accessor_setter_name(prop),
+        };
+        if let Some(slot) = slots
+            .iter_mut()
+            .find(|s| s.accessor == Some(missing) && s.name == slot_name)
+        {
+            slot.owner = mangled.clone();
+            slot.absent = true;
+            cleared_own_methods.push(slot_name);
         }
     }
 
     // 1. Method-signature fn-types for slots that *originate* on this class
     //    (newly introduced). Overrides/inherited slots reuse the originating
     //    ancestor's sig, looked up from the symbol table (parents come first).
-    for (name, (param_tys, ret)) in &methods {
+    for (name, (param_tys, ret, accessor)) in &methods {
         let originates = class
             .extends
             .as_ref()
@@ -552,14 +614,19 @@ fn reconstruct_one(
                 .map(|_| symbols.value_type(&crate::Type::Unknown))
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        let results = symbols.slot_wasm_result(ret)?;
+        let results = if *accessor == Some(crate::AccessorKind::Get) {
+            vec![symbols.value_type(&crate::Type::Unknown)?]
+        } else {
+            symbols.slot_wasm_result(ret)?
+        };
         let abi = MethodSlotAbi {
             params: params.iter().skip(1).copied().collect(),
             ret: results.first().copied(),
-            types: class
-                .methods
-                .get(name)
-                .is_some_and(|sig| !sig.generics.is_empty()),
+            types: accessor.is_none()
+                && class
+                    .methods
+                    .get(name)
+                    .is_some_and(|sig| !sig.generics.is_empty()),
         };
         if abi.types {
             params.push(super::generic_binding::types_value_type(symbols)?);
@@ -697,8 +764,7 @@ fn reconstruct_one(
     for (i, slot) in slots.iter().enumerate() {
         // Native classes keep their methods in the vtable, without the mutable
         // closure payload emitted by the compiler for guest class instances.
-        if class.compiled_class && !slot.name.starts_with("get ") && !slot.name.starts_with("set ")
-        {
+        if class.compiled_class && slot.accessor.is_none() {
             symbols.record_class_payload_method(mangled.clone(), slot.name.clone());
         }
         symbols.record_class_method_slot(
@@ -719,9 +785,10 @@ fn reconstruct_one(
         }
         None => false,
     };
+    let payload_slots = slots.iter().filter(|slot| !slot.absent).count();
     let named_payload_len = fields
         .len()
-        .checked_add(slots.len())
+        .checked_add(payload_slots)
         .ok_or_else(|| internal_failure("an imported class payload is too large"))?;
     symbols.record_class_guard_layout(
         mangled.clone(),
@@ -811,7 +878,7 @@ fn reconstruct_one(
 
     // Own method bodies — reuse the slot's `((ref $Object), params...) -> ret`
     // sig. A local subclass's vtable global `ref.func`s the inherited ones.
-    for name in methods.keys() {
+    for name in methods.keys().chain(cleared_own_methods.iter()) {
         let sig = symbols
             .class_method_sig(mangled, name)
             .ok_or_else(|| internal_failure("an imported class's own method has no signature"))?;
@@ -863,6 +930,7 @@ fn reconstruct_one(
         private_members,
         fields,
         optional_fields,
+        over_prototype_fields,
         narrowing_checks,
         methods: slots,
         ctor_params: ctor_typed_params,

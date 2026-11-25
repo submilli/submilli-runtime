@@ -81,6 +81,20 @@ pub(super) fn find_data_slot(
     index::lookup(caller, &object, key, false, false)
 }
 
+/// Find a present own data property slot for `key`, ignoring prototype method,
+/// protocol, accessor, and absent slots.
+pub(super) fn find_own_data_slot(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    key: &[u16],
+) -> wasmtime::Result<Option<u32>> {
+    let object = as_struct(caller, object, "own property lookup receiver")?;
+    Ok(match index::lookup_own_data(caller, &object, key, false)? {
+        Some((slot, true)) => Some(slot),
+        _ => None,
+    })
+}
+
 pub(super) fn find_field_slot(
     caller: &mut Caller<'_, StoreData>,
     object: &Rooted<StructRef>,
@@ -102,9 +116,19 @@ pub(crate) fn data_field_count(
     for slot in 0..count {
         let name = names.get(&mut *caller, slot)?;
         let value = values.get(&mut *caller, slot)?;
-        if field_is_present(caller, &name, &value)? && !is_accessor_slot(caller, &name)? {
-            present += 1;
+        if !field_is_present(caller, &name, &value)?
+            || is_accessor_slot(caller, &name)?
+            || is_method_slot(caller, &name)?
+        {
+            continue;
         }
+        if is_protocol_slot(caller, &name)? {
+            let units = read_string_units(caller, &name, FIELD_NAME)?;
+            if find_own_data_slot(caller, object, &units)?.is_some() {
+                continue;
+            }
+        }
+        present += 1;
     }
     Ok(present)
 }
@@ -165,7 +189,10 @@ pub(crate) fn field_is_present(
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(true);
     }
-    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(value) if value != 0))
+    Ok(matches!(
+        name.field(&mut *caller, 3)?,
+        Val::I32(value) if value != 0 && value != crate::codegen::field_names::SPARE_SLOT_MARKER
+    ))
 }
 
 fn enumerate(
@@ -186,8 +213,20 @@ fn enumerate(
     let mut elems = Vec::new();
     if let Some((names, values)) = shape_arrays(caller, obj)? {
         let len = field_count(caller, obj)?;
-        elems.reserve(len as usize);
+        crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, u64::from(len))?;
         let error_slots = super::error::non_enumerable_slots(caller, obj)?;
+        let ordered_bytes = (len as usize)
+            .checked_mul(std::mem::size_of::<(Option<u32>, usize, u32)>())
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("enumeration buffer overflow"))?;
+        let _ordered_memory = crate::runtime::limits::HostBytes::new(
+            &caller.data().tenant_limits,
+            ordered_bytes as u64,
+        )?;
+        let mut ordered: Vec<(Option<u32>, usize, u32)> = Vec::new();
+        ordered
+            .try_reserve_exact(len as usize)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        let mut has_integer = false;
         for i in 0..len {
             if error_slots.as_ref().is_some_and(|hidden| hidden.hides(i)) {
                 continue;
@@ -201,6 +240,38 @@ fn enumerate(
             {
                 continue;
             }
+            let units = read_string_units(caller, &name, FIELD_NAME)?;
+            let integer = integer_key(&units);
+            if integer.is_some() {
+                has_integer = true;
+            }
+            ordered.push((integer, ordered.len(), i));
+        }
+        if has_integer {
+            crate::runtime::fuel::charge_host_fuel(
+                &mut *caller,
+                crate::runtime::fuel::sort_cost(ordered.len() as u64),
+            )?;
+            ordered.sort_unstable_by_key(|&(integer, position, _)| {
+                (
+                    integer.is_none(),
+                    integer.map_or(position as u64, u64::from),
+                    position,
+                )
+            });
+        }
+        let elem_bytes = ordered
+            .len()
+            .checked_mul(std::mem::size_of::<Val>())
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("enumeration buffer overflow"))?;
+        let _elem_memory = crate::runtime::limits::HostBytes::new(
+            &caller.data().tenant_limits,
+            elem_bytes as u64,
+        )?;
+        elems
+            .try_reserve_exact(ordered.len())
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        for (_, _, i) in ordered {
             let elem = match kind {
                 Enumerate::Keys => names.get(&mut *caller, i)?,
                 Enumerate::Values => values.get(&mut *caller, i)?,
@@ -370,20 +441,62 @@ fn spread(
     mask: &Val,
 ) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
-    let mut entries = std::collections::BTreeMap::new();
+    let mut host_memory = crate::runtime::limits::HostBytes::new(&caller.data().tenant_limits, 0)?;
+    let mut own_entries: Vec<OwnEntry> = Vec::new();
+    let mut own_index: std::collections::HashMap<Vec<u16>, usize> =
+        std::collections::HashMap::new();
+    let mut method_entries: Vec<MethodEntry> = Vec::new();
+    let mut method_index: std::collections::HashMap<Vec<u16>, usize> =
+        std::collections::HashMap::new();
+    let mut has_integer = false;
+    if let Some((mask_names, _)) = shape_arrays(caller, mask)? {
+        let mask_len = mask_names.len(&mut *caller)?;
+        crate::runtime::fuel::charge(
+            &mut *caller,
+            crate::runtime::fuel::ELEM,
+            u64::from(mask_len),
+        )?;
+    }
     let omitted = spread_omitted_fields(caller, mask)?;
     for (source_index, object) in [target, source].into_iter().enumerate() {
         if let Some(indexed) = indexed_entries(caller, object)? {
+            crate::runtime::fuel::charge(
+                &mut *caller,
+                crate::runtime::fuel::ELEM,
+                indexed.len() as u64,
+            )?;
             for (name, value) in indexed {
                 let units = read_string_units(caller, &name, FIELD_NAME)?;
-                entries.insert(units, (name, value));
+                let integer = integer_key(&units);
+                if integer.is_some() {
+                    has_integer = true;
+                }
+                insert_own_entry(
+                    &caller.data().tenant_limits,
+                    &mut host_memory,
+                    &mut own_entries,
+                    &mut own_index,
+                    units,
+                    integer,
+                    name,
+                    value,
+                )?;
             }
             continue;
         }
         let Some((names, values)) = shape_arrays(caller, object)? else {
             continue;
         };
-        for index in 0..field_count(caller, object)? {
+        let count = field_count(caller, object)?;
+        crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, u64::from(count))?;
+        let error_slots = super::error::non_enumerable_slots(caller, object)?;
+        for index in 0..count {
+            if error_slots
+                .as_ref()
+                .is_some_and(|hidden| hidden.hides(index))
+            {
+                continue;
+            }
             let name = names.get(&mut *caller, index)?;
             let value = values.get(&mut *caller, index)?;
             if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {
@@ -394,44 +507,121 @@ fn spread(
                 continue;
             }
             // JavaScript doesn't copy a method at all, so it never replaces an
-            // earlier present field. It is copied otherwise, keeping its marked
-            // name so the copy doesn't list it, because the result's static
-            // type may name it; a later method replaces an earlier one.
-            // A protocol slot is copied the same way: the iterator type names
-            // `next`, so the copy must still answer `next()`, but the marker
-            // keeps it out of `Object.keys`. It does replace an earlier data
-            // field, because that is what the spread type says the name becomes.
+            // earlier or later own property. Surviving methods keep their
+            // marked name so the copy doesn't list them, while still answering
+            // static method calls. Protocol slots keep their marker and follow
+            // own-property position.
             let is_method = is_method_slot(caller, &name)?;
-            let is_protocol = is_protocol_slot(caller, &name)?;
-            if is_method && !method_may_replace(caller, entries.get(&units))? {
+            if is_method {
+                if !own_index.contains_key(&units) {
+                    insert_method_entry(
+                        &caller.data().tenant_limits,
+                        &mut host_memory,
+                        &mut method_entries,
+                        &mut method_index,
+                        units,
+                        name,
+                        value,
+                    )?;
+                }
                 continue;
             }
-            let name = if is_method || is_protocol {
+            let is_protocol = is_protocol_slot(caller, &name)?;
+            let name = if is_protocol {
                 name
             } else {
                 copy_field_name(caller, name, true)?
             };
-            entries.insert(units, (name, value));
+            let integer = integer_key(&units);
+            if integer.is_some() {
+                has_integer = true;
+            }
+            insert_own_entry(
+                &caller.data().tenant_limits,
+                &mut host_memory,
+                &mut own_entries,
+                &mut own_index,
+                units,
+                integer,
+                name,
+                value,
+            )?;
         }
     }
-    if let Some((names, _)) = shape_arrays(caller, shape)? {
-        for index in 0..field_count(caller, shape)? {
+    if has_integer {
+        crate::runtime::fuel::charge_host_fuel(
+            &mut *caller,
+            crate::runtime::fuel::sort_cost(own_entries.len() as u64),
+        )?;
+        own_entries.sort_unstable_by_key(|entry| {
+            (
+                entry.integer.is_none(),
+                entry.integer.map_or(entry.position as u64, u64::from),
+                entry.position,
+            )
+        });
+    }
+    let shape_arrays_opt = shape_arrays(caller, shape)?;
+    let shape_count = if shape_arrays_opt.is_some() {
+        let count = field_count(caller, shape)?;
+        crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, u64::from(count))?;
+        count as usize
+    } else {
+        0
+    };
+    let out_bound = own_entries
+        .len()
+        .checked_add(method_entries.len())
+        .and_then(|n| n.checked_add(shape_count))
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("spread output count overflow"))?;
+    let out_bytes = out_bound
+        .checked_mul(std::mem::size_of::<Val>() * 2)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("spread output buffer overflow"))?;
+    host_memory.grow(&caller.data().tenant_limits, out_bytes as u64)?;
+    let mut names_vec = Vec::new();
+    let mut values_vec = Vec::new();
+    names_vec
+        .try_reserve_exact(out_bound)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    values_vec
+        .try_reserve_exact(out_bound)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    for entry in own_entries {
+        names_vec.push(entry.name);
+        values_vec.push(entry.value);
+    }
+    for entry in method_entries {
+        if !own_index.contains_key(&entry.units) {
+            names_vec.push(entry.name);
+            values_vec.push(entry.value);
+        }
+    }
+    if let Some((names, _)) = shape_arrays_opt {
+        for index in 0..shape_count as u32 {
             let name = names.get(&mut *caller, index)?;
             let units = read_string_units(caller, &name, FIELD_NAME)?;
-            if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(units) {
-                entry.insert((
-                    copy_field_name(caller, name, false)?,
-                    super::undefined::value(caller)?,
-                ));
+            if !own_index.contains_key(&units) && !method_index.contains_key(&units) {
+                let entry_bytes = spread_key_map_bytes(units.len())?;
+                host_memory.grow(&caller.data().tenant_limits, entry_bytes)?;
+                own_index
+                    .try_reserve(1)
+                    .map_err(crate::runtime::host::fatal_host_error)?;
+                names_vec.push(copy_field_name(caller, name, false)?);
+                values_vec.push(super::undefined::value(caller)?);
+                own_index.insert(units, names_vec.len() - 1);
             }
         }
     }
-    let (names, values): (Vec<_>, Vec<_>) = entries.into_values().unzip();
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::ELEM,
+        (names_vec.len() as u64).saturating_mul(2),
+    )?;
     let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
     let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
     let shape_pre = StructRefPre::new(&mut *caller, intr.object_shape.clone());
-    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &names)?;
-    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &values)?;
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &names_vec)?;
+    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &values_vec)?;
     let vtable = host_object_vtable(caller)?;
     let object = StructRef::new(
         &mut *caller,
@@ -444,6 +634,112 @@ fn spread(
         ],
     )?;
     Ok(Val::AnyRef(Some(object.to_anyref())))
+}
+
+struct OwnEntry {
+    position: usize,
+    integer: Option<u32>,
+    name: Val,
+    value: Val,
+}
+
+struct MethodEntry {
+    units: Vec<u16>,
+    name: Val,
+    value: Val,
+}
+
+fn spread_key_map_bytes(units_len: usize) -> wasmtime::Result<u64> {
+    let key_bytes = units_len
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|n| n.checked_add(std::mem::size_of::<(Vec<u16>, usize)>()))
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("spread key buffer overflow"))?;
+    Ok(key_bytes as u64)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_own_entry(
+    limits: &crate::runtime::limits::TenantLimits,
+    host_memory: &mut crate::runtime::limits::HostBytes,
+    entries: &mut Vec<OwnEntry>,
+    index: &mut std::collections::HashMap<Vec<u16>, usize>,
+    units: Vec<u16>,
+    integer: Option<u32>,
+    name: Val,
+    value: Val,
+) -> wasmtime::Result<()> {
+    if let Some(&pos) = index.get(&units)
+        && let Some(entry) = entries.get_mut(pos)
+    {
+        entry.name = name;
+        entry.value = value;
+    } else {
+        let entry_bytes = spread_key_map_bytes(units.len())?
+            .checked_add(std::mem::size_of::<OwnEntry>() as u64)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("spread buffer overflow"))?;
+        host_memory.grow(limits, entry_bytes)?;
+        let pos = entries.len();
+        entries
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        index
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        index.insert(units, pos);
+        entries.push(OwnEntry {
+            position: pos,
+            integer,
+            name,
+            value,
+        });
+    }
+    Ok(())
+}
+
+fn insert_method_entry(
+    limits: &crate::runtime::limits::TenantLimits,
+    host_memory: &mut crate::runtime::limits::HostBytes,
+    entries: &mut Vec<MethodEntry>,
+    index: &mut std::collections::HashMap<Vec<u16>, usize>,
+    units: Vec<u16>,
+    name: Val,
+    value: Val,
+) -> wasmtime::Result<()> {
+    if let Some(&pos) = index.get(&units)
+        && let Some(entry) = entries.get_mut(pos)
+    {
+        entry.name = name;
+        entry.value = value;
+    } else {
+        let key_bytes = units
+            .len()
+            .checked_mul(std::mem::size_of::<u16>())
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("spread key buffer overflow"))?;
+        let entry_bytes = spread_key_map_bytes(units.len())?
+            .checked_add(key_bytes as u64)
+            .and_then(|n| n.checked_add(std::mem::size_of::<MethodEntry>() as u64))
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("spread buffer overflow"))?;
+        host_memory.grow(limits, entry_bytes)?;
+        let mut units_copy = Vec::new();
+        units_copy
+            .try_reserve_exact(units.len())
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        units_copy.extend_from_slice(&units);
+        let pos = entries.len();
+        entries
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        index
+            .try_reserve(1)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        index.insert(units, pos);
+        entries.push(MethodEntry {
+            units: units_copy,
+            name,
+            value,
+        });
+    }
+    Ok(())
 }
 
 /// `value` as an object an object type's field reads can take. `{}` holds
@@ -469,18 +765,6 @@ fn is_kept_as_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtim
     }
     let object_shape = intrinsic_types(&mut *caller)?.object_shape.clone();
     is_a(caller, value, &object_shape)
-}
-
-/// Whether a method may take a spread entry: one nothing earlier gave, or an
-/// earlier method's.
-fn method_may_replace(
-    caller: &mut Caller<'_, StoreData>,
-    earlier: Option<&(Val, Val)>,
-) -> wasmtime::Result<bool> {
-    match earlier {
-        None => Ok(true),
-        Some((name, _)) => is_method_slot(caller, name),
-    }
 }
 
 fn copy_field_name(
@@ -554,7 +838,8 @@ fn insert_field(
         .ok_or_else(|| crate::runtime::host::range_error("object field count limit exceeded"))?;
     let name = inserted_field_name(caller, name)?;
     let (names, values, table) = if count == capacity {
-        let (names, values) = grow_fields(caller, &old_names, &old_values, &name)?;
+        let spare = spare_slot_name(caller)?;
+        let (names, values) = grow_fields(caller, &old_names, &old_values, &spare)?;
         let new_capacity = names.len(&mut *caller)?;
         let table = index::build(caller, &names, count, new_capacity)?;
         (names, values, table)
@@ -641,6 +926,23 @@ fn grow_fields(
         new_values.set(&mut *caller, new_start + new_capacity, context)?;
     }
     Ok((new_names, new_values))
+}
+
+fn spare_slot_name(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let ty = optional_field_name_type(caller.engine(), &intr)?;
+    let empty = write_submilli_string_struct(caller, "")?;
+    let values = [
+        empty.field(&mut *caller, 0)?,
+        empty.field(&mut *caller, 1)?,
+        empty.field(&mut *caller, 2)?,
+        Val::I32(crate::codegen::field_names::SPARE_SLOT_MARKER),
+        Val::I32(0),
+    ];
+    let pre = StructRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        StructRef::new(&mut *caller, &pre, &values)?.to_anyref(),
+    )))
 }
 
 /// A present inserted name also tells typed serializers that the original

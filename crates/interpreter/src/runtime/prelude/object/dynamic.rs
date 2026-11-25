@@ -70,10 +70,9 @@ pub(super) async fn get(
             .await
             .map_err(|error| crate::runtime::host::throw_host_error(caller, error));
     }
-    if let Some(property) = find(caller, object, &key, false)? {
-        if !field_is_present(caller, &property.name, &property.value)? {
-            return super::super::undefined::value(caller);
-        }
+    if let Some(property) = find(caller, object, &key, false)?
+        && field_is_present(caller, &property.name, &property.value)?
+    {
         return checked_data_value(caller, object, property.slot, property.value).await;
     }
     if let Some(property) = find(caller, object, &accessor_key("get ", &key)?, true)? {
@@ -136,36 +135,11 @@ pub(super) async fn set(
     if shape_arrays(caller, object)?.is_none() {
         return set_builtin_property(caller, object, &key, value);
     }
-    if let Some(property) = find(caller, object, &key, false)? {
-        // Methods are fixed at their declaration, as a static write enforces.
-        if super::is_method_slot(caller, &property.name)? {
-            return Err(crate::runtime::host::throw_host_error(
-                caller,
-                crate::runtime::host::type_error(format!(
-                    "Cannot assign to method '{}'",
-                    String::from_utf16_lossy(&key)
-                )),
-            ));
-        }
-        // Allocate the shadow marker before publishing either part of the write.
-        // It retains the inherited member for a later deletion of the own field.
-        let shadow = if super::is_protocol_slot(caller, &property.name)? {
-            Some(super::protocol::shadow(
-                caller,
-                &property.name,
-                &property.value,
-            )?)
-        } else {
-            None
-        };
-        let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
-        let values = field_array(caller, &object, 2)?;
-        let names = field_array(caller, &object, 1)?;
-        values.set(&mut *caller, property.slot, *value)?;
-        if let Some(shadow) = shadow {
-            names.set(&mut *caller, property.slot, shadow)?;
-        }
-        return super::mark_field_present(caller, &property.name);
+    let obj_struct = super::super::iterator::as_struct(caller, object, "property receiver")?;
+    let incoming_method = super::is_method_slot(caller, name)?;
+    let own_data = super::index::lookup_own_data(caller, &obj_struct, &key, true)?;
+    if let Some((slot, true)) = own_data {
+        return write_own_slot(caller, &obj_struct, slot, value);
     }
     if let Some(property) = find(caller, object, &accessor_key("set ", &key)?, true)? {
         super::super::closure::read(caller, &property.value, "property setter")?
@@ -179,7 +153,46 @@ pub(super) async fn set(
             crate::runtime::host::type_error("cannot write a getter-only property"),
         ));
     }
+    // A method-marked key copied by `Object.assign` must not resurrect an
+    // absent/deleted own data slot into a present enumerable property.
+    if !incoming_method && let Some((slot, false)) = own_data {
+        return write_own_slot(caller, &obj_struct, slot, value);
+    }
+    if let Some(property) = find(caller, object, &key, false)? {
+        if super::is_protocol_slot(caller, &property.name)? {
+            // Allocate the shadow marker before publishing either part of the write.
+            // It retains the inherited member for a later deletion of the own field.
+            let shadow = super::protocol::shadow(caller, &property.name, &property.value)?;
+            let values = field_array(caller, &obj_struct, 2)?;
+            let names = field_array(caller, &obj_struct, 1)?;
+            values.set(&mut *caller, property.slot, *value)?;
+            names.set(&mut *caller, property.slot, shadow)?;
+            return Ok(());
+        }
+        // `Object.assign` copies a source method slot using its method-marked
+        // name so a target method slot is updated in place; ordinary property
+        // writes pass an unmarked string and fall through to `insert_field` so
+        // they create an own data property without mutating the prototype slot.
+        if super::is_method_slot(caller, &property.name)? && incoming_method {
+            let values = field_array(caller, &obj_struct, 2)?;
+            values.set(&mut *caller, property.slot, *value)?;
+            return Ok(());
+        }
+    }
     super::insert_field(caller, object, name, value)
+}
+
+fn write_own_slot(
+    caller: &mut Caller<'_, StoreData>,
+    obj_struct: &wasmtime::Rooted<wasmtime::StructRef>,
+    slot: u32,
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let values = field_array(caller, obj_struct, 2)?;
+    let names = field_array(caller, obj_struct, 1)?;
+    let slot_name = names.get(&mut *caller, slot)?;
+    values.set(&mut *caller, slot, *value)?;
+    super::mark_field_present(caller, &slot_name)
 }
 
 /// A write through a structural view of a built-in value: the properties the
@@ -337,8 +350,10 @@ pub(super) fn has(
             &key,
         );
     }
-    if let Some(property) = find(caller, object, &key, false)? {
-        return field_is_present(caller, &property.name, &property.value);
+    if let Some(property) = find(caller, object, &key, false)?
+        && field_is_present(caller, &property.name, &property.value)?
+    {
+        return Ok(true);
     }
     Ok(
         find(caller, object, &accessor_key("get ", &key)?, true)?.is_some()
@@ -428,6 +443,28 @@ fn matches_entry(
     match_key(caller, matcher, units)
 }
 
+fn getter_is_shadowed_by_own_data(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    getter_name: &Val,
+    had_effect: bool,
+) -> wasmtime::Result<bool> {
+    if had_effect {
+        return fuel::settle_result(caller, |caller| {
+            getter_is_shadowed_by_own_data(caller, object, getter_name, false)
+        });
+    }
+    let units = read_string_units(caller, getter_name, FIELD_NAME)?;
+    let Some(prop) = units.get(GETTER_PREFIX.len()..) else {
+        return Ok(false);
+    };
+    let obj_struct = super::super::iterator::as_struct(caller, object, "record receiver")?;
+    Ok(matches!(
+        super::index::lookup_own_data(caller, &obj_struct, prop, true)?,
+        Some((_, true))
+    ))
+}
+
 async fn values(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
@@ -454,6 +491,9 @@ async fn values(
         }
         match entry {
             Some(RecordEntry::Getter) => {
+                if getter_is_shadowed_by_own_data(caller, object, &name, had_effect)? {
+                    continue;
+                }
                 had_effect = true;
                 let got = super::super::closure::read(caller, &value, "record getter")?
                     .call_with_receiver(caller, *object, &[])
@@ -515,6 +555,11 @@ fn quoted_keys(
             continue;
         };
         if !matches_entry(caller, &matcher, &name, &Some(entry), false)? {
+            continue;
+        }
+        if matches!(entry, RecordEntry::Getter)
+            && getter_is_shadowed_by_own_data(caller, object, &name, false)?
+        {
             continue;
         }
         let units = read_string_units(caller, &name, FIELD_NAME)?;

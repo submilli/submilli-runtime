@@ -844,7 +844,7 @@ fn build_iterator_vtable(
     Ok([to_string, to_json, equals, hash])
 }
 
-async fn object_override(
+pub(crate) async fn object_override(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     name: &str,
@@ -854,19 +854,22 @@ async fn object_override(
         return Ok(None);
     }
     let wanted: Vec<u16> = name.encode_utf16().collect();
-    for (key, value) in read_object_entries(caller, recv, name)? {
-        if key == wanted && is_function(caller, &value)? {
-            let closure = super::closure::read(caller, &value, name)?;
-            let result = closure.call_with_arguments(caller, *recv, &[]).await?;
-            // A `Record` field can hold a conversion of any return type, and
-            // every reader of the result takes its payload as code units.
-            if !super::collection::is_a(caller, &result, &intr.string)? {
-                let error =
-                    crate::runtime::host::type_error(format!("{name} must return a string"));
-                return Err(crate::runtime::host::throw_host_error(caller, error));
-            }
-            return Ok(Some(result));
+    let Some(slot) = super::object::find_own_data_slot(caller, recv, &wanted)? else {
+        return Ok(None);
+    };
+    let st = as_struct(caller, recv, name)?;
+    let values = super::object::field_array(caller, &st, 2)?;
+    let value = values.get(&mut *caller, slot)?;
+    if is_function(caller, &value)? {
+        let closure = super::closure::read(caller, &value, name)?;
+        let result = closure.call_with_arguments(caller, *recv, &[]).await?;
+        // A `Record` field can hold a conversion of any return type, and
+        // every reader of the result takes its payload as code units.
+        if !super::collection::is_a(caller, &result, &intr.string)? {
+            let error = crate::runtime::host::type_error(format!("{name} must return a string"));
+            return Err(crate::runtime::host::throw_host_error(caller, error));
         }
+        return Ok(Some(result));
     }
     Ok(None)
 }
@@ -947,6 +950,7 @@ fn json_property_slots(
         }
         let name = names.get(&mut *caller, slot)?;
         if super::object::field_is_private(caller, &name)?
+            || super::object::is_method_slot(caller, &name)?
             || super::object::is_protocol_slot(caller, &name)?
         {
             continue;
@@ -964,6 +968,9 @@ fn json_property_slots(
                 continue;
             }
             units.drain(..getter_prefix.len());
+            if super::object::find_own_data_slot(caller, recv, &units)?.is_some() {
+                continue;
+            }
         } else {
             let value = values.get(&mut *caller, slot)?;
             if !super::object::field_is_present(caller, &name, &value)? {
@@ -1089,6 +1096,7 @@ async fn object_equals(
         let rhs_name = names.get(&mut *caller, slot)?;
         let rhs_value = values.get(&mut *caller, slot)?;
         if !super::object::field_is_present(caller, &rhs_name, &rhs_value)?
+            || super::object::is_method_slot(caller, &rhs_name)?
             || !object_field_equals(caller, lhs_value, &rhs_value).await?
         {
             return Ok(false);
@@ -1179,11 +1187,17 @@ pub(crate) fn read_object_entries(
         let value = values.get(&mut *caller, i)?;
         if !super::object::field_is_present(caller, &field_name, &value)?
             || super::object::is_accessor_slot(caller, &field_name)?
+            || super::object::is_method_slot(caller, &field_name)?
         {
             continue;
         }
-        let field_name = read_string_units(caller, &field_name, name)?;
-        entries.push((field_name, value));
+        let units = read_string_units(caller, &field_name, name)?;
+        if super::object::is_protocol_slot(caller, &field_name)?
+            && super::object::find_own_data_slot(caller, recv, &units)?.is_some()
+        {
+            continue;
+        }
+        entries.push((units, value));
     }
     Ok(entries)
 }

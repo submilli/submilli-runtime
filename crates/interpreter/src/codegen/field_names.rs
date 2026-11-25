@@ -26,9 +26,10 @@ pub struct FieldName {
     pub is_private: bool,
 }
 
-// The presence flags of marked names that are not own data properties. Any
-// nonzero flag reads as present; the runtime reads the same values
-// (`runtime::prelude::object`).
+// The presence flags of marked names that are not own data properties. Flags
+// `> 0` are present own data properties; `0` and `SPARE_SLOT_MARKER` are
+// absent; negative markers other than `SPARE_SLOT_MARKER` identify non-own
+// slots. The runtime reads the same values (`runtime::prelude::object`).
 
 /// An accessor's slot (`get x` / `set x`).
 pub const ACCESSOR_MARKER: i32 = -1;
@@ -41,6 +42,9 @@ pub const METHOD_MARKER: i32 = -2;
 /// marker, so the copy is not listed either. `in` and a `next()` call still
 /// find them. A write replaces the marker with an ordinary name.
 pub const PROTOCOL_MARKER: i32 = -3;
+/// Unused capacity slot past an object's logical field count after dynamic
+/// growth. Matches no property lookup.
+pub const SPARE_SLOT_MARKER: i32 = -4;
 
 pub fn declare_optional_name_type(
     types: &mut wasm_encoder::TypeSection,
@@ -232,8 +236,12 @@ pub(crate) fn emit_instance_names(
     Ok(())
 }
 
-/// Push whether the name on the stack marks an internal accessor payload slot.
-pub(crate) fn emit_name_is_accessor(
+/// Push the slot classification flag for a field name already on the stack:
+/// `1` for an unmarked string (including inserted and shadow names, which are
+/// always present own data properties), or the stored `i32` marker for an
+/// optional/special field name (`> 0` present own data, `0` absent data,
+/// `-1` accessor, `-2` method, `-3` protocol, `-4` spare capacity).
+pub(crate) fn emit_name_flag(
     emitter: &mut super::function_emitter::FunctionEmitter,
     ctx: &super::CodegenCtx,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -248,12 +256,20 @@ pub(crate) fn emit_name_is_accessor(
         struct_type_index: marked,
         field_index: 3,
     });
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(1));
+    emitter.emit_end();
+    Ok(())
+}
+
+/// Push whether the name on the stack marks an internal accessor payload slot.
+pub(crate) fn emit_name_is_accessor(
+    emitter: &mut super::function_emitter::FunctionEmitter,
+    ctx: &super::CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_name_flag(emitter, ctx)?;
     emitter.instruction(Instruction::I32Const(ACCESSOR_MARKER));
     emitter.instruction(Instruction::I32Eq);
-    emitter.emit_else();
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.emit_end();
-
     Ok(())
 }
 
