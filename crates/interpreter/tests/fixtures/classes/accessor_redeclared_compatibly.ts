@@ -57,7 +57,8 @@ class PlainSub extends Plain {
   }
 }
 
-// A class may redeclare one half of the pair and inherit the other.
+// Redeclaring one half replaces the whole prototype descriptor, so the
+// inherited setter is absent on `HalfSub`.
 class HalfBase {
   private v: string = "half-base";
   get h(): string {
@@ -214,7 +215,13 @@ function main(): void {
   const h = new HalfSub();
   assert(h.h === "half-sub", "the redeclared getter wins");
   const asHalfBase: HalfBase = h;
-  asHalfBase.h = "written";
+  let halfWriteThrew = false;
+  try {
+    asHalfBase.h = "written";
+  } catch (e) {
+    halfWriteThrew = e instanceof TypeError;
+  }
+  assert(halfWriteThrew, "redeclaring only the getter clears the inherited setter");
   assert(asHalfBase.h === "half-sub", "the redeclared getter answers a parent-typed read too");
 
   const l3 = new L3();

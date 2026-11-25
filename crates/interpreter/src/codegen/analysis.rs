@@ -254,6 +254,10 @@ impl CodegenAnalysis {
             let crate::TypedTypeDecl::Class(class) = decl else {
                 continue;
             };
+            if !class.accessors.is_empty() {
+                self.string_pool
+                    .intern_text(throw::READ_ONLY_PROPERTY_MESSAGE);
+            }
             if class
                 .methods
                 .iter()
@@ -616,6 +620,9 @@ impl CodegenAnalysis {
                 self.walk_expr(ta, *receiver)?;
                 self.walk_expr(ta, *value)?;
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                self.walk_expr(ta, *value)?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -891,6 +898,7 @@ impl CodegenAnalysis {
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
         };
@@ -960,6 +968,9 @@ impl CodegenAnalysis {
                 }
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
+            }
+            TypedStmtKind::SuperSet { owner, .. } => {
+                self.dependency_usage.note_type(owner.clone());
             }
             TypedStmtKind::AssignIndex {
                 receiver, elem_ty, ..
@@ -1336,6 +1347,9 @@ impl CodegenAnalysis {
                     self.note_missing_key(&bounds::receiver_name(ta, *receiver)?);
                 }
                 self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
+                if !expr.ty.is_void() && !matches!(expr.ty.lowered(), Type::Unknown) {
+                    self.note_cast(&expr.ty, Some(&expr.ty))?;
+                }
             }
             TypedExprKind::IndexAccess { receiver, .. } => {
                 self.note_index_check(ta, Some(*receiver))?;
@@ -1386,10 +1400,18 @@ impl CodegenAnalysis {
                     self.dependency_usage.note_value(mangled.clone());
                     self.note_postfix_target(&expr.ty)?;
                 }
-                PostfixTarget::Field { receiver, name, .. } => {
+                PostfixTarget::Field {
+                    receiver,
+                    name,
+                    target_ty,
+                } => {
                     self.note_postfix_target(&expr.ty)?;
+                    if !target_ty.is_void() && !matches!(target_ty.lowered(), Type::Unknown) {
+                        self.note_cast(target_ty, Some(target_ty))?;
+                    }
                     self.note_missing_key(&bounds::receiver_name(ta, *receiver)?);
                     self.string_pool.intern_text(&name.name);
+                    self.extra_field_names.push(name.name.clone());
                     let receiver_ty = ta
                         .source_type(*receiver)
                         .map_err(crate::codegen::arena_failure)?;
@@ -1455,6 +1477,13 @@ impl CodegenAnalysis {
                 // imported class) pulled into the dependency set; `expr.ty` is just `boolean`.
                 self.visit_type(class)?;
             }
+            TypedExprKind::SuperMethodCall { owner, .. }
+            | TypedExprKind::SuperGet { owner, .. } => {
+                self.dependency_usage.note_type(owner.clone());
+                if !expr.ty.is_void() && !matches!(expr.ty.lowered(), Type::Unknown) {
+                    self.note_cast(&expr.ty, Some(&expr.ty))?;
+                }
+            }
             TypedExprKind::Number(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
@@ -1464,7 +1493,6 @@ impl CodegenAnalysis {
             | TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::SuperCtorCall { .. }
-            | TypedExprKind::SuperMethodCall { .. }
             | TypedExprKind::TypeofTag { .. }
             | TypedExprKind::Ternary { .. }
             | TypedExprKind::NullishCoalesce { .. } => {}
@@ -1566,14 +1594,14 @@ impl CodegenAnalysis {
             .intern_text("Unbound function has no this receiver");
         // An optional chain dispatches on the non-null half of its receiver.
         let receiver_ty = crate::typechecker::infer::narrowing::strip_nullish(receiver_ty);
-        if !matches!(
-            receiver_ty.peel(),
-            Type::InterfaceRef { .. } | Type::ClassRef { .. }
-        ) {
+        if !may_dispatch_shape_method(&receiver_ty) {
             return Ok(());
         }
         self.mentioned_closure_sigs
             .push(ClosureSig::of(arity, ret)?);
+        if !ret.is_void() && !matches!(ret.lowered(), Type::Unknown) {
+            self.note_cast(ret, Some(ret))?;
+        }
 
         Ok(())
     }
@@ -1622,6 +1650,9 @@ impl CodegenAnalysis {
                         )?);
                     }
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
+                    if !result_ty.is_void() && !matches!(result_ty.lowered(), Type::Unknown) {
+                        self.note_cast(result_ty, Some(result_ty))?;
+                    }
                 }
                 TypedChainPart::InterfaceProperty {
                     iface,
@@ -1757,8 +1788,7 @@ impl CodegenAnalysis {
         }
         self.mentioned_closure_sigs
             .push(super::field_guards::signature());
-        if !is_shaped_receiver(receiver_ty) && !matches!(receiver_ty.peel(), Type::ClassRef { .. })
-        {
+        if !is_shaped_receiver(receiver_ty) {
             return;
         }
         self.string_pool.intern_text("Value is not callable");
@@ -1884,22 +1914,35 @@ fn method_dispatches_live(
 }
 
 /// Whether a property access on this receiver lowers to the `$ObjectShape`
-/// field-name scan, which is what carries the accessor branch. `infer_field_access`
-/// admits a union of object shapes as well as a single one.
+/// field-name scan, which is what carries the accessor branch. Shares the
+/// shape-capable check with method dispatch so bounded generics, aliases, and
+/// nested unions/intersections intern accessor helpers consistently.
 fn is_shaped_receiver(ty: &Type) -> bool {
     let ty = crate::typechecker::infer::narrowing::strip_nullish(ty);
-    // An intersection may be a hybrid (`F & { label: string }`), a callable
-    // object shape; noting the shaped paths for any other costs only a few
-    // interned names.
-    let shaped = |ty: &Type| {
-        matches!(
-            ty.peel(),
-            Type::InterfaceRef { .. } | Type::Object { .. } | Type::Intersection(_)
-        )
-    };
+    may_dispatch_shape_method(&ty)
+}
+
+/// Whether a property or method access on `ty` may dispatch through an
+/// `$ObjectShape` closure, accessor, or class own-property check (including
+/// bounded type parameters, deferred generic types, intersections, aliases,
+/// and unions containing class/interface members).
+fn may_dispatch_shape_method(ty: &Type) -> bool {
     match ty.peel() {
-        Type::Union(members) => members.iter().any(shaped),
-        other => shaped(other),
+        Type::InterfaceRef { .. }
+        | Type::ClassRef { .. }
+        | Type::Object { .. }
+        | Type::GenericParam { .. }
+        | Type::TypeVar(_)
+        | Type::AliasRef { .. }
+        | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Unknown
+        | Type::NonPrimitive => true,
+        Type::Union(members) | Type::Intersection(members) => {
+            members.iter().any(may_dispatch_shape_method)
+        }
+        _ => false,
     }
 }
 

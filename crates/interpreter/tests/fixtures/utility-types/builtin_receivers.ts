@@ -11,9 +11,17 @@ function main(): void {
   assert(read(new Map<string, number>([["a", 1]]), "size") === 1 && read(new Uint8Array(3), "length") === 3, "built-in values");
   write(xs, 0, 99);
   assert(xs[0] === 99 && maybe({ a: 1 }, "a") === 1, "array writes and optional reads");
-  let caught = 0;
-  try { write(new Account(), "describe", () => "replaced"); } catch (e: TypeError) { caught += 1; }
+  const account = new Account();
+  write(account, "describe", () => "replaced");
+  assert(
+    account.describe() === "replaced" &&
+      new Account().describe() === "o" &&
+      Object.hasOwn(account, "describe") &&
+      !Object.hasOwn(new Account(), "describe"),
+    "writing a method key creates an own property on that instance",
+  );
   assert(typeof read(xs, "push") === "function");
+  let caught = 0;
   try { write(xs, 5, 1); } catch (e: RangeError) { caught += 1; }
-  assert(caught === 2, "methods are fixed and writes stay in range");
+  assert(caught === 1, "array writes stay in range");
 }

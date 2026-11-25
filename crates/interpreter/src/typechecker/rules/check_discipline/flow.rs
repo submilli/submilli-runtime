@@ -137,6 +137,10 @@ impl<'a> Walker<'a, '_, '_> {
                 let target = format!("the property `{}`", name.name);
                 self.consume(*value, Use::Escape(Usage::Stored(target)))?;
             }
+            TypedStmtKind::SuperSet { name, value, .. } => {
+                let target = format!("the property `{}`", name.name);
+                self.consume(*value, Use::Escape(Usage::Stored(target)))?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -493,6 +497,7 @@ impl<'a> Walker<'a, '_, '_> {
                 self.consume_all(&args, || Usage::PassedTo(format!("super.{}", name.name)))?;
                 stable()
             }
+            TypedExprKind::SuperGet { .. } => stable(),
             TypedExprKind::IntrinsicCall { kind, args } => {
                 let args = self.package.authored(span, args);
                 self.consume_all(&args, || Usage::PassedTo(kind.name().to_string()))?;

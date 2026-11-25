@@ -223,6 +223,7 @@ fn contains_return(ta: &TypedAst, stmt_id: StmtId) -> Result<bool, CompilerFailu
         | TypedStmtKind::AssignLocal { .. }
         | TypedStmtKind::AssignGlobal { .. }
         | TypedStmtKind::AssignField { .. }
+        | TypedStmtKind::SuperSet { .. }
         | TypedStmtKind::AssignIndex { .. } => false,
     };
     Ok(found)

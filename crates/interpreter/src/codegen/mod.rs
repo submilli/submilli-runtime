@@ -1043,7 +1043,6 @@ fn codegen_inner(
     // Reconstruct imported classes (their rec groups + function imports + vtable
     // globals) before the local class plan, so a local subclass can subtype an
     // imported parent and lay its fields out after the parent's (SUB-488).
-    symbols.record_rewritable_members(classes::RewritableMembers::of(ta)?);
     let imported_class_layouts = imported_classes::reconstruct(
         dependencies,
         ta,
@@ -6517,6 +6516,9 @@ function main(): void {
                 box_walk_expr(ta, receiver, names);
                 box_walk_expr(ta, value, names);
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                box_walk_expr(ta, value, names);
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -6733,6 +6735,7 @@ function main(): void {
             | TypedExprKind::Null
             | TypedExprKind::Undefined
             | TypedExprKind::This
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::Regex { .. }
             | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::GlobalRef { .. }

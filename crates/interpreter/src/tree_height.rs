@@ -1114,6 +1114,7 @@ impl TypedChildren {
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
             TypedExprKind::EffectThen { effect, result } => self.exprs(&[*effect, *result]),
@@ -1273,6 +1274,7 @@ impl TypedChildren {
             TypedStmtKind::AssignField {
                 receiver, value, ..
             } => self.exprs(&[*receiver, *value]),
+            TypedStmtKind::SuperSet { value, .. } => self.expr(*value),
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,

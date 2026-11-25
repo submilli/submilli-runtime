@@ -701,6 +701,9 @@ impl<'a> Walker<'a, '_> {
                 let value = self.eval(*value)?;
                 self.write_into(&receiver, value, stores_foreign, stmt.span)?;
             }
+            TypedStmtKind::SuperSet { name, value, .. } => {
+                self.method_call(self.this(), None, false, &[*value], &name.name, stmt.span)?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -1447,6 +1450,9 @@ impl<'a> Walker<'a, '_> {
             TypedExprKind::SuperMethodCall { name, args, .. } => {
                 let args = self.package.authored(span, args);
                 self.method_call(self.this(), None, false, &args, &name.name, span)?
+            }
+            TypedExprKind::SuperGet { name, .. } => {
+                self.method_call(self.this(), None, false, &[], &name.name, span)?
             }
             TypedExprKind::CallClosure {
                 receiver,

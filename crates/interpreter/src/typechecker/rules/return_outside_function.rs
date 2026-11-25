@@ -82,6 +82,7 @@ fn walk(
         | TypedStmtKind::AssignLocal { .. }
         | TypedStmtKind::AssignGlobal { .. }
         | TypedStmtKind::AssignField { .. }
+        | TypedStmtKind::SuperSet { .. }
         | TypedStmtKind::AssignIndex { .. }
         | TypedStmtKind::Expr(_) => {}
     };

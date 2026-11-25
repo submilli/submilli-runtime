@@ -166,11 +166,26 @@ pub enum TypedExprKind {
     },
     /// `super.method(...)`: a direct call of the parent body that *declares* the
     /// method (`owner`), skipping vtable dispatch so it doesn't re-resolve to the
-    /// override. Codegen pushes `this` then the args.
+    /// override. Codegen pushes `this` then the args. For `toString`, `owner` may
+    /// also name a global-scope built-in prototype (`submilli:prelude#Error`, a
+    /// built-in `Error` subclass, or `submilli:prelude#Object`).
     SuperMethodCall {
         owner: MangledName,
         name: Ident,
         args: Vec<ExprId>,
+    },
+    /// `super.x`: a direct call of the base class's getter body (`owner`),
+    /// skipping vtable dispatch so an override in the class itself or below is
+    /// not called. `owner` is the nearest class in the base chain whose
+    /// prototype declares `name`'s getter. Codegen pushes `this` and calls
+    /// `owner`'s synthetic getter body; `TypedExpr.ty` is the getter's result
+    /// type.
+    ///
+    /// Front ends supply this node directly; the engine typechecker does not
+    /// produce it.
+    SuperGet {
+        owner: MangledName,
+        name: Ident,
     },
     /// `MethodSig` has a bare `TypeVar` in args or return. HOF methods (`map`, `filter`, …)
     /// with `TypeVar` only inside composites stay as plain `MethodCall`. Variadic trailing
@@ -934,6 +949,21 @@ pub enum TypedStmtKind {
         name: Ident,
         value: ExprId,
     },
+    /// `super.x = value`: evaluates `value`, then directly calls `owner`'s
+    /// setter body with the current `this` and the value, skipping vtable
+    /// dispatch so an override in the class itself or below is not called.
+    /// `owner` is the nearest class in the base chain whose prototype declares
+    /// `name`'s setter.
+    ///
+    /// Compound writes (`super.x += 1`, `super.x++`, `super.x ??= v`) are
+    /// lowered by the front end into a `SuperGet`, the operation, and a
+    /// `SuperSet` of the held value. Front ends supply this node directly; the
+    /// engine typechecker does not produce it.
+    SuperSet {
+        owner: MangledName,
+        name: Ident,
+        value: ExprId,
+    },
     /// `elem_ty` is carried so codegen picks the boxing path without re-walking
     /// the receiver's `Type`.
     AssignIndex {
@@ -1461,6 +1491,9 @@ pub struct TypedClassField {
     /// Declared as a bodyless optional method (`f?(): T;`), which, as in
     /// TypeScript, emits nothing: it neither initializes nor resets the slot.
     pub method_signature: bool,
+    /// `true` when this field shadows a method or accessor declared on a class
+    /// in the inheritance chain.
+    pub over_prototype: bool,
     /// Set when this declaration *narrows* an inherited one. See
     /// [`FieldNarrowingCheck`]. Boxed because every class field carries this and
     /// almost none of them narrow.

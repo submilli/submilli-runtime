@@ -182,6 +182,9 @@ impl<V: Visitor> Walk<'_, V> {
                 self.expr(*receiver)?;
                 self.expr(*value)?;
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                self.expr(*value)?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -390,6 +393,7 @@ impl<V: Visitor> Walk<'_, V> {
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
         };

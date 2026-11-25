@@ -5017,6 +5017,7 @@ mod tests {
                     readonly: false,
                     optional: false,
                     method: false,
+                    over_prototype: false,
                     doc: None,
                 },
             );
@@ -5572,6 +5573,7 @@ mod tests {
             readonly: true,
             optional: false,
             method: false,
+            over_prototype: false,
             doc: None,
         };
         fields.insert("size".into(), field.clone());
@@ -5643,6 +5645,7 @@ mod tests {
             readonly: false,
             optional: false,
             method: false,
+            over_prototype: false,
             doc: None,
         };
         let method = |ret| MethodSig {
@@ -5721,6 +5724,7 @@ mod tests {
             readonly,
             optional: false,
             method: false,
+            over_prototype: false,
             doc: None,
         };
         let mut fields = BTreeMap::new();
@@ -5824,6 +5828,7 @@ mod tests {
                 readonly: true,
                 optional: false,
                 method: false,
+                over_prototype: false,
                 doc: None,
             },
         );
@@ -5835,6 +5840,7 @@ mod tests {
                 readonly: true,
                 optional: false,
                 method: false,
+                over_prototype: false,
                 doc: None,
             },
         );
@@ -5846,6 +5852,7 @@ mod tests {
                 readonly: false,
                 optional: false,
                 method: false,
+                over_prototype: false,
                 doc: None,
             },
         );
@@ -5857,6 +5864,7 @@ mod tests {
                 readonly: false,
                 optional: false,
                 method: false,
+                over_prototype: false,
                 doc: None,
             },
         );

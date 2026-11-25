@@ -58,6 +58,7 @@ pub fn emit_expr(
             | TypedExprKind::IntrinsicCall { .. }
             | TypedExprKind::SuperCtorCall { .. }
             | TypedExprKind::SuperMethodCall { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::OptionalChain { .. }
     );
     let mark = call_boundary.then(|| emitter.single_evaluation_mark());
@@ -283,30 +284,56 @@ fn emit_expr_value(
             let this = emitter.this_local().ok_or_else(|| {
                 crate::codegen::internal_failure("super.method() only inside a method body")
             })?;
-            emitter.instruction(Instruction::LocalGet(this));
-            let abi = ctx.symbols.class_method_abi(owner, &name.name).cloned();
-            if args.is_empty() {
-                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            if let Some(func) = ctx.symbols.class_method_func_idx(owner, &name.name) {
+                emitter.instruction(Instruction::LocalGet(this));
+                let abi = ctx.symbols.class_method_abi(owner, &name.name).cloned();
+                if args.is_empty() {
+                    emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+                }
+                emit_args_into_slots(
+                    emitter,
+                    ctx,
+                    args,
+                    abi.as_ref().map(|a| a.params.as_slice()),
+                )?;
+                // `super.m()` on a generic method is rejected, so a generic slot's
+                // parent body here is a plain override, which ignores `$types`.
+                if abi.as_ref().is_some_and(|abi| abi.types) {
+                    crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
+                }
+                emitter.instruction(Instruction::Call(func));
+                emit_slot_return_cast(emitter, ctx, &expr.ty, abi.as_ref())?;
+            } else if name.name == "toString" {
+                emit_super_prototype_to_string(
+                    emitter, ctx, this, owner, args, expr.span, &expr.ty,
+                )?;
+            } else {
+                return Err(crate::codegen::internal_failure(
+                    "parent method body fn allocated",
+                ));
             }
-            emit_args_into_slots(
-                emitter,
-                ctx,
-                args,
-                abi.as_ref().map(|a| a.params.as_slice()),
-            )?;
-            // `super.m()` on a generic method is rejected, so a generic slot's
-            // parent body here is a plain override, which ignores `$types`.
+        }
+        TypedExprKind::SuperGet { owner, name } => {
+            // Direct call of `owner`'s synthetic getter body (`get <name>`),
+            // skipping vtable dispatch so an override in the class itself or
+            // below is not called.
+            let this = emitter.this_local().ok_or_else(|| {
+                crate::codegen::internal_failure("super.x only inside a class member body")
+            })?;
+            let getter = crate::codegen::classes::accessor_getter_name(&name.name);
+            let abi = ctx.symbols.class_method_abi(owner, &getter).cloned();
+            let func = ctx
+                .symbols
+                .class_method_func_idx(owner, &getter)
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("parent getter body fn allocated")
+                })?;
+            emitter.instruction(Instruction::LocalGet(this));
             if abi.as_ref().is_some_and(|abi| abi.types) {
                 crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
             }
-            let func = ctx
-                .symbols
-                .class_method_func_idx(owner, &name.name)
-                .ok_or_else(|| {
-                    crate::codegen::internal_failure("parent method body fn allocated")
-                })?;
             emitter.instruction(Instruction::Call(func));
-            emit_slot_return_cast(emitter, ctx, &expr.ty.clone(), abi.as_ref())?;
+            emit_slot_return_cast(emitter, ctx, &expr.ty, abi.as_ref())?;
         }
         TypedExprKind::VirtualCall { target, tool, args } => {
             // No per-tool import: serialize the args to JSON, dispatch the package's
@@ -1858,49 +1885,24 @@ fn emit_field_access(
     }
     // Class instance: nominal receiver, array-backed object payload.
     if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
-        if ctx.symbols.is_class_payload_method(mangled, &name.name) {
+        let field_ty = ctx
+            .ta
+            .try_expr(id)
+            .map_err(crate::codegen::arena_failure)?
+            .ty
+            .clone();
+        let check_ty = ctx
+            .ta
+            .source_type(id)
+            .map_err(crate::codegen::arena_failure)?;
+        let Some(slot) = direct_class_field_slot(ctx, mangled, &name.name) else {
             emit_receiver(emitter, ctx, *receiver)?;
-            emit_class_method_value(
-                emitter,
-                ctx,
-                &receiver_ty,
-                &name.name,
-                result_ty,
-                ctx.ta
-                    .source_type(id)
-                    .map_err(crate::codegen::arena_failure)?,
-            )?;
+            emit_class_property_read(emitter, ctx, &receiver_ty, &name.name, &field_ty, check_ty)?;
             return Ok(());
-        }
-        // Accessor property (no data slot): dispatch the synthetic getter.
-        if ctx.symbols.class_field_slot(mangled, &name.name).is_none() {
-            let getter = crate::codegen::classes::accessor_getter_name(&name.name);
-            emit_method_call(
-                emitter,
-                ctx,
-                *receiver,
-                mangled,
-                &getter,
-                &[],
-                None,
-                &[],
-                None,
-                &ctx.ta
-                    .try_expr(id)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty,
-            )?;
-            return Ok(());
-        }
+        };
         let struct_idx = ctx.symbols.class_struct_type_idx(mangled).ok_or_else(|| {
             crate::codegen::internal_failure("class struct type recorded in classes::emit")
         })?;
-        let slot = ctx
-            .symbols
-            .class_field_slot(mangled, &name.name)
-            .ok_or_else(|| {
-                crate::codegen::internal_failure("class field slot recorded in classes::emit")
-            })?;
         let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
             crate::codegen::internal_failure("intrinsics declared by codegen entry")
         })?;
@@ -1920,19 +1922,7 @@ fn emit_field_access(
         {
             crate::codegen::field_guards::check(emitter, ctx, object, mangled, &name.name)?;
         }
-        emit_class_field_slot_cast_as(
-            emitter,
-            ctx,
-            mangled,
-            &name.name,
-            &ctx.ta
-                .try_expr(id)
-                .map_err(crate::codegen::arena_failure)?
-                .ty,
-            ctx.ta
-                .source_type(id)
-                .map_err(crate::codegen::arena_failure)?,
-        )?;
+        emit_class_field_slot_cast_as(emitter, ctx, mangled, &name.name, &field_ty, check_ty)?;
         return Ok(());
     }
     // Use the expression's physical type so a field read preserves
@@ -2692,7 +2682,9 @@ fn emit_postfix_unary(
                 .source_type(*receiver)
                 .map_err(crate::codegen::arena_failure)?
                 .clone();
-            if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
+            if let Type::ClassRef { mangled, .. } = receiver_ty.lowered()
+                && direct_class_field_slot(ctx, mangled, &name.name).is_some()
+            {
                 emit_class_field_postfix(
                     emitter, ctx, *receiver, mangled, &name.name, op, target_ty,
                 )?;
@@ -4053,27 +4045,14 @@ fn emit_chain_access(
             // non-optional `FieldAccess` path. The name scan below would read a
             // null for an accessor property, which backs no payload slot.
             if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
-                if ctx.symbols.is_class_payload_method(mangled, &name.name) {
-                    emit_class_method_value(
+                let Some(slot) = direct_class_field_slot(ctx, mangled, &name.name) else {
+                    emit_class_property_read(
                         emitter,
                         ctx,
                         receiver_ty,
                         &name.name,
                         result_ty,
                         check_ty,
-                    )?;
-                    return Ok(());
-                }
-                let Some(slot) = ctx.symbols.class_field_slot(mangled, &name.name) else {
-                    let getter = crate::codegen::classes::accessor_getter_name(&name.name);
-                    emit_class_vtable_dispatch(
-                        emitter,
-                        ctx,
-                        mangled,
-                        &getter,
-                        &[],
-                        &[],
-                        result_ty,
                     )?;
                     return Ok(());
                 };
@@ -5110,7 +5089,13 @@ pub(crate) fn emit_object_field_write_by_name(
     }))?;
     let index_local = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalSet(value_local));
-    emit_object_field_index_by_name(emitter, ctx, object_local, name_global);
+    emit_field_lookup(
+        emitter,
+        ctx,
+        object_local,
+        name_global,
+        crate::codegen::field_lookup::LOOKUP_WRITABLE_DATA,
+    );
     emitter.instruction(Instruction::LocalTee(index_local));
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::I32GeS);
@@ -5193,7 +5178,13 @@ pub(crate) fn emit_is_accessor_backed(
             )
         })?;
     let index_local = emitter.add_anonymous_local(ValType::I32)?;
-    emit_field_index_by_name(emitter, ctx, object_local, accessor_global, true);
+    emit_field_lookup(
+        emitter,
+        ctx,
+        object_local,
+        accessor_global,
+        crate::codegen::field_lookup::LOOKUP_ACCESSOR,
+    );
     emitter.instruction(Instruction::LocalTee(index_local));
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::I32GeS);
@@ -5466,13 +5457,19 @@ fn emit_object_property_read_as(
         Some(getter_slot_local),
     )?;
     emitter.emit_else();
-    // neither: absent — an optional member the value never materialised, so
-    // `field_ty` admits null and the cast is a widen. An accessor-backed value
-    // does not reach here even when the accessor is declared in another module:
-    // the `get <prop>` name is interned off the *access*, not off any accessor
-    // declaration this module can see (`analysis::note_shaped_property_access`).
+    // neither: absent — an optional member the value never materialised, or an
+    // accessor whose getter half was cleared by a setter-only override. Use a
+    // checked cast so a non-undefined target throws a catchable `TypeError`
+    // rather than an uncatchable Wasm cast trap.
     emit_undefined(emitter, ctx)?;
-    cast::emit_cast_to(emitter, ctx, field_ty)?;
+    if !field_ty.is_void() && !matches!(field_ty.lowered(), Type::Unknown) {
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            field_ty,
+        )?;
+    }
     emitter.emit_end();
     emitter.emit_end();
     Ok(())
@@ -5496,7 +5493,14 @@ fn emit_dynamic_narrowed_property_read(
         })
         .collect();
     if checks.is_empty() {
-        cast::emit_cast_to(emitter, ctx, field_ty)?;
+        if !field_ty.is_void() && !matches!(field_ty.lowered(), Type::Unknown) {
+            crate::codegen::cast_check::emit_operation_cast_on_stack(
+                emitter,
+                ctx,
+                &Type::Unknown,
+                field_ty,
+            )?;
+        }
         return Ok(());
     }
 
@@ -5535,7 +5539,14 @@ fn emit_dynamic_narrowing_check(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let Some((vtable, check)) = checks.get(index) else {
         emitter.instruction(Instruction::LocalGet(raw));
-        cast::emit_cast_to(emitter, ctx, field_ty)?;
+        if !field_ty.is_void() && !matches!(field_ty.lowered(), Type::Unknown) {
+            crate::codegen::cast_check::emit_operation_cast_on_stack(
+                emitter,
+                ctx,
+                &Type::Unknown,
+                field_ty,
+            )?;
+        }
         return Ok(());
     };
     emitter.instruction(Instruction::LocalGet(object_local));
@@ -5613,7 +5624,16 @@ fn emit_object_property_write_value(
         return Ok(());
     }
     let index_local = emitter.add_anonymous_local(ValType::I32)?;
-    emit_object_field_index_by_name(emitter, ctx, object_local, name_global);
+    // Only a *present* own data property beats an inherited accessor. An absent
+    // slot (such as an uninitialized `over_prototype` field) or a prototype
+    // method falls through to the accessor check, then writes or inserts.
+    emit_field_lookup(
+        emitter,
+        ctx,
+        object_local,
+        name_global,
+        crate::codegen::field_lookup::LOOKUP_OWN_DATA,
+    );
     emitter.instruction(Instruction::LocalSet(index_local));
     emitter.instruction(Instruction::LocalGet(index_local));
     emitter.instruction(Instruction::I32Const(0));
@@ -5946,35 +5966,41 @@ pub(crate) fn emit_object_field_index_by_name(
     object_local: u32,
     name_global: u32,
 ) {
-    emit_field_index_by_name(emitter, ctx, object_local, name_global, false);
-}
-
-fn emit_field_index_by_name(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    object_local: u32,
-    name_global: u32,
-    accessor: bool,
-) {
-    ctx.latch(emit_field_index_by_name_checked(
+    emit_field_lookup(
         emitter,
         ctx,
         object_local,
         name_global,
-        accessor,
-    ));
+        crate::codegen::field_lookup::LOOKUP_DATA_OR_METHOD,
+    );
 }
 
-fn emit_field_index_by_name_checked(
+fn emit_field_lookup(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     object_local: u32,
     name_global: u32,
-    accessor: bool,
+    mode: i32,
+) {
+    ctx.latch(emit_field_lookup_checked(
+        emitter,
+        ctx,
+        object_local,
+        name_global,
+        mode,
+    ));
+}
+
+fn emit_field_lookup_checked(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    name_global: u32,
+    mode: i32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(object_local));
     emitter.instruction(Instruction::GlobalGet(name_global));
-    emitter.instruction(Instruction::I32Const(i32::from(accessor)));
+    emitter.instruction(Instruction::I32Const(mode));
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .field_lookup_function
@@ -6096,12 +6122,12 @@ fn emit_callee(
     callee: ExprId,
 ) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
     let reference = reference_expression(ctx.ta, callee)?;
-    let receiver = match &ctx
+    let ref_kind = &ctx
         .ta
         .try_expr(reference)
         .map_err(crate::codegen::arena_failure)?
-        .kind
-    {
+        .kind;
+    let receiver = match ref_kind {
         TypedExprKind::FieldAccess { receiver, .. }
         | TypedExprKind::IndexAccess { receiver, .. }
         | TypedExprKind::InterfacePropertyAccess { receiver, .. } => Some(*receiver),
@@ -6126,19 +6152,11 @@ fn emit_callee(
         .transpose()?;
     emit_expr(emitter, ctx, callee)?;
     emitter.end_single_evaluations(mark)?;
-    Ok(
-        if matches!(
-            ctx.ta
-                .try_expr(reference)
-                .map_err(crate::codegen::arena_failure)?
-                .kind,
-            TypedExprKind::OptionalChain { .. }
-        ) {
-            emitter.call_receiver.take()
-        } else {
-            slot
-        },
-    )
+    Ok(match ref_kind {
+        TypedExprKind::OptionalChain { .. } => emitter.call_receiver.take(),
+        TypedExprKind::SuperGet { .. } => emitter.this_local(),
+        _ => slot,
+    })
 }
 
 fn reference_expression(
@@ -6665,34 +6683,6 @@ fn emit_unary(
 /// or structural interface closure. Missing dispatch metadata is a compiler
 /// failure, with the source span supplied by the enclosing expression emitter.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_method_call(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    receiver: ExprId,
-    iface: &crate::MangledName,
-    method: &str,
-    args: &[ExprId],
-    generic_args: Option<&[crate::GenericArgument]>,
-    type_args: &[Type],
-    return_cast: Option<&Type>,
-    call_ret_ty: &Type,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_method_call_at(
-        emitter,
-        ctx,
-        receiver,
-        iface,
-        crate::MemberKey::Named(method),
-        args,
-        generic_args,
-        type_args,
-        return_cast,
-        call_ret_ty,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
 fn emit_method_call_at(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -6923,29 +6913,41 @@ fn emit_method_call_with_receiver_on_stack(
         emit_live_member_call(emitter, ctx, iface, member, live_args)?;
         return emit_live_member_return_cast(emitter, ctx, call_ret_ty);
     };
-    // Interface aliases write the same method payload a class-typed call reads;
-    // a generic method's payload closure takes the call's type arguments.
-    if ctx.symbols.is_rewritable_class_method(iface, method) {
-        emit_generic_interface_method_via_shape(
-            emitter,
-            ctx,
-            method,
-            args,
-            type_args,
-            call_ret_ty,
-            None,
-        )?;
-        return Ok(());
-    }
-    // Class method (static path): the receiver is `(ref $Foo)` on the stack.
-    // Dispatch through the class's own vtable slot (4+); `class_method_slot` is
-    // only populated for classes, so a `Some` here means a genuine class method
-    // (a user method named `toString` etc. also resolves here, not slot 0–3).
+    // Class method: check for a shadowing own data property first (e.g. a
+    // subclass field `m = () => …` or an instance write `o.m = …`), falling
+    // back to the class's vtable slot when none is present.
     if ctx.symbols.class_method_slot(iface, method).is_some() {
-        emit_class_vtable_dispatch(emitter, ctx, iface, method, args, type_args, call_ret_ty)?;
+        if ctx.symbols.is_class_payload_method(iface, method)
+            && ctx.symbols.field_name_string_global_idx(method).is_some()
+        {
+            emit_class_method_dispatch(emitter, ctx, iface, method, args, type_args, call_ret_ty)?;
+        } else {
+            emit_class_vtable_dispatch(emitter, ctx, iface, method, args, type_args, call_ret_ty)?;
+        }
         return Ok(());
     }
     if let Some(slot) = vtable_slot_for_method(method) {
+        if matches!(recv_ty.lowered(), Type::ClassRef { .. })
+            && ctx.symbols.field_name_string_global_idx(method).is_some()
+            && ctx
+                .symbols
+                .closure_struct_type_idx(crate::codegen::closures::ClosureSig::of(
+                    args.len(),
+                    call_ret_ty,
+                )?)
+                .is_some()
+        {
+            emit_class_universal_method_dispatch(
+                emitter,
+                ctx,
+                method,
+                slot,
+                args,
+                type_args,
+                call_ret_ty,
+            )?;
+            return Ok(());
+        }
         emit_vtable_dispatch_on_object_stack(emitter, ctx, slot);
         return Ok(());
     }
@@ -6986,11 +6988,42 @@ pub(in crate::codegen) fn live_member_helper(member: crate::MemberKey<'_>) -> &'
     }
 }
 
-fn emit_class_method_value(
+fn direct_class_field_slot(
+    ctx: &CodegenCtx,
+    mangled: &crate::MangledName,
+    name: &str,
+) -> Option<u32> {
+    ctx.symbols.class_field_slot(mangled, name).filter(|_| {
+        !ctx.symbols.is_class_payload_method(mangled, name)
+            && !class_has_accessor(ctx, mangled, name)
+    })
+}
+
+pub(super) fn class_has_accessor(
+    ctx: &CodegenCtx,
+    mangled: &crate::MangledName,
+    name: &str,
+) -> bool {
+    ctx.symbols
+        .class_method_slot(
+            mangled,
+            &crate::codegen::classes::accessor_getter_name(name),
+        )
+        .is_some()
+        || ctx
+            .symbols
+            .class_method_slot(
+                mangled,
+                &crate::codegen::classes::accessor_setter_name(name),
+            )
+            .is_some()
+}
+
+fn emit_class_property_read(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     receiver_ty: &Type,
-    method: &str,
+    property: &str,
     result_ty: &Type,
     check_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -6998,11 +7031,11 @@ fn emit_class_method_value(
         .symbols
         .intrinsic_type_indices()
         .ok_or_else(|| {
-            crate::codegen::internal_failure("class method value requires object shape intrinsic")
+            crate::codegen::internal_failure("class property read requires object shape intrinsic")
         })?
         .object_shape;
     let receiver = stash_receiver_as_object_shape(emitter, receiver_ty, object_shape)?;
-    emit_object_property_read_as(emitter, ctx, receiver, method, result_ty, check_ty)
+    emit_object_property_read_as(emitter, ctx, receiver, property, result_ty, check_ty)
 }
 
 /// Interface method dispatch on the live receiver already on the stack.
@@ -7366,13 +7399,65 @@ pub(super) fn emit_vtable_dispatch_on_object_stack(
 /// Push each argument, coercing it into the callee's recorded slot type.
 /// `slots` is `None` when no ABI was recorded, in which case the arguments are
 /// already at their declared types.
-fn emit_args_into_slots(
+pub(super) fn emit_args_into_slots(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     args: &[ExprId],
     slots: Option<&[ValType]>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     emit_args_into_slots_with_defaults(emitter, ctx, args, slots, &[])
+}
+
+/// Direct `super.toString()` targeting a global-scope built-in prototype whose
+/// `toString` is not declared as a class method (`submilli:prelude#Error`, its
+/// built-in subclasses, or `submilli:prelude#Object`).
+fn emit_super_prototype_to_string(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    this: u32,
+    owner: &crate::MangledName,
+    args: &[ExprId],
+    span: crate::Span,
+    call_ret_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    if args.is_empty() {
+        emit_discarded_call_arguments(emitter, ctx, span)?;
+    } else {
+        for &arg in args {
+            emit_expr(emitter, ctx, arg)?;
+            emitter.instruction(Instruction::Drop);
+        }
+    }
+    if owner.as_str().starts_with("submilli:prelude#")
+        && let Some(vtable) = ctx.symbols.class_vtable_global_idx(owner)
+    {
+        // Every prelude class is a built-in `Error` class whose vtable slot 0
+        // holds the non-virtual host `Error#toString` implementation.
+        emitter.instruction(Instruction::LocalGet(this));
+        emitter.instruction(Instruction::GlobalGet(vtable));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: intrinsics.vtable,
+            field_index: 0,
+        });
+        emitter.instruction(Instruction::CallRef(intrinsics.to_string_fn));
+    } else if *owner == crate::mangle::prelude("Object") {
+        super::emit_inline_string_literal(emitter, ctx, "[object Object]")?;
+    } else {
+        return Err(crate::codegen::internal_failure(
+            "global-scope base class vtable allocated for super.toString()",
+        ));
+    }
+    let abi = MethodSlotAbi {
+        types: false,
+        params: Vec::new(),
+        ret: Some(ctx.symbols.value_type(&Type::String)?),
+    };
+    emit_slot_return_cast(emitter, ctx, call_ret_ty, Some(&abi))?;
+    Ok(())
 }
 
 fn emit_args_into_slots_with_defaults(
@@ -7488,23 +7573,22 @@ fn emit_slot_return_cast(
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
     }
+    let slot_ret = abi.and_then(|abi| abi.ret);
     // A resultless slot still produces `undefined`, including when a widened
     // call site reads it as `unknown`.
     if abi.is_some_and(|abi| abi.ret.is_none()) {
         emit_undefined(emitter, ctx)?;
     }
-    if call_ret_ty.is_void() {
-        return Ok(());
-    }
-    if matches!(call_ret_ty, Type::Unknown) {
-        match abi.and_then(|abi| abi.ret) {
+    let target_is_untyped = matches!(call_ret_ty.lowered(), Type::Void | Type::Unknown);
+    if target_is_untyped || slot_ret != Some(ctx.symbols.value_type(call_ret_ty)?) {
+        match slot_ret {
             Some(ValType::F64) => cast::emit_box(emitter, ctx, &Type::Number)?,
             Some(ValType::I32) => cast::emit_box(emitter, ctx, &Type::Boolean)?,
             _ => {}
         }
-        return Ok(());
-    }
-    if abi.and_then(|a| a.ret) != Some(ctx.symbols.value_type(call_ret_ty)?) {
+        if target_is_untyped {
+            return Ok(());
+        }
         crate::codegen::cast_check::emit_checked_cast_on_stack(
             emitter,
             ctx,
@@ -7513,6 +7597,331 @@ fn emit_slot_return_cast(
         )?;
     }
     crate::codegen::field_guards::attach(emitter, ctx, call_ret_ty)?;
+    Ok(())
+}
+
+/// Class method dispatch that gives an own data property precedence over the
+/// prototype vtable slot, evaluating every argument expression once in
+/// JavaScript order (receiver -> callee lookup -> arguments -> call).
+#[allow(clippy::too_many_arguments)]
+fn emit_class_method_dispatch(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    class: &crate::MangledName,
+    method: &str,
+    args: &[ExprId],
+    type_args: &[Type],
+    call_ret_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let struct_idx = ctx
+        .symbols
+        .class_struct_type_idx(class)
+        .ok_or_else(|| crate::codegen::internal_failure("class struct type recorded"))?;
+    let vtable_idx = ctx
+        .symbols
+        .class_vtable_type_idx(class)
+        .ok_or_else(|| crate::codegen::internal_failure("class vtable type recorded"))?;
+    let slot = ctx
+        .symbols
+        .class_method_slot(class, method)
+        .ok_or_else(|| crate::codegen::internal_failure("class method slot recorded"))?;
+    let sig_idx = ctx
+        .symbols
+        .class_method_sig(class, method)
+        .ok_or_else(|| crate::codegen::internal_failure("class method sig recorded"))?;
+    let name_global = ctx
+        .symbols
+        .field_name_string_global_idx(method)
+        .ok_or_else(|| crate::codegen::internal_failure("class method name interned"))?;
+
+    let rcv_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(struct_idx),
+    }))?;
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(struct_idx)));
+    emitter.instruction(Instruction::LocalSet(rcv_local));
+
+    let rcv_shape = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.object_shape),
+    }))?;
+    emitter.instruction(Instruction::LocalGet(rcv_local));
+    emitter.instruction(Instruction::LocalSet(rcv_shape));
+
+    let (own_slot, own_val) = emit_own_data_callee_lookup(emitter, ctx, rcv_shape, name_global)?;
+
+    let nullable_fn = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(sig_idx),
+    });
+    let fn_local = emitter.add_anonymous_local(nullable_fn)?;
+    emitter.instruction(Instruction::LocalGet(own_slot));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::I32LtS);
+    emitter.emit_if(BlockType::Result(nullable_fn));
+    emitter.instruction(Instruction::LocalGet(rcv_local));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: struct_idx,
+        field_index: 0,
+    });
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: vtable_idx,
+        field_index: slot,
+    });
+    emitter.emit_else();
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(sig_idx)));
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalSet(fn_local));
+
+    let evaluated = emit_evaluated_args(emitter, ctx, args)?;
+
+    let result_vt = ctx.symbols.value_type(call_ret_ty)?;
+    emitter.instruction(Instruction::LocalGet(own_slot));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::I32GeS);
+    emitter.emit_if(BlockType::Result(result_vt));
+    emit_invoke_own_method_value(
+        emitter,
+        ctx,
+        rcv_shape,
+        own_val,
+        &evaluated,
+        type_args,
+        call_ret_ty,
+    )?;
+    emitter.emit_else();
+    let abi = ctx.symbols.class_method_abi(class, method).cloned();
+    emitter.instruction(Instruction::LocalGet(rcv_local));
+    for (i, (local, arg_ty)) in evaluated.iter().enumerate() {
+        emitter.instruction(Instruction::LocalGet(*local));
+        if let Some(slot_vt) = abi.as_ref().and_then(|a| a.params.get(i).copied()) {
+            cast::emit_coerce_to_wasm_slot(emitter, ctx, arg_ty, slot_vt)?;
+        }
+    }
+    if abi.as_ref().is_some_and(|abi| abi.types) {
+        if type_args.is_empty() {
+            crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
+        } else {
+            crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args)?;
+        }
+    }
+    emitter.instruction(Instruction::LocalGet(fn_local));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::CallRef(sig_idx));
+    emit_slot_return_cast(emitter, ctx, call_ret_ty, abi.as_ref())?;
+    emitter.emit_end();
+    Ok(())
+}
+
+/// Universal method (`toString` / `toJson`) on a class instance that has no
+/// declared method slot: check for an own data property first, falling back to
+/// the universal vtable slot.
+#[allow(clippy::too_many_arguments)]
+fn emit_class_universal_method_dispatch(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    method: &str,
+    vtable_slot: u32,
+    args: &[ExprId],
+    type_args: &[Type],
+    call_ret_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let name_global = ctx
+        .symbols
+        .field_name_string_global_idx(method)
+        .ok_or_else(|| crate::codegen::internal_failure("universal method name interned"))?;
+
+    let rcv_shape = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.object_shape),
+    }))?;
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intrinsics.object_shape,
+    )));
+    emitter.instruction(Instruction::LocalSet(rcv_shape));
+
+    let (own_slot, own_val) = emit_own_data_callee_lookup(emitter, ctx, rcv_shape, name_global)?;
+    let evaluated = emit_evaluated_args(emitter, ctx, args)?;
+
+    let result_vt = ctx.symbols.value_type(call_ret_ty)?;
+    emitter.instruction(Instruction::LocalGet(own_slot));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::I32GeS);
+    emitter.emit_if(BlockType::Result(result_vt));
+    emit_invoke_own_method_value(
+        emitter,
+        ctx,
+        rcv_shape,
+        own_val,
+        &evaluated,
+        type_args,
+        call_ret_ty,
+    )?;
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(rcv_shape));
+    emit_vtable_dispatch_on_object_stack(emitter, ctx, vtable_slot);
+    if ctx.symbols.value_type(&Type::String)? != result_vt {
+        cast::emit_coerce_to_slot(emitter, ctx, &Type::String, call_ret_ty)?;
+    }
+    emitter.emit_end();
+    Ok(())
+}
+
+/// Look up a present own data property on `rcv_shape` and load its boxed value
+/// before evaluating call arguments so JS evaluation order is preserved.
+fn emit_own_data_callee_lookup(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    rcv_shape: u32,
+    name_global: u32,
+) -> Result<(u32, u32), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let own_slot = emitter.add_anonymous_local(ValType::I32)?;
+    emit_field_lookup(
+        emitter,
+        ctx,
+        rcv_shape,
+        name_global,
+        crate::codegen::field_lookup::LOOKUP_OWN_DATA,
+    );
+    emitter.instruction(Instruction::LocalSet(own_slot));
+
+    let nullable_object = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    });
+    let own_val = emitter.add_anonymous_local(nullable_object)?;
+    emitter.instruction(Instruction::LocalGet(own_slot));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::I32GeS);
+    emitter.emit_if(BlockType::Result(nullable_object));
+    emit_field_slot_get(emitter, intrinsics, rcv_shape, own_slot);
+    emitter.emit_else();
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalSet(own_val));
+    Ok((own_slot, own_val))
+}
+
+/// Evaluate each call argument once into an anonymous local.
+fn emit_evaluated_args(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    args: &[ExprId],
+) -> Result<Vec<(u32, Type)>, crate::compiler_error::CompilerFailure> {
+    let mut evaluated = Vec::with_capacity(args.len());
+    for &arg in args {
+        let arg_ty = ctx
+            .ta
+            .try_expr(arg)
+            .map_err(crate::codegen::arena_failure)?
+            .ty
+            .clone();
+        emit_expr(emitter, ctx, arg)?;
+        let local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?)?;
+        emitter.instruction(Instruction::LocalSet(local));
+        evaluated.push((local, arg_ty));
+    }
+    Ok(evaluated)
+}
+
+/// Invoke an own-property value (`own_val`, already fetched from `rcv_shape`)
+/// with pre-evaluated arguments, binding `rcv_shape` as `this`.
+fn emit_invoke_own_method_value(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    rcv_shape: u32,
+    own_val: u32,
+    evaluated: &[(u32, Type)],
+    type_args: &[Type],
+    call_ret_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let closure_sig = crate::codegen::closures::ClosureSig::of(evaluated.len(), call_ret_ty)?;
+    let closure_struct_idx = ctx
+        .symbols
+        .closure_struct_type_idx(closure_sig)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("closure struct registered for the method's signature")
+        })?;
+    let fn_type_idx = ctx
+        .symbols
+        .closure_func_type_idx(closure_sig)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "closure funcref type registered for the method's signature",
+            )
+        })?;
+    let closure_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(closure_struct_idx),
+    }))?;
+    let rcv_object = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    }))?;
+    emitter.instruction(Instruction::LocalGet(rcv_shape));
+    emitter.instruction(Instruction::LocalSet(rcv_object));
+
+    emit_unwrap_hybrid(emitter, intrinsics, own_val);
+    emitter.instruction(Instruction::LocalGet(own_val));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.closure,
+    )));
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.emit_if(BlockType::Empty);
+    crate::codegen::throw::emit_type_error_throw(emitter, ctx, "Value is not callable");
+    emitter.emit_end();
+
+    crate::codegen::closure_coercions::emit_erased_cast_of(
+        emitter,
+        ctx,
+        closure_sig,
+        false,
+        own_val,
+    )?;
+    emitter.instruction(Instruction::LocalTee(closure_local));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: closure_struct_idx,
+        field_index: 2,
+    });
+    crate::codegen::this_binding::bind(emitter, ctx, rcv_object)?;
+    if !type_args.is_empty() {
+        crate::codegen::generic_binding::emit_rebind(emitter, ctx, type_args)?;
+    }
+    for (local, arg_ty) in evaluated {
+        emitter.instruction(Instruction::LocalGet(*local));
+        cast::emit_box(emitter, ctx, arg_ty)?;
+    }
+    emitter.instruction(Instruction::LocalGet(closure_local));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: closure_struct_idx,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::CallRef(fn_type_idx));
+    if !call_ret_ty.is_void() && !matches!(call_ret_ty.lowered(), Type::Unknown) {
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            call_ret_ty,
+        )?;
+        crate::codegen::field_guards::attach(emitter, ctx, call_ret_ty)?;
+    }
     Ok(())
 }
 

@@ -3,7 +3,10 @@
 //! position plus one (zero is empty).
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, Rooted, StructRef, Val};
 
-use super::{field_array, field_is_private, is_accessor_slot};
+use super::{
+    field_array, field_is_present, field_is_private, is_accessor_slot, is_method_slot,
+    is_protocol_slot,
+};
 use crate::runtime::host::fatal_host_error;
 use crate::runtime::prelude::vtable::{fnv_hash_units, read_string_units, string_hash};
 use crate::runtime::{StoreData, fuel};
@@ -26,6 +29,13 @@ pub(super) fn len(
     Ok(count)
 }
 
+#[derive(Clone, Copy)]
+enum ProbeMode {
+    DataOrPrototype,
+    Accessor,
+    OwnData,
+}
+
 pub(super) fn lookup(
     caller: &mut Caller<'_, StoreData>,
     object: &Rooted<StructRef>,
@@ -33,26 +43,44 @@ pub(super) fn lookup(
     accessor: bool,
     public_only: bool,
 ) -> wasmtime::Result<Option<u32>> {
-    let names = field_array(caller, object, 1)?;
-    let index = if let Some(index) = cached(caller, object)? {
-        index
+    let mode = if accessor {
+        ProbeMode::Accessor
     } else {
-        let count = names.len(&mut *caller)?;
-        if count == 0 {
-            return Ok(None);
-        }
-        let index = build(caller, &names, count, count)?;
-        object.set_field(
-            &mut *caller,
-            INDEX_FIELD,
-            Val::AnyRef(Some(index.to_anyref())),
-        )?;
-        index
+        ProbeMode::DataOrPrototype
     };
+    Ok(probe_slot(caller, object, key, mode, public_only)?.map(|(slot, _)| slot))
+}
+
+/// Find an own data slot for `key` (ignoring method, protocol, and accessor
+/// slots), preferring a present slot over an absent one.
+pub(super) fn lookup_own_data(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<StructRef>,
+    key: &[u16],
+    public_only: bool,
+) -> wasmtime::Result<Option<(u32, bool)>> {
+    probe_slot(caller, object, key, ProbeMode::OwnData, public_only)
+}
+
+fn probe_slot(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<StructRef>,
+    key: &[u16],
+    mode: ProbeMode,
+    public_only: bool,
+) -> wasmtime::Result<Option<(u32, bool)>> {
+    let names = field_array(caller, object, 1)?;
+    let values = field_array(caller, object, 2)?;
+    let Some(index) = ensure_index(caller, object, &names)? else {
+        return Ok(None);
+    };
+    let accessor = matches!(mode, ProbeMode::Accessor);
     fuel::charge(&mut *caller, fuel::SCAN, key.len() as u64)?;
     let hash = key_hash(fnv_hash_units(key), accessor);
     let mask = mask(caller, &index)?;
     let mut bucket = hash & mask;
+    let mut fallback_prototype: Option<u32> = None;
+    let mut fallback_absent: Option<u32> = None;
     for _ in 0..=mask {
         fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         #[cfg(test)]
@@ -61,22 +89,76 @@ pub(super) fn lookup(
         }
         let position = read_slot(caller, &index, bucket + 2)?;
         if position == 0 {
-            return Ok(None);
+            return Ok(match mode {
+                ProbeMode::DataOrPrototype => fallback_prototype
+                    .map(|slot| (slot, true))
+                    .or_else(|| fallback_absent.map(|slot| (slot, false))),
+                ProbeMode::OwnData => fallback_absent.map(|slot| (slot, false)),
+                ProbeMode::Accessor => None,
+            });
         }
-        let name = names.get(&mut *caller, position - 1)?;
-        if is_accessor_slot(caller, &name)? == accessor
+        let slot = position - 1;
+        let name = names.get(&mut *caller, slot)?;
+        let kind_matches = match mode {
+            ProbeMode::Accessor => is_accessor_slot(caller, &name)?,
+            ProbeMode::DataOrPrototype => !is_accessor_slot(caller, &name)?,
+            ProbeMode::OwnData => {
+                !is_accessor_slot(caller, &name)?
+                    && !is_method_slot(caller, &name)?
+                    && !is_protocol_slot(caller, &name)?
+            }
+        };
+        if kind_matches
             && (!public_only || !field_is_private(caller, &name)?)
             && key_hash(string_hash(caller, &name)?, accessor) == hash
         {
             let units = read_string_units(caller, &name, "object field name")?;
             fuel::charge(&mut *caller, fuel::SCAN, key.len() as u64)?;
             if units == key {
-                return Ok(Some(position - 1));
+                if accessor {
+                    return Ok(Some((slot, true)));
+                }
+                if matches!(mode, ProbeMode::DataOrPrototype)
+                    && (is_method_slot(caller, &name)? || is_protocol_slot(caller, &name)?)
+                {
+                    if fallback_prototype.is_none() {
+                        fallback_prototype = Some(slot);
+                    }
+                } else {
+                    let value = values.get(&mut *caller, slot)?;
+                    if field_is_present(caller, &name, &value)? {
+                        return Ok(Some((slot, true)));
+                    }
+                    if fallback_absent.is_none() {
+                        fallback_absent = Some(slot);
+                    }
+                }
             }
         }
         bucket = (bucket + 1) & mask;
     }
     Err(fatal_host_error("object field index has no empty bucket"))
+}
+
+fn ensure_index(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<StructRef>,
+    names: &Rooted<ArrayRef>,
+) -> wasmtime::Result<Option<Rooted<ArrayRef>>> {
+    if let Some(index) = cached(caller, object)? {
+        return Ok(Some(index));
+    }
+    let count = names.len(&mut *caller)?;
+    if count == 0 {
+        return Ok(None);
+    }
+    let index = build(caller, names, count, count)?;
+    object.set_field(
+        &mut *caller,
+        INDEX_FIELD,
+        Val::AnyRef(Some(index.to_anyref())),
+    )?;
+    Ok(Some(index))
 }
 
 pub(super) fn build(

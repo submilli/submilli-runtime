@@ -650,25 +650,40 @@ impl<'a> TypeResolver<'a> {
         args: &[Type],
         member: &str,
     ) -> bool {
-        let mut has_setter = false;
-        let mut has_getter = false;
-        super::classes::for_each_class_in_chain(
+        // Mirrors `find_accessor`: the nearest class declaring `member`
+        // (either as a data field or any accessor half) owns the whole
+        // descriptor, so a setter-only override does not inherit an ancestor's
+        // getter.
+        super::classes::walk_class_chain_with(
             |m| self.sym_by_mangled(m).cloned(),
             self.limits,
             mangled,
             args,
             |sym, _| {
-                if let TypeKind::Class { accessors, .. } = &sym.kind {
-                    for accessor in accessors.iter().filter(|a| a.name() == member) {
-                        match accessor {
-                            crate::AccessorSig::Getter { .. } => has_getter = true,
-                            crate::AccessorSig::Setter { .. } => has_setter = true,
-                        }
+                let TypeKind::Class {
+                    fields, accessors, ..
+                } = &sym.kind
+                else {
+                    return ControlFlow::Continue(());
+                };
+                let mut has_setter = false;
+                let mut has_getter = false;
+                for accessor in accessors.iter().filter(|a| a.name() == member) {
+                    match accessor {
+                        crate::AccessorSig::Getter { .. } => has_getter = true,
+                        crate::AccessorSig::Setter { .. } => has_setter = true,
                     }
                 }
+                if has_getter || has_setter {
+                    return ControlFlow::Break(Some(has_setter && !has_getter));
+                }
+                if fields.contains_key(member) {
+                    return ControlFlow::Break(Some(false));
+                }
+                ControlFlow::Continue(())
             },
-        );
-        has_setter && !has_getter
+        )
+        .unwrap_or(false)
     }
 
     /// Structural object shape of a **data-only** interface's properties, with
