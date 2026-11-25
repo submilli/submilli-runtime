@@ -321,6 +321,9 @@ pub(super) fn collect_from_stmt(
             collect_from_expr(ast, *receiver, c)?;
             collect_from_expr(ast, *value, c)?;
         }
+        TypedStmtKind::SuperSet { value, .. } => {
+            collect_from_expr(ast, *value, c)?;
+        }
         TypedStmtKind::AssignIndex {
             receiver,
             index,
@@ -381,6 +384,7 @@ pub(super) fn collect_from_expr(
         | TypedExprKind::Undefined
         | TypedExprKind::Null
         | TypedExprKind::This
+        | TypedExprKind::SuperGet { .. }
         | TypedExprKind::Regex { .. }
         | TypedExprKind::TemplateObject { .. }
         | TypedExprKind::LocalRef { .. }

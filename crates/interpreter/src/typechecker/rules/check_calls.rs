@@ -153,6 +153,9 @@ impl Collector<'_> {
                 self.expr(*receiver)?;
                 self.expr(*value)?;
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                self.expr(*value)?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -307,6 +310,7 @@ impl Collector<'_> {
             | TypedExprKind::Null
             | TypedExprKind::Undefined
             | TypedExprKind::This
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::Regex { .. }
             | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::LocalRef { .. }

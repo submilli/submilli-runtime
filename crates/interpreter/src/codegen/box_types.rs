@@ -194,6 +194,9 @@ impl Collector<'_> {
                 self.walk_expr(*receiver)?;
                 self.walk_expr(*value)?;
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                self.walk_expr(*value)?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -416,6 +419,7 @@ impl Collector<'_> {
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
         };

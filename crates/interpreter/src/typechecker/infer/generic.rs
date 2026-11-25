@@ -4681,6 +4681,9 @@ mod tests {
                 collect_expr_types(ta, *receiver, out);
                 collect_expr_types(ta, *value, out);
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                collect_expr_types(ta, *value, out);
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,

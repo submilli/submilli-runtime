@@ -587,6 +587,13 @@ impl State<'_> {
                 self.walk_expr(receiver)?;
                 self.walk_expr(value)?;
             }
+            // `super.x = v` dispatches on the receiver without naming `this`,
+            // so it captures `this` just like an explicit `this` would.
+            TypedStmtKind::SuperSet { value, .. } => {
+                self.walk_expr(value)?;
+                let b = self.require_source(THIS_BINDING)?;
+                self.mark_cross_frame_capture(THIS_BINDING, &b)?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -773,8 +780,8 @@ impl State<'_> {
                 }
                 self.walk_authored_call_arguments(span)?;
             }
-            // `super.m()` dispatches on the receiver without naming `this`, so
-            // it captures it just like an explicit `this` would.
+            // `super.m()` / `super.x` dispatches on the receiver without naming
+            // `this`, so it captures it just like an explicit `this` would.
             TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. } => {
                 for a in args {
@@ -785,6 +792,10 @@ impl State<'_> {
                     let b = self.require_source(THIS_BINDING)?;
                     self.mark_cross_frame_capture(THIS_BINDING, &b)?;
                 }
+            }
+            TypedExprKind::SuperGet { .. } => {
+                let b = self.require_source(THIS_BINDING)?;
+                self.mark_cross_frame_capture(THIS_BINDING, &b)?;
             }
             TypedExprKind::CallClosure {
                 receiver,
@@ -1522,6 +1533,7 @@ mod tests {
                 walk_expr(ta, *receiver, out);
                 walk_expr(ta, *value, out);
             }
+            TypedStmtKind::SuperSet { value, .. } => walk_expr(ta, *value, out),
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -1578,6 +1590,7 @@ mod tests {
             | TypedExprKind::Null
             | TypedExprKind::Undefined
             | TypedExprKind::This
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::Regex { .. }
             | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::NumberEnumMember { .. }
@@ -1801,6 +1814,7 @@ mod tests {
             TypedStmtKind::AssignField {
                 receiver, value, ..
             } => scan_expr(ta, *receiver).or_else(|| scan_expr(ta, *value)),
+            TypedStmtKind::SuperSet { value, .. } => scan_expr(ta, *value),
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,

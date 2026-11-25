@@ -6517,6 +6517,9 @@ function main(): void {
                 box_walk_expr(ta, receiver, names);
                 box_walk_expr(ta, value, names);
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                box_walk_expr(ta, value, names);
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -6733,6 +6736,7 @@ function main(): void {
             | TypedExprKind::Null
             | TypedExprKind::Undefined
             | TypedExprKind::This
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::Regex { .. }
             | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::GlobalRef { .. }

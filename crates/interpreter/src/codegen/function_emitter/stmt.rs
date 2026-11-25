@@ -257,6 +257,9 @@ pub fn emit_statement(
         } => {
             emit_assign_field(emitter, ctx, *receiver, name, *value)?;
         }
+        TypedStmtKind::SuperSet { owner, name, value } => {
+            emit_super_set(emitter, ctx, owner, name, *value)?;
+        }
         TypedStmtKind::AssignIndex {
             receiver,
             index,
@@ -515,6 +518,41 @@ fn emit_assign_field(
             emit_class_field_store(emitter, ctx, receiver, recv, mangled, name, value)?;
         }
         _ => emit_object_field_store(emitter, ctx, &receiver_ty, recv, name, value)?,
+    }
+    emitter.end_single_evaluations(mark)?;
+    Ok(())
+}
+
+fn emit_super_set(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    owner: &MangledName,
+    name: &Ident,
+    value: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let this = emitter.this_local().ok_or_else(|| {
+        crate::codegen::internal_failure("super.x = v only inside a class member body")
+    })?;
+    let setter = crate::codegen::classes::accessor_setter_name(&name.name);
+    let abi = ctx.symbols.class_method_abi(owner, &setter).cloned();
+    let func = ctx
+        .symbols
+        .class_method_func_idx(owner, &setter)
+        .ok_or_else(|| crate::codegen::internal_failure("parent setter body fn allocated"))?;
+    let mark = emitter.single_evaluation_mark();
+    emitter.instruction(Instruction::LocalGet(this));
+    super::expr::emit_args_into_slots(
+        emitter,
+        ctx,
+        std::slice::from_ref(&value),
+        abi.as_ref().map(|a| a.params.as_slice()),
+    )?;
+    if abi.as_ref().is_some_and(|abi| abi.types) {
+        crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
+    }
+    emitter.instruction(Instruction::Call(func));
+    if abi.as_ref().is_none_or(|abi| abi.ret.is_some()) {
+        emitter.instruction(Instruction::Drop);
     }
     emitter.end_single_evaluations(mark)?;
     Ok(())

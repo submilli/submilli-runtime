@@ -214,6 +214,7 @@ impl SuperCallWalk {
             | TypedStmtKind::AssignLocal { .. }
             | TypedStmtKind::AssignGlobal { .. }
             | TypedStmtKind::AssignField { .. }
+            | TypedStmtKind::SuperSet { .. }
             | TypedStmtKind::AssignIndex { .. } => entry,
         })
     }

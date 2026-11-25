@@ -1274,6 +1274,7 @@ impl<'a> Inferer<'a> {
             | TypedExprKind::VirtualCall { .. }
             | TypedExprKind::SuperCtorCall { .. }
             | TypedExprKind::SuperMethodCall { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::MethodCall { .. }
             | TypedExprKind::GenericMethodCall { .. }
             | TypedExprKind::IntrinsicCall { .. } => !Self::call_preserves_globals(kind),
@@ -1382,6 +1383,7 @@ impl<'a> Inferer<'a> {
                     .ty;
                 self.property_access_may_run_code(ty, &name.name)
             }
+            TypedStmtKind::SuperSet { .. } => true,
             TypedStmtKind::AssignIndex { receiver, .. } => {
                 let ty = &self
                     .typed_ast

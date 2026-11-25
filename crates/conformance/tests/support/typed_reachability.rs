@@ -111,6 +111,9 @@ impl Reachable {
                 self.walk_expr(ta, *receiver);
                 self.walk_expr(ta, *value);
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                self.walk_expr(ta, *value);
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -293,6 +296,7 @@ impl Reachable {
             | TypedExprKind::Null
             | TypedExprKind::Undefined
             | TypedExprKind::This
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::Regex { .. }
             | TypedExprKind::TemplateObject { .. }
             | TypedExprKind::LocalRef { .. }
