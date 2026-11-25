@@ -261,6 +261,7 @@ impl<'a> Inferer<'a> {
                             optional: false,
                             method: false,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: f_doc.clone(),
                         },
                     );
@@ -324,6 +325,7 @@ impl<'a> Inferer<'a> {
                             optional: *optional,
                             method: *method_signature,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: f_doc.clone(),
                         },
                     );
@@ -419,6 +421,7 @@ impl<'a> Inferer<'a> {
                                 optional: false,
                                 method: false,
                                 over_prototype: false,
+                                abstract_property: false,
                                 doc: None,
                             },
                         );
@@ -473,6 +476,7 @@ impl<'a> Inferer<'a> {
                                     optional: false,
                                     method: false,
                                     over_prototype: false,
+                                    abstract_property: false,
                                     doc: None,
                                 });
                             accessor_sigs.push(AccessorSig::Getter {
@@ -500,6 +504,7 @@ impl<'a> Inferer<'a> {
                                     optional: false,
                                     method: false,
                                     over_prototype: false,
+                                    abstract_property: false,
                                     doc: None,
                                 });
                             accessor_sigs.push(AccessorSig::Setter {
@@ -4108,6 +4113,7 @@ impl<'a> Inferer<'a> {
                 auto_assigned: false,
                 method_signature: sig.method,
                 over_prototype: false,
+                abstract_property: sig.abstract_property,
                 narrowing_check: self.narrowing_check_for(mangled, &name.name),
                 doc: doc.clone(),
             });
@@ -4142,6 +4148,7 @@ impl<'a> Inferer<'a> {
                     auto_assigned: true,
                     method_signature: false,
                     over_prototype: false,
+                    abstract_property: false,
                     narrowing_check: self.narrowing_check_for(mangled, &param.name.name),
                     doc: None,
                 });

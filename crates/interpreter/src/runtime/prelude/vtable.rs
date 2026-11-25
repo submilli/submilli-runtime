@@ -1070,9 +1070,17 @@ async fn object_equals(
     }
     let lhs_object = as_struct(caller, recv, "Object#equals receiver")?;
     let rhs_object = as_struct(caller, other, "Object#equals other")?;
-    for object in [lhs_object, rhs_object] {
-        let vtable = object.field(&mut *caller, 0)?;
-        if super::collection::is_a(caller, &vtable, &intr.class_vtable)? {
+    let lhs_vtable = lhs_object.field(&mut *caller, 0)?;
+    let rhs_vtable = rhs_object.field(&mut *caller, 0)?;
+    let lhs_is_class = super::collection::is_a(caller, &lhs_vtable, &intr.class_vtable)?;
+    let rhs_is_class = super::collection::is_a(caller, &rhs_vtable, &intr.class_vtable)?;
+    if lhs_is_class || rhs_is_class {
+        let (true, true, Val::AnyRef(Some(lv)), Val::AnyRef(Some(rv))) =
+            (lhs_is_class, rhs_is_class, lhs_vtable, rhs_vtable)
+        else {
+            return Ok(false);
+        };
+        if !Rooted::ref_eq(&caller, &lv, &rv)? {
             return Ok(false);
         }
     }

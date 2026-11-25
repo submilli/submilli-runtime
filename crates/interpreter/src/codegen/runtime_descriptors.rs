@@ -182,11 +182,7 @@ pub fn allocate(
     if !passes_type_arguments
         && extra.is_empty()
         && ta.runtime_class_contexts.values().all(Vec::is_empty)
-        && !ta
-            .runtime_field_guards
-            .values()
-            .flatten()
-            .any(|guard| !parameters(&guard.target).is_empty())
+        && ta.runtime_field_guards.values().all(Vec::is_empty)
     {
         return Ok(Vec::new());
     }

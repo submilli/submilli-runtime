@@ -730,7 +730,11 @@ fn emit_expr_value(
                 )?;
                 cast::emit_coerce_to_slot(emitter, ctx, &Type::Unknown, &expr.ty)?;
             } else {
-                emit_postfix_unary(emitter, ctx, *op, target, &expr.ty)?;
+                let check_ty = ctx
+                    .ta
+                    .source_type(id)
+                    .map_err(crate::codegen::arena_failure)?;
+                emit_postfix_unary(emitter, ctx, *op, target, &expr.ty, check_ty)?;
             }
         }
         TypedExprKind::NonNullAssert { value } => {
@@ -1915,14 +1919,9 @@ fn emit_field_access(
         });
         emitter.instruction(Instruction::I32Const(slot as i32));
         emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
-        if ctx
-            .symbols
-            .class_field_narrowing_check(mangled, &name.name)
-            .is_some()
-        {
-            crate::codegen::field_guards::check(emitter, ctx, object, mangled, &name.name)?;
-        }
-        emit_class_field_slot_cast_as(emitter, ctx, mangled, &name.name, &field_ty, check_ty)?;
+        emit_nominal_property_slot_cast_as(
+            emitter, ctx, object, mangled, &name.name, &field_ty, check_ty,
+        )?;
         return Ok(());
     }
     // Use the expression's physical type so a field read preserves
@@ -2597,6 +2596,7 @@ fn emit_postfix_unary(
     op: crate::PostfixOp,
     target: &crate::PostfixTarget,
     result_ty: &Type,
+    check_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let _: () = match target {
         crate::PostfixTarget::Local {
@@ -2686,7 +2686,7 @@ fn emit_postfix_unary(
                 && direct_class_field_slot(ctx, mangled, &name.name).is_some()
             {
                 emit_class_field_postfix(
-                    emitter, ctx, *receiver, mangled, &name.name, op, target_ty,
+                    emitter, ctx, *receiver, mangled, &name.name, op, target_ty, check_ty,
                 )?;
                 return Ok(());
             }
@@ -2723,7 +2723,15 @@ fn emit_postfix_unary(
             emit_receiver(emitter, ctx, *receiver)?;
             let rcv_local =
                 stash_receiver_as_object_shape(emitter, &receiver_ty, intrinsics.object_shape)?;
-            emit_object_property_read(emitter, ctx, rcv_local, &name.name, target_ty)?;
+            emit_object_property_read_as(
+                emitter,
+                ctx,
+                rcv_local,
+                &name.name,
+                target_ty,
+                check_ty,
+                nominal_class(&receiver_ty),
+            )?;
             emit_postfix_numeric(emitter, ctx, target_ty);
             emitter.instruction(Instruction::LocalSet(tmp));
             emitter.instruction(Instruction::LocalGet(tmp));
@@ -3057,6 +3065,7 @@ fn emit_class_field_postfix(
     field: &str,
     op: crate::PostfixOp,
     target_ty: &Type,
+    check_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
@@ -3097,14 +3106,7 @@ fn emit_class_field_postfix(
     emitter.instruction(Instruction::LocalGet(fields_local));
     emitter.instruction(Instruction::I32Const(slot as i32));
     emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
-    if ctx
-        .symbols
-        .class_field_narrowing_check(mangled, field)
-        .is_some()
-    {
-        crate::codegen::field_guards::check(emitter, ctx, object, mangled, field)?;
-    }
-    emit_class_field_slot_cast(emitter, ctx, mangled, field, target_ty)?;
+    emit_nominal_property_slot_cast_as(emitter, ctx, object, mangled, field, target_ty, check_ty)?;
     emit_postfix_numeric(emitter, ctx, target_ty);
     emitter.instruction(Instruction::LocalSet(old));
     emitter.instruction(Instruction::LocalGet(fields_local));
@@ -3113,6 +3115,10 @@ fn emit_class_field_postfix(
     emit_postfix_delta(emitter, ctx, op, target_ty);
     crate::codegen::function_emitter::cast::emit_box(emitter, ctx, target_ty)?;
     emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
+    let index = emitter.add_anonymous_local(ValType::I32)?;
+    emitter.instruction(Instruction::I32Const(slot as i32));
+    emitter.instruction(Instruction::LocalSet(index));
+    crate::codegen::field_names::emit_mark_present(emitter, ctx, object, index)?;
     emitter.instruction(Instruction::LocalGet(old));
     Ok(())
 }
@@ -3632,39 +3638,6 @@ fn emit_undefined_for_chain_result(
     cast::emit_coerce_to_slot(emitter, ctx, &Type::Undefined, result_ty)
 }
 
-/// Narrows a class field's raw payload slot value, on the stack, to the type the
-/// read is typed at. Ordinarily that is the plain representation cast; a field
-/// carrying a [`crate::FieldNarrowingCheck`] is read through its guard instead.
-fn emit_class_field_slot_cast(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    class: &crate::MangledName,
-    field: &str,
-    result_ty: &Type,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_class_field_slot_cast_as(emitter, ctx, class, field, result_ty, result_ty)?;
-    Ok(())
-}
-
-fn emit_class_field_slot_cast_as(
-    emitter: &mut FunctionEmitter<'_>,
-    ctx: &CodegenCtx<'_>,
-    class: &crate::MangledName,
-    field: &str,
-    result_ty: &Type,
-    check_ty: &Type,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let _: () = match ctx.symbols.class_field_narrowing_check(class, field) {
-        Some(check) => {
-            crate::codegen::cast_check::emit_narrowed_field_read_as(
-                emitter, ctx, check, result_ty, check_ty,
-            )?;
-        }
-        None => crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, result_ty)?,
-    };
-    Ok(())
-}
-
 fn emit_object_spread(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -4041,9 +4014,9 @@ fn emit_chain_access(
             let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
                 crate::codegen::internal_failure("intrinsics declared by codegen entry")
             })?;
-            // Class receiver: resolve the slot statically, mirroring the
-            // non-optional `FieldAccess` path. The name scan below would read a
-            // null for an accessor property, which backs no payload slot.
+            // Class receiver: direct concrete slots bypass the name scan;
+            // accessors, methods, `over_prototype` fields, and unimplemented
+            // abstract properties dispatch via `emit_class_property_read`.
             if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
                 let Some(slot) = direct_class_field_slot(ctx, mangled, &name.name) else {
                     emit_class_property_read(
@@ -4070,15 +4043,8 @@ fn emit_chain_access(
                 });
                 emitter.instruction(Instruction::I32Const(slot as i32));
                 emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
-                if ctx
-                    .symbols
-                    .class_field_narrowing_check(mangled, &name.name)
-                    .is_some()
-                {
-                    crate::codegen::field_guards::check(emitter, ctx, object, mangled, &name.name)?;
-                }
-                emit_class_field_slot_cast_as(
-                    emitter, ctx, mangled, &name.name, result_ty, check_ty,
+                emit_nominal_property_slot_cast_as(
+                    emitter, ctx, object, mangled, &name.name, result_ty, check_ty,
                 )?;
                 return Ok(());
             }
@@ -5217,26 +5183,6 @@ pub(crate) fn emit_is_accessor_backed(
     Ok(index_local)
 }
 
-/// Read property `prop_name` from an `$ObjectShape`-typed receiver, accessor-aware:
-/// a data field reads its payload slot; an accessor property invokes its
-/// `get <prop>` method closure; a property with neither slot is absent and reads
-/// `null`. The choice is made at runtime, since an interface property may be
-/// backed by a field on one impl, an accessor on another, and nothing at all on a
-/// third that reached the interface type through an optional member. Deciding it
-/// on the data-slot miss alone cannot separate the last two, and traps on
-/// whichever it does not pick. Leaves the value on the stack at `field_ty`'s
-/// value type.
-pub(crate) fn emit_object_property_read(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    object_local: u32,
-    prop_name: &str,
-    field_ty: &Type,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_object_property_read_as(emitter, ctx, object_local, prop_name, field_ty, field_ty)?;
-    Ok(())
-}
-
 /// Read a property from the live carrier. Constructor closures expose their
 /// static members; callable shapes read their stored properties.
 fn emit_receiver_property_read_as(
@@ -5299,7 +5245,15 @@ fn emit_receiver_property_read_as(
         emitter.instruction(Instruction::LocalGet(receiver));
     }
     let receiver = stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape)?;
-    emit_object_property_read_as(emitter, ctx, receiver, prop_name, field_ty, check_ty)?;
+    emit_object_property_read_as(
+        emitter,
+        ctx,
+        receiver,
+        prop_name,
+        field_ty,
+        check_ty,
+        nominal_class(receiver_ty),
+    )?;
     if allows_closure {
         emitter.emit_end();
     }
@@ -5393,6 +5347,14 @@ fn interface_property_may_be_absent_on_closure(
         })
 }
 
+/// Read property `prop_name` from an `$ObjectShape`-typed receiver, accessor-aware:
+/// a data field reads its payload slot; an accessor property invokes its
+/// `get <prop>` method closure; a property with neither slot is absent and reads
+/// `undefined`. The choice is made at runtime, since an interface or abstract
+/// class property may be backed by a field on one impl, an accessor on another,
+/// and nothing at all on a third that reached the type through an optional or
+/// uninitialized abstract member. Leaves the value on the stack at `field_ty`'s
+/// value type.
 fn emit_object_property_read_as(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -5400,6 +5362,7 @@ fn emit_object_property_read_as(
     prop_name: &str,
     field_ty: &Type,
     check_ty: &Type,
+    nominal_class: Option<&crate::MangledName>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let getter = crate::codegen::classes::accessor_getter_name(prop_name);
     let name_global = ctx
@@ -5410,15 +5373,23 @@ fn emit_object_property_read_as(
                 "per-name string global recorded during field-name-strings emission",
             )
         })?;
-    if !accessor_branch_emittable(ctx, &getter) {
+    let accessor_emittable = accessor_branch_emittable(ctx, &getter);
+    let has_structural_narrowing = nominal_class.is_none()
+        && ctx
+            .symbols
+            .class_field_narrowing_checks(prop_name)
+            .next()
+            .is_some();
+    if !accessor_emittable && !has_structural_narrowing {
         emit_object_field_read_by_name(emitter, ctx, object_local, name_global);
-        emit_dynamic_narrowed_property_read(
+        emit_property_slot_cast_as(
             emitter,
             ctx,
             object_local,
             prop_name,
             field_ty,
             check_ty,
+            nominal_class,
         )?;
         return Ok(());
     }
@@ -5434,45 +5405,158 @@ fn emit_object_property_read_as(
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::I32GeS);
     emitter.emit_if(BlockType::Result(result_vt));
-    // data slot
+    // data or prototype-method slot (`LOOKUP_DATA_OR_METHOD` already returns -1
+    // for absent slots, so every non-negative index is present).
     emit_field_slot_get(emitter, intrinsics, object_local, index_local);
-    emit_dynamic_narrowed_property_read(emitter, ctx, object_local, prop_name, field_ty, check_ty)?;
-    emitter.emit_else();
-    let getter_slot_local = emit_is_accessor_backed(
+    emit_property_slot_cast_as(
         emitter,
         ctx,
         object_local,
-        &getter,
-        crate::AccessorKind::Get,
-    )?;
-    emitter.emit_if(BlockType::Result(result_vt));
-    // accessor slot
-    emitter.instruction(Instruction::LocalGet(object_local));
-    emit_interface_method_via_shape_with_receiver_on_stack(
-        emitter,
-        ctx,
-        &getter,
-        &[],
+        prop_name,
         field_ty,
-        Some(getter_slot_local),
+        check_ty,
+        nominal_class,
     )?;
     emitter.emit_else();
-    // neither: absent — an optional member the value never materialised, or an
-    // accessor whose getter half was cleared by a setter-only override. Use a
-    // checked cast so a non-undefined target throws a catchable `TypeError`
-    // rather than an uncatchable Wasm cast trap.
-    emit_undefined(emitter, ctx)?;
-    if !field_ty.is_void() && !matches!(field_ty.lowered(), Type::Unknown) {
-        crate::codegen::cast_check::emit_checked_cast_on_stack(
+    if accessor_emittable {
+        let getter_slot_local = emit_is_accessor_backed(
             emitter,
             ctx,
-            &Type::Unknown,
+            object_local,
+            &getter,
+            crate::AccessorKind::Get,
+        )?;
+        emitter.emit_if(BlockType::Result(result_vt));
+        // accessor slot
+        emitter.instruction(Instruction::LocalGet(object_local));
+        emit_interface_method_via_shape_with_receiver_on_stack(
+            emitter,
+            ctx,
+            &getter,
+            &[],
             field_ty,
+            Some(getter_slot_local),
+        )?;
+        emitter.emit_else();
+        emit_absent_property_read(
+            emitter,
+            ctx,
+            object_local,
+            prop_name,
+            field_ty,
+            check_ty,
+            nominal_class,
+        )?;
+        emitter.emit_end();
+    } else {
+        emit_absent_property_read(
+            emitter,
+            ctx,
+            object_local,
+            prop_name,
+            field_ty,
+            check_ty,
+            nominal_class,
         )?;
     }
     emitter.emit_end();
-    emitter.emit_end();
     Ok(())
+}
+
+/// Emit an absent property read (`undefined`): nominal class receivers go
+/// through `emit_nominal_property_slot_cast_as` (enforcing any narrowing check
+/// or non-widened carrier check, matching the fast path); structural receivers
+/// skip descendant narrowing checks on absent optional properties and enforce
+/// only any non-widened carrier check.
+fn emit_absent_property_read(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    prop_name: &str,
+    field_ty: &Type,
+    check_ty: &Type,
+    nominal_class: Option<&crate::MangledName>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_undefined(emitter, ctx)?;
+    if let Some(class) = nominal_class {
+        emit_nominal_property_slot_cast_as(
+            emitter,
+            ctx,
+            object_local,
+            class,
+            prop_name,
+            field_ty,
+            check_ty,
+        )?;
+    } else {
+        emit_unknown_slot_carrier_cast(emitter, ctx, field_ty)?;
+    }
+    Ok(())
+}
+
+/// Cast a raw property value (from a data slot or absent `undefined`): a
+/// nominal class receiver (e.g. an abstract or `over_prototype` property read)
+/// enforces only that class's own instance guard and narrowing check, while a
+/// structural receiver checks every narrowed subclass by vtable.
+fn emit_property_slot_cast_as(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    prop_name: &str,
+    field_ty: &Type,
+    check_ty: &Type,
+    nominal_class: Option<&crate::MangledName>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    match nominal_class {
+        Some(class) => emit_nominal_property_slot_cast_as(
+            emitter,
+            ctx,
+            object_local,
+            class,
+            prop_name,
+            field_ty,
+            check_ty,
+        ),
+        None => emit_dynamic_narrowed_property_read(
+            emitter,
+            ctx,
+            object_local,
+            prop_name,
+            field_ty,
+            check_ty,
+        ),
+    }
+}
+
+/// Cast a raw class field payload value (already on the stack) for a nominal
+/// receiver: fields carrying a [`crate::FieldNarrowingCheck`] run their
+/// instance guard and narrowing check; unnarrowed fields validate non-widened
+/// carrier slots via `emit_operation_cast_on_stack`.
+fn emit_nominal_property_slot_cast_as(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    class: &crate::MangledName,
+    prop_name: &str,
+    field_ty: &Type,
+    check_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    match ctx.symbols.class_field_narrowing_check(class, prop_name) {
+        Some(check) => {
+            crate::codegen::field_guards::check(emitter, ctx, object_local, class, prop_name)?;
+            crate::codegen::cast_check::emit_narrowed_field_read_as(
+                emitter, ctx, check, field_ty, check_ty,
+            )
+        }
+        None => emit_unknown_slot_carrier_cast(emitter, ctx, field_ty),
+    }
+}
+
+fn nominal_class(ty: &Type) -> Option<&crate::MangledName> {
+    match ty.lowered() {
+        Type::ClassRef { mangled, .. } => Some(mangled),
+        _ => None,
+    }
 }
 
 fn emit_dynamic_narrowed_property_read(
@@ -5493,15 +5577,7 @@ fn emit_dynamic_narrowed_property_read(
         })
         .collect();
     if checks.is_empty() {
-        if !field_ty.is_void() && !matches!(field_ty.lowered(), Type::Unknown) {
-            crate::codegen::cast_check::emit_operation_cast_on_stack(
-                emitter,
-                ctx,
-                &Type::Unknown,
-                field_ty,
-            )?;
-        }
-        return Ok(());
+        return emit_unknown_slot_carrier_cast(emitter, ctx, field_ty);
     }
 
     let intrinsics = ctx
@@ -5539,15 +5615,7 @@ fn emit_dynamic_narrowing_check(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let Some((vtable, check)) = checks.get(index) else {
         emitter.instruction(Instruction::LocalGet(raw));
-        if !field_ty.is_void() && !matches!(field_ty.lowered(), Type::Unknown) {
-            crate::codegen::cast_check::emit_operation_cast_on_stack(
-                emitter,
-                ctx,
-                &Type::Unknown,
-                field_ty,
-            )?;
-        }
-        return Ok(());
+        return emit_unknown_slot_carrier_cast(emitter, ctx, field_ty);
     };
     emitter.instruction(Instruction::LocalGet(object_local));
     crate::codegen::function_emitter::cast::emit_nominal_instance_test(emitter, ctx, *vtable)?;
@@ -5568,6 +5636,24 @@ fn emit_dynamic_narrowing_check(
         index + 1,
     )?;
     emitter.emit_end();
+    Ok(())
+}
+
+/// Checked carrier cast from an erased (`unknown`) property slot into `target_ty`,
+/// skipped when `target_ty` is `void` or already widened to `unknown`.
+fn emit_unknown_slot_carrier_cast(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if !target_ty.is_void() && !matches!(target_ty.lowered(), Type::Unknown) {
+        crate::codegen::cast_check::emit_operation_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            target_ty,
+        )?;
+    }
     Ok(())
 }
 
@@ -7035,7 +7121,15 @@ fn emit_class_property_read(
         })?
         .object_shape;
     let receiver = stash_receiver_as_object_shape(emitter, receiver_ty, object_shape)?;
-    emit_object_property_read_as(emitter, ctx, receiver, property, result_ty, check_ty)
+    emit_object_property_read_as(
+        emitter,
+        ctx,
+        receiver,
+        property,
+        result_ty,
+        check_ty,
+        nominal_class(receiver_ty),
+    )
 }
 
 /// Interface method dispatch on the live receiver already on the stack.

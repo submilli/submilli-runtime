@@ -1207,6 +1207,7 @@ mod tests {
             optional: false,
             method: false,
             over_prototype: false,
+            abstract_property: false,
             doc: None,
         };
         let mut static_fields = BTreeMap::new();

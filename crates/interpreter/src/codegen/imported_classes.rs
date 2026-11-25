@@ -39,6 +39,11 @@ pub struct ImportedClassLayout {
     pub fields: Vec<String>,
     pub optional_fields: std::collections::BTreeSet<String>,
     pub over_prototype_fields: std::collections::BTreeSet<String>,
+    /// Data fields implementing an inherited `abstract_property`, allocated
+    /// absent so base constructors do not see them before subclass field setup.
+    pub starts_absent_fields: std::collections::BTreeSet<String>,
+    /// Unimplemented abstract properties on this class or its ancestors.
+    pub abstract_fields: std::collections::BTreeSet<String>,
     pub narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
     /// Full vtable method slots (inherited prefix then own/override), in order.
     pub methods: Vec<ImportedSlot>,
@@ -459,26 +464,42 @@ fn reconstruct_one(
         None => None,
     };
     // Full field list = inherited prefix (already reconstructed) + own *data*
-    // fields. Accessor properties are in `fields` for typing/docs but back no data
-    // slot, so they're excluded — matching the producer's payload layout.
+    // fields. Accessor properties and abstract properties are in `fields` for
+    // typing/docs but back no data slot on this class, so they're excluded —
+    // matching the producer's payload layout.
     let mut fields: Vec<String> = parent_layout.map(|l| l.fields.clone()).unwrap_or_default();
-    for name in class
-        .fields
-        .keys()
-        .filter(|name| !class.accessors.iter().any(|a| a.name() == name.as_str()))
-    {
-        if shadows_inherited_field(fields.iter().map(String::as_str), name) {
-            continue;
-        }
-        fields.push(name.clone());
-    }
     let mut optional_fields = parent_layout
         .map(|layout| layout.optional_fields.clone())
         .unwrap_or_default();
     let mut over_prototype_fields = parent_layout
         .map(|layout| layout.over_prototype_fields.clone())
         .unwrap_or_default();
+    let mut starts_absent_fields = parent_layout
+        .map(|layout| layout.starts_absent_fields.clone())
+        .unwrap_or_default();
+    let mut abstract_fields = parent_layout
+        .map(|layout| layout.abstract_fields.clone())
+        .unwrap_or_default();
+    let mut narrowing_checks = parent_layout
+        .map(|layout| layout.narrowing_checks.clone())
+        .unwrap_or_default();
     for (name, field) in class.fields {
+        if class.accessors.iter().any(|a| a.name() == name.as_str()) {
+            continue;
+        }
+        if field.abstract_property {
+            if !shadows_inherited_field(fields.iter().map(String::as_str), name) {
+                abstract_fields.insert(name.clone());
+            }
+            continue;
+        }
+        let implements_abstract = abstract_fields.remove(name);
+        if !shadows_inherited_field(fields.iter().map(String::as_str), name) {
+            fields.push(name.clone());
+        }
+        if implements_abstract {
+            starts_absent_fields.insert(name.clone());
+        }
         if field.optional {
             optional_fields.insert(name.clone());
         } else {
@@ -493,16 +514,21 @@ fn reconstruct_one(
                 name,
             )
         });
-        if !class.accessors.iter().any(|a| a.name() == name.as_str())
-            && (field.over_prototype || (!field.method && shadows_parent))
-        {
+        if field.over_prototype || (!field.method && shadows_parent) {
             over_prototype_fields.insert(name.clone());
         }
     }
-    let mut narrowing_checks = parent_layout
-        .map(|layout| layout.narrowing_checks.clone())
-        .unwrap_or_default();
     narrowing_checks.extend(class.narrowing_checks.clone());
+    for acc in class.accessors {
+        if abstract_fields.remove(acc.name()) {
+            narrowing_checks.remove(acc.name());
+        }
+    }
+    for method in class.methods.keys() {
+        if abstract_fields.remove(method) {
+            narrowing_checks.remove(method);
+        }
+    }
 
     // The producer's full vtable-method set (real methods + accessor getter/setter),
     // sorted by name to match the producer's slot assignment.
@@ -758,9 +784,14 @@ fn reconstruct_one(
     for (i, name) in fields.iter().enumerate() {
         symbols.record_class_field_slot(mangled.clone(), name.clone(), wasm_u32(i)?);
     }
+    let mut own_abstract_guards = Vec::new();
     for (name, check) in &narrowing_checks {
         symbols.record_class_field_narrowing_check(mangled.clone(), name.clone(), check.clone());
+        if abstract_fields.contains(name) && check.declaration.as_ref() == Some(mangled) {
+            own_abstract_guards.push(name.clone());
+        }
     }
+    symbols.record_class_abstract_guard_slots(mangled.clone(), own_abstract_guards);
     for (i, slot) in slots.iter().enumerate() {
         // Native classes keep their methods in the vtable, without the mutable
         // closure payload emitted by the compiler for guest class instances.
@@ -912,7 +943,7 @@ fn reconstruct_one(
         .map(|layout| layout.private_members.clone())
         .unwrap_or_default();
     for (name, field) in class.fields {
-        if field.visibility == crate::Visibility::Private {
+        if !field.abstract_property && field.visibility == crate::Visibility::Private {
             private_members.insert(name.clone());
         }
     }
@@ -931,6 +962,8 @@ fn reconstruct_one(
         fields,
         optional_fields,
         over_prototype_fields,
+        starts_absent_fields,
+        abstract_fields,
         narrowing_checks,
         methods: slots,
         ctor_params: ctor_typed_params,

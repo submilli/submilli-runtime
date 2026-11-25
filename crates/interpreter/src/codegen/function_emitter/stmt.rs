@@ -579,11 +579,12 @@ fn emit_class_field_store(
     value: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let has_accessor = class_has_accessor(ctx, mangled, &name.name);
-    // Accessor properties, fields shadowing an inherited accessor, and writes
-    // over methods or inherited Object members (e.g. `toString`) go through the
-    // property write helper: an existing own data property wins, an accessor
-    // calls its setter (or throws when getter-only), and a method/missing name
-    // creates an own data property without mutating the prototype slot.
+    // Accessor properties, unimplemented abstract properties, fields shadowing
+    // an inherited accessor, and writes over methods or inherited Object
+    // members (e.g. `toString`) go through the property write helper: an
+    // existing own data property wins, an accessor calls its setter (or throws
+    // when getter-only), and a method/missing name creates an own data property
+    // without mutating the prototype slot.
     let Some(slot) = ctx
         .symbols
         .class_field_slot(mangled, &name.name)

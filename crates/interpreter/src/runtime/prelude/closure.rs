@@ -21,6 +21,10 @@ pub struct Closure {
 }
 
 impl Closure {
+    pub(crate) fn env(&self) -> Val {
+        self.env
+    }
+
     pub(crate) async fn call_with_receiver(
         &self,
         caller: &mut Caller<'_, StoreData>,

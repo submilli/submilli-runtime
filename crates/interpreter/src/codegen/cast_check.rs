@@ -1114,7 +1114,7 @@ fn emit_representation_test(
 /// the actual read. Neither slot means the property really is missing, and only
 /// an optional field tolerates that.
 ///
-/// The read counterpart is `expr::emit_object_property_read`, which makes the
+/// The read counterpart is `expr::emit_object_property_read_as`, which makes the
 /// same three-way distinction and calls the getter because it needs the value.
 fn emit_field_conformance(
     emitter: &mut FunctionEmitter,
@@ -1224,8 +1224,19 @@ pub fn emit_narrowed_field_read(
     check: &crate::FieldNarrowingCheck,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_narrowed_field_read_as(emitter, ctx, check, result_ty, result_ty)?;
-    Ok(())
+    emit_narrowed_field_read_as(emitter, ctx, check, result_ty, result_ty)
+}
+
+/// Like [`emit_narrowed_field_read`], preserving `NonNull` enforcement even
+/// when a parameterized guard upgrades `check.test` to `Shape(target)`.
+pub(super) fn emit_narrowed_field_read_guarded(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    check: &crate::FieldNarrowingCheck,
+    result_ty: &Type,
+    enforce_non_null: bool,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_narrowed_field_read_inner(emitter, ctx, check, result_ty, result_ty, enforce_non_null)
 }
 
 pub(crate) fn emit_narrowed_field_read_as(
@@ -1235,17 +1246,29 @@ pub(crate) fn emit_narrowed_field_read_as(
     result_ty: &Type,
     check_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let enforce_non_null = matches!(check.test, crate::FieldNarrowingTest::NonNull);
+    emit_narrowed_field_read_inner(emitter, ctx, check, result_ty, check_ty, enforce_non_null)
+}
+
+fn emit_narrowed_field_read_inner(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    check: &crate::FieldNarrowingCheck,
+    result_ty: &Type,
+    check_ty: &Type,
+    enforce_non_null: bool,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let result_val = ctx.symbols.value_type(result_ty)?;
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(scratch));
-    // Prefer the concrete read-time descriptor. It includes generic
-    // substitutions and nested interface metadata that the declaration could
-    // not know; imported legacy declarations fall back to their recorded test.
-    let runtime_test = ctx.ta.runtime_type_tests.get(check_ty.lowered());
+    // Prefer the concrete read-time descriptor. `runtime_type_tests` is keyed
+    // by `ty.peel()` (not `ty.lowered()`), keeping `{}` and `object` distinct
+    // from `unknown`. Imported legacy declarations fall back to their recorded test.
+    let runtime_test = ctx.ta.runtime_type_tests.get(check_ty.peel());
     let test = if check
         .minimal_test_target
         .as_ref()
-        .is_some_and(|target| target.lowered() == check_ty.lowered())
+        .is_some_and(|target| target.peel() == check_ty.peel())
     {
         if matches!(check.test, crate::FieldNarrowingTest::NonNull) {
             &check.test
@@ -1275,24 +1298,34 @@ pub(crate) fn emit_narrowed_field_read_as(
         diagnostic::begin(emitter, ctx);
     }
     match test {
-        // Presence is the check only where the read's type rejects `null`. On a
-        // generic class the declaration cannot say: `Sub<T>`'s `v: T` is
-        // `string | null` at `Sub<string | null>`, where a `null` is legal and
-        // the cast lets it through anyway. `result_ty` is substituted, so it
-        // answers what the declaration could not.
         crate::FieldNarrowingTest::NonNull => {
-            if cast::target_allows_null(ctx, check_ty)? {
+            if !emit_non_null_test(emitter, ctx, scratch, check_ty, result_ty)?.emitted {
                 emitter.instruction(Instruction::I32Const(1));
-            } else {
-                emit_is_non_null(emitter, scratch);
             }
         }
         crate::FieldNarrowingTest::Shape(shape) => {
             emit_structural_test(emitter, ctx, scratch, shape, check_ty)?;
+            // When the narrowing originated from `NonNull`, also AND in its
+            // semantic null/undefined check so erased shapes (such as utility
+            // applications or partially-erased intersections) cannot bypass
+            // null/undefined rejection while keeping any descriptor checks on
+            // `shape` intact.
+            let rejected_null = if enforce_non_null {
+                let outcome = emit_non_null_test(emitter, ctx, scratch, check_ty, result_ty)?;
+                if outcome.emitted {
+                    emitter.instruction(Instruction::I32And);
+                }
+                outcome.rejected_null
+            } else {
+                false
+            };
             // `emit_cast_to` lifts to non-null for every target it does not admit
             // a null for, so those are exactly the targets a `null` in the slot
             // would trap on.
-            if !cast::target_allows_null(ctx, check_ty)? {
+            if !rejected_null
+                && (!cast::target_allows_null(ctx, check_ty)?
+                    || !cast::target_allows_null(ctx, result_ty)?)
+            {
                 emit_is_non_null(emitter, scratch);
                 emitter.instruction(Instruction::I32And);
             }
@@ -1317,6 +1350,63 @@ pub(crate) fn emit_narrowed_field_read_as(
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
     Ok(())
+}
+
+struct NonNullTestOutcome {
+    emitted: bool,
+    rejected_null: bool,
+}
+
+/// Emits the semantic null/undefined check for `FieldNarrowingTest::NonNull`
+/// when `check_ty` (or a tighter `result_ty`) rejects `null` and/or `undefined`.
+/// Returns `emitted: false` when both `null` and `undefined` are admitted.
+fn emit_non_null_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    scratch: u32,
+    check_ty: &Type,
+    result_ty: &Type,
+) -> Result<NonNullTestOutcome, crate::compiler_error::CompilerFailure> {
+    let nullish = super::type_nullish::nullish_set(ctx, check_ty)?;
+    let result_nullish = (result_ty != check_ty)
+        .then(|| super::type_nullish::nullish_set(ctx, result_ty))
+        .transpose()?;
+    let allows_null = nullish.allows_null()
+        && result_nullish.is_none_or(super::type_nullish::NullishSet::allows_null)
+        && cast::target_allows_null(ctx, result_ty)?;
+    let allows_undefined = nullish.allows_undefined()
+        && result_nullish.is_none_or(super::type_nullish::NullishSet::allows_undefined);
+    match (allows_null, allows_undefined) {
+        (true, true) => Ok(NonNullTestOutcome {
+            emitted: false,
+            rejected_null: false,
+        }),
+        (false, true) => {
+            emit_is_non_null(emitter, scratch);
+            Ok(NonNullTestOutcome {
+                emitted: true,
+                rejected_null: true,
+            })
+        }
+        (true, false) => {
+            emitter.instruction(Instruction::LocalGet(scratch));
+            crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
+            emitter.instruction(Instruction::I32Eqz);
+            Ok(NonNullTestOutcome {
+                emitted: true,
+                rejected_null: false,
+            })
+        }
+        (false, false) => {
+            emitter.instruction(Instruction::LocalGet(scratch));
+            crate::codegen::function_emitter::expr::emit_is_nullish(emitter, ctx)?;
+            emitter.instruction(Instruction::I32Eqz);
+            Ok(NonNullTestOutcome {
+                emitted: true,
+                rejected_null: true,
+            })
+        }
+    }
 }
 
 /// `ty` is the type `test` checks, named if the check exhausts its step limit.

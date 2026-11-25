@@ -1049,6 +1049,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: true,
                             method: false,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: doc(
                                 "/** The error that led to this one, passed as `new Error(message, { cause })`; `undefined` when none was. */",
                             ),
@@ -1063,6 +1064,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             method: false,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: doc(
                                 "/** The human-readable message passed to `new Error(message)`. */",
                             ),
@@ -1077,6 +1079,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             method: false,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: doc(
                                 "/** The error class name. Defaults to `\"Error\"`; subclasses conventionally set `this.name` in their constructor. */",
                             ),
@@ -1311,6 +1314,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             method: false,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: doc(
                                 "/** The Package the denied call was attributed to (e.g. `\"main\"`). */",
                             ),
@@ -1325,6 +1329,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             method: false,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: doc(
                                 "/** The denied capability name (e.g. `\"fs.read\"`, `\"http.get\"`). */",
                             ),
@@ -1339,6 +1344,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             method: false,
                             over_prototype: false,
+                            abstract_property: false,
                             doc: doc("/** The policy-supplied denial reason. */"),
                         },
                     ),
@@ -1385,6 +1391,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         optional: false,
                         method: false,
                         over_prototype: false,
+                        abstract_property: false,
                         doc: doc(
                             "/** Why there is no answer: `\"declined\"` (the person said no; `message` holds what they said, if anything), `\"expired\"` (nobody answered before the deadline), or `\"unanswerable\"` (this run cannot ask anyone). */",
                         ),
