@@ -5,13 +5,14 @@ use std::time::Duration;
 
 use super::*;
 use crate::runtime::approvals::ApprovalProvider;
+use crate::runtime::asks::AskProvider;
 use crate::runtime::call_log::{BodyCopy, CallRecord};
 use crate::runtime::durable::EffectId;
 use crate::runtime::effects::testing::MemoryHistory;
 use crate::runtime::security::{CheckOutcome, SecurityCheck};
 use crate::runtime::{
-    ApprovalOutcome, ApprovalRequest, DecisionLog, DecisionLogConfig, RuntimeConfig, Vfs,
-    dispatch_main_async, install_runtime_async,
+    ApprovalError, ApprovalOutcome, ApprovalRequest, DecisionLog, DecisionLogConfig, RuntimeConfig,
+    Vfs, dispatch_main_async, install_runtime_async,
 };
 
 const PACKAGE: &str = "@acme/shop";
@@ -19,7 +20,7 @@ const PACKAGE: &str = "@acme/shop";
 /// Answers every question with `outcome` after `delay`, and remembers what it was asked
 /// and which effects it was told are recorded.
 struct Person {
-    outcome: Result<QuestionOutcome, ApprovalError>,
+    outcome: Result<QuestionOutcome, AskError>,
     delay: Duration,
     asked: Mutex<Vec<QuestionRequest>>,
     recorded: Mutex<Vec<EffectId>>,
@@ -34,7 +35,7 @@ impl Person {
         Self::with_result(Ok(outcome), delay)
     }
 
-    fn with_result(outcome: Result<QuestionOutcome, ApprovalError>, delay: Duration) -> Arc<Self> {
+    fn with_result(outcome: Result<QuestionOutcome, AskError>, delay: Duration) -> Arc<Self> {
         Arc::new(Self {
             outcome,
             delay,
@@ -48,20 +49,12 @@ impl Person {
     }
 }
 
-impl ApprovalProvider for Person {
-    fn request<'a>(
-        &'a self,
-        _effect_id: EffectId,
-        _request: &'a ApprovalRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ApprovalOutcome, ApprovalError>> + Send + 'a>> {
-        Box::pin(async { Ok(ApprovalOutcome::Expired) })
-    }
-
+impl AskProvider for Person {
     fn ask<'a>(
         &'a self,
         _effect_id: EffectId,
         request: &'a QuestionRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<QuestionOutcome, ApprovalError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<QuestionOutcome, AskError>> + Send + 'a>> {
         self.asked.lock().unwrap().push(request.clone());
         Box::pin(async move {
             tokio::time::sleep(self.delay).await;
@@ -129,7 +122,7 @@ async fn run_under(
     data.install_type_info(compiled.type_info.clone());
     data.security_check = policy;
     if let Some(person) = person {
-        data.approval_provider = Some(person);
+        data.ask_provider = Some(person);
     }
     if let Some(history) = history {
         data.effects = Some(history);
@@ -305,7 +298,7 @@ async fn an_embedder_reads_a_recorded_question_outcome() {
         panic!("one recorded outcome: {outcomes:?}");
     };
     let Some(QuestionOutcome::Answered(answer)) =
-        crate::runtime::approvals::recorded_question_outcome(bytes)
+        crate::runtime::asks::recorded_question_outcome(bytes)
     else {
         panic!("a recorded answer");
     };
@@ -359,7 +352,7 @@ async fn declining_expiring_and_unanswerable_hosts_throw_a_catchable_no_answer_e
 }
 
 #[tokio::test]
-async fn a_host_that_keeps_the_default_cannot_ask() {
+async fn a_host_that_only_decides_approvals_cannot_ask() {
     struct Approvals;
     impl ApprovalProvider for Approvals {
         fn request<'a>(
@@ -389,7 +382,7 @@ async fn a_host_that_keeps_the_default_cannot_ask() {
             .await
             .unwrap()
             .as_deref(),
-        Some("unanswerable: this host cannot ask a person")
+        Some("unanswerable: this run cannot ask a person: its host has no way to reach one")
     );
 }
 
@@ -450,7 +443,7 @@ async fn a_sensitive_question_is_refused_to_a_function_as_to_main() {
     let mut data = StoreData::with_vfs("function-run".into(), Vfs::none());
     // A policy that would allow the ask: the refusal is the runtime's, not the policy's.
     data.security_check = Arc::new(DeniesAdmin);
-    data.approval_provider = Some(person.clone());
+    data.ask_provider = Some(person.clone());
     let mut store = config.store_async(&engine, data).unwrap();
     let out = crate::invoke_function_async::<&str>(&mut store, &compiled, &[], "read-code", &[])
         .await
@@ -682,14 +675,14 @@ async fn a_question_goes_to_the_person_by_default_and_to_an_admin_when_asked() {
 async fn a_quota_refusal_is_catchable_and_a_cancelled_question_ends_the_run() {
     let question = r#"{ text: "Go?", answer: "text" }"#;
     let quota = Person::with_result(
-        Err(ApprovalError::QuotaExceeded {
+        Err(AskError::QuotaExceeded {
             message: "too many waiting".into(),
         }),
         Duration::ZERO,
     );
     let run1 = run(None, &catching(question, "undefined"), Some(quota), None).await;
     assert_eq!(run1.result.unwrap().as_deref(), Some("quota"));
-    let cancelled = Person::with_result(Err(ApprovalError::Cancelled), Duration::ZERO);
+    let cancelled = Person::with_result(Err(AskError::Cancelled), Duration::ZERO);
     let run2 = run(
         None,
         &catching(question, "undefined"),

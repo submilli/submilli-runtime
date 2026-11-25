@@ -2,9 +2,10 @@
 //!
 //! `ask` puts one question, answered with text or by picking from choices, to the
 //! person the run acts for (`to: "human"`) or to an administrator (`to: "admin"`),
-//! through the embedder's [`ApprovalProvider::ask`]. The wait is one durable effect,
-//! [`QUESTION_OPERATION`], run like an approval's: a replay returns the recorded
-//! outcome without asking again, and waiting is not running time
+//! through the embedder's [`AskProvider::ask`](crate::runtime::AskProvider::ask), a hook
+//! of its own beside approvals. The wait is one durable effect, [`QUESTION_OPERATION`],
+//! run like an approval's: a replay returns the recorded outcome without asking again,
+//! and waiting is not running time
 //! ([`StoreData::clock_paused`]). No answer throws a catchable `NoAnswerError`.
 //!
 //! A `sensitive` question asks for a credential, such as a sign-in code. Only a
@@ -19,8 +20,9 @@ use serde::Deserialize;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::approvals::{
-    AnswerSpec, AnswerValue, ApprovalError, Approver, Choice, MAX_ANSWER_BYTES, MAX_ANSWER_LENGTH,
+use crate::runtime::approvals::Approver;
+use crate::runtime::asks::{
+    AnswerSpec, AnswerValue, AskError, Choice, MAX_ANSWER_BYTES, MAX_ANSWER_LENGTH,
     MAX_CHOICE_VALUE_BYTES, QUESTION_OPERATION, QuestionOutcome, QuestionRequest, QuestionSpec,
     fits_length,
 };
@@ -130,7 +132,7 @@ async fn ask(
     record_payload(&*caller, ticket, Side::Request, || {
         Payload::meta(context.clone()).with_owned_body(question.text().as_bytes().to_vec())
     });
-    let Some(provider) = caller.data().approval_provider.clone() else {
+    let Some(provider) = caller.data().ask_provider.clone() else {
         return Err(no_answer_error(
             NoAnswerReason::Unanswerable,
             "this run cannot ask a person: its host has no way to reach one",
@@ -155,10 +157,10 @@ async fn ask(
                 let data = caller.data_mut();
                 data.clock_paused = data.clock_paused.saturating_add(waited.elapsed());
                 let outcome = outcome.map_err(|error| match error {
-                    ApprovalError::QuotaExceeded { message } => {
+                    AskError::QuotaExceeded { message } => {
                         quota_exceeded_error(format!("{CAPABILITY}: {message}"))
                     }
-                    ApprovalError::Cancelled => {
+                    AskError::Cancelled => {
                         fatal_host_error(format!("{CAPABILITY}: the question was cancelled"))
                     }
                 })?;
