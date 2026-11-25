@@ -317,8 +317,6 @@ pub async fn execute(
         Ok(bound) => bound,
         Err(error) => return run_refusal_response(&session_id, error),
     };
-    // A session with application tools, or whose blueprint asks approvers, runs
-    // its programs detached from the request, so a run can wait across requests.
     let tools = match session_tools(&state, &session_id, &bound).await {
         Ok(tools) => tools,
         Err(error) => return session_state_response(error),
@@ -368,31 +366,10 @@ pub async fn execute(
             Reserved::Answered(response) => return response,
         },
     };
-    if tools.is_some() || bound.blueprint.asks() {
-        return run_detached(
-            &state, session_id, bound, req.code, key, guard, tools, audit,
-        )
-        .await;
-    }
-
-    let outcome = run(
-        &state,
-        &session_id,
-        bound,
-        &req.code,
-        key.as_deref(),
-        audit,
-        None,
+    run_detached(
+        &state, session_id, bound, req.code, key, guard, tools, audit,
     )
-    .await;
-    // Serialize once and hand the same bytes to the ledger and the caller, so a
-    // replay cannot drift from what the original client received.
-    let finished = crate::handlers::runs::finished_body(&outcome.response);
-    if let Some(guard) = guard {
-        let outcome_recordable = true;
-        settle(guard, &outcome, &finished, outcome_recordable).await;
-    }
-    stored_body_response(&session_id, StatusCode::OK, finished.body)
+    .await
 }
 
 /// Observe the original reservation without reopening its execution environment.
@@ -426,7 +403,7 @@ async fn durable_retry(
         RunStatus::Expired => return Err(Refusal::Expired),
         RunStatus::Indeterminate(_) => return Err(Refusal::Indeterminate),
         RunStatus::Queued | RunStatus::Running if !run.is_durable() => {
-            return Err(Refusal::InProgress);
+            return Err(Refusal::Indeterminate);
         }
         _ => {}
     }
@@ -453,8 +430,8 @@ pub(crate) fn durable_wait_response(
 /// Settle the key a run held: record `finished` when the program ran and its
 /// outcome may be recorded, release the key when nothing reached the runner
 /// (caching a transient failure would pin it to the key forever), and
-/// otherwise leave the key indeterminate by dropping the guard armed, since the
-/// program ran but what it did cannot be told.
+/// otherwise mark the key indeterminate, since the program ran but what it did
+/// cannot be told.
 async fn settle(
     mut guard: ReservationGuard,
     outcome: &execute::ExecuteOutcome,
@@ -469,7 +446,7 @@ async fn settle(
         }
         guard.complete(outcome.response.output()).await;
     } else {
-        drop(guard);
+        guard.abandon().await;
     }
 }
 
@@ -490,9 +467,9 @@ async fn reserve(
     code: &str,
     audit: &crate::audit::ExecutionAudit,
 ) -> Reserved {
-    // A run that is still going may have finished by the time it is looked up;
-    // its outcome is then recorded, and a second look finds it.
-    for _ in 0..2 {
+    // A run that just settled may retire its in-memory entry between lookup
+    // and attachment; its outcome is already recorded, so the next pass replays it.
+    loop {
         match state
             .idempotency()
             .prepare(
@@ -514,6 +491,7 @@ async fn reserve(
             }
             Reservation::Attached(run_id) => {
                 let Some(entry) = state.session_manager().runs().get(&run_id) else {
+                    state.idempotency().detach(&run_id);
                     continue;
                 };
                 if let Some(refused) = note_duplicate(state, session_id).await {
@@ -524,7 +502,6 @@ async fn reserve(
             }
         }
     }
-    Reserved::Answered(refusal_response(session_id, &Refusal::InProgress))
 }
 
 async fn replay_response(
@@ -573,11 +550,12 @@ async fn session_tools(
     state.session_manager().tools(session_id).await
 }
 
-/// Runs `code` in its own task, so it can outlive this request while it waits on
-/// the harness or an approver, and answers with the run's first settled state:
-/// suspended at a call, or finished. Everything that follows a run (its audit record, its
-/// last-run, its idempotency outcome) happens in that task, exactly once,
-/// whoever is listening.
+/// Runs `code` in its own task, so in-flight work outlives client disconnects,
+/// waits across requests when tools or approvals suspend it, and shares its
+/// live `RunEntry` with idempotent retries. Answers with the run's first
+/// settled state: suspended at a call, or finished. Everything that follows a
+/// run (its audit record, its last-run, its idempotency outcome) happens in
+/// that task, exactly once, whoever is listening.
 #[allow(clippy::too_many_arguments)]
 async fn run_detached(
     state: &AppState,
@@ -598,21 +576,19 @@ async fn run_detached(
     };
     let registry = Arc::clone(state.session_manager().runs());
     let (cancel, cancelled) = tokio::sync::oneshot::channel();
-    let entry = registry.insert(&audit.id, &session_id, cancel);
+    let can_suspend = tools.is_some() || bound.blueprint.asks();
+    let entry = registry.insert_session(&audit.id, &session_id, cancel, can_suspend);
     if let Some(guard) = &guard {
-        guard.attach_run(&entry.id);
+        guard.attach_run();
     }
     let suspension = execute::RunSuspension {
         tools: tools
             .as_ref()
             .map(|tools| run_tools(state, &entry, &session_id, &bound.blueprint, tools)),
-        approvals: Some(approval_provider(
-            state,
-            &entry,
-            &session_id,
-            &bound.blueprint,
-            &audit,
-        )),
+        approvals: bound
+            .blueprint
+            .asks()
+            .then(|| approval_provider(state, &entry, &session_id, &bound.blueprint, &audit)),
         cancel: Some(cancelled),
     };
     // The record ends with the run, not with this request.

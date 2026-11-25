@@ -131,8 +131,9 @@ pub struct SessionManager {
     cursor_keys: Option<Arc<CursorKeys>>,
     llm: LlmSettings,
     embedding: EmbeddingSettings,
-    /// Runs that may suspend at an application tool call. A session with one
-    /// unfinished is not idle, and ending the session ends them.
+    /// Active session runs tracked in memory, including runs waiting on
+    /// application tools or approvals. A session with one unfinished is not
+    /// idle, and ending the session ends them.
     runs: Arc<RunRegistry>,
     /// How long keyed executes keep their responses for replay.
     response_retention: ResponseRetention,
@@ -356,7 +357,7 @@ impl SessionManager {
         self
     }
 
-    /// The runs that may suspend at an application tool call.
+    /// Active session runs tracked in memory.
     pub fn runs(&self) -> &Arc<RunRegistry> {
         &self.runs
     }

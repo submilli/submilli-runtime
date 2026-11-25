@@ -1,6 +1,6 @@
-//! Runs that can stop at an application tool call (`@tools`), or at a call a
-//! rule asks an approver about (`ask-human`, `ask-admin`), and wait for the
-//! answer, in memory.
+//! Active session runs tracked in memory, including runs that can stop at an
+//! application tool call (`@tools`) or at a call a rule asks an approver about
+//! (`ask-human`, `ask-admin`) and wait for the answer.
 //!
 //! A run that calls a tool, or needs an approval, **suspends**: its Wasm
 //! instance stays parked in its owner task, awaiting the answer, and whoever is
@@ -290,11 +290,12 @@ impl RunInner {
     }
 }
 
-/// One run that may suspend.
+/// One tracked session run in memory.
 pub struct RunEntry {
     pub id: RunId,
     pub session_id: String,
     pub(crate) durable: bool,
+    pub(crate) can_suspend: bool,
     state: watch::Sender<RunView>,
     inner: Mutex<RunInner>,
     slots: Arc<Slots>,
@@ -571,7 +572,7 @@ impl RunEntry {
     }
 }
 
-/// Every run that may suspend, server-wide.
+/// Active session runs tracked in memory, server-wide.
 pub struct RunRegistry {
     runs: Mutex<HashMap<RunId, Arc<RunEntry>>>,
     slots: Arc<Slots>,
@@ -594,14 +595,25 @@ impl RunRegistry {
         }
     }
 
-    /// Register run `id` of `session_id`. `cancel` stops it.
+    /// Register suspensible run `id` of `session_id`. `cancel` stops it.
     pub fn insert(
         &self,
         id: &RunId,
         session_id: &str,
         cancel: oneshot::Sender<()>,
     ) -> Arc<RunEntry> {
-        self.insert_with_mode(id, session_id, cancel, false)
+        self.insert_with_mode(id, session_id, cancel, false, true)
+    }
+
+    /// Register non-durable session run `id` of `session_id`.
+    pub(crate) fn insert_session(
+        &self,
+        id: &RunId,
+        session_id: &str,
+        cancel: oneshot::Sender<()>,
+        can_suspend: bool,
+    ) -> Arc<RunEntry> {
+        self.insert_with_mode(id, session_id, cancel, false, can_suspend)
     }
 
     pub(crate) fn insert_durable(
@@ -610,7 +622,7 @@ impl RunRegistry {
         session_id: &str,
         cancel: oneshot::Sender<()>,
     ) -> Arc<RunEntry> {
-        self.insert_with_mode(id, session_id, cancel, true)
+        self.insert_with_mode(id, session_id, cancel, true, true)
     }
 
     fn insert_with_mode(
@@ -619,6 +631,7 @@ impl RunRegistry {
         session_id: &str,
         cancel: oneshot::Sender<()>,
         durable: bool,
+        can_suspend: bool,
     ) -> Arc<RunEntry> {
         let (state, _) = watch::channel(RunView {
             generation: 0,
@@ -628,6 +641,7 @@ impl RunRegistry {
             id: id.to_owned(),
             session_id: session_id.to_owned(),
             durable,
+            can_suspend,
             state,
             inner: Mutex::new(RunInner {
                 cancel: Some(cancel),

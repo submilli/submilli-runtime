@@ -265,6 +265,50 @@ async fn a_concurrent_duplicate_waits_for_the_original() {
 }
 
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repeated_retries_after_client_timeouts_wait_until_the_original_finishes() {
+    let mock = spawn_mock(true);
+    let (router, _ledger) = router_with_ledger().await;
+    let session = open_session(&router).await;
+    let code = calls_mock(mock.port);
+
+    let first = {
+        let (router, session, code) = (router.clone(), session.clone(), code.clone());
+        tokio::spawn(async move { execute(&router, &session, &code, Some("k1")).await })
+    };
+    mock.wait_for_arrival();
+
+    // Simulate a client whose earlier retry timed out on the client side, then
+    // retried again with the same key while the original run is still executing.
+    let timed_out_retry = {
+        let (router, session, code) = (router.clone(), session.clone(), code.clone());
+        tokio::spawn(async move { execute(&router, &session, &code, Some("k1")).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    timed_out_retry.abort();
+    let _ = timed_out_retry.await;
+
+    let final_retry = {
+        let (router, session, code) = (router.clone(), session.clone(), code.clone());
+        tokio::spawn(async move { execute(&router, &session, &code, Some("k1")).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !final_retry.is_finished(),
+        "a retried request must keep waiting until the original execution completes"
+    );
+
+    mock.release_one();
+    let (first_status, first_body) = first.await.unwrap();
+    let (retry_status, retry_body) = final_retry.await.unwrap();
+
+    assert_eq!(mock.hits(), 1, "only one execution may reach the mock");
+    assert_eq!(first_status, StatusCode::OK);
+    assert_eq!(retry_status, StatusCode::OK);
+    assert_eq!(retry_body, first_body);
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn a_failing_program_replays_its_error_body_without_re_running() {
     let mock = spawn_mock(false);
@@ -779,4 +823,115 @@ async fn unkeyed_http_session_and_one_shot_runs_persist_without_recording() {
         rows.iter()
             .all(|r| r.1 == "completed" && r.2.is_none() && r.3.is_none())
     );
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_in_flight_ordinary_run_keeps_lifecycle_metadata_on_get_and_unknown_run_on_resume() {
+    let mock = spawn_mock(true);
+    let (router, _ledger) = router_with_ledger().await;
+    let session = open_session(&router).await;
+    let code = calls_mock(mock.port);
+
+    let first = {
+        let (router, session, code) = (router.clone(), session.clone(), code.clone());
+        tokio::spawn(async move { execute(&router, &session, &code, Some("k1")).await })
+    };
+    mock.wait_for_arrival();
+
+    let (list_status, list_body) = send(
+        &router,
+        Request::builder()
+            .method("GET")
+            .uri(format!("/v1/runs?session={session}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(list_status, StatusCode::OK, "{list_body}");
+    let run_id = as_json(&list_body)["runs"][0]["execution_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let (get_status, get_body) = send(
+        &router,
+        Request::builder()
+            .method("GET")
+            .uri(format!("/v1/runs/{run_id}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(get_status, StatusCode::OK, "{get_body}");
+    let view = as_json(&get_body);
+    assert_eq!(view["status"], json!("running"));
+    assert_eq!(view["durable"], json!(false));
+    assert!(view["revision"].is_number(), "{get_body}");
+
+    let (resume_status, resume_body) = send(
+        &router,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/runs/{run_id}/resume"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "results": [{ "call_id": format!("{run_id}:1"), "ok": true, "value": 1 }] })
+                    .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(resume_status, StatusCode::NOT_FOUND, "{resume_body}");
+    assert_eq!(as_json(&resume_body)["error"], json!("unknown_run"));
+
+    mock.release_one();
+    let (done_status, _) = first.await.unwrap();
+    assert_eq!(done_status, StatusCode::OK);
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_a_session_cancels_both_original_and_attached_duplicate() {
+    let mock = spawn_mock(true);
+    let (router, _ledger) = router_with_ledger().await;
+    let session = open_session(&router).await;
+    let code = calls_mock(mock.port);
+
+    let first = {
+        let (router, session, code) = (router.clone(), session.clone(), code.clone());
+        tokio::spawn(async move { execute(&router, &session, &code, Some("k1")).await })
+    };
+    mock.wait_for_arrival();
+
+    let duplicate = {
+        let (router, session, code) = (router.clone(), session.clone(), code.clone());
+        tokio::spawn(async move { execute(&router, &session, &code, Some("k1")).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!duplicate.is_finished());
+
+    let delete = {
+        let (router, session) = (router.clone(), session.clone());
+        tokio::spawn(async move {
+            send(
+                &router,
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/sessions/{session}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    mock.release_one();
+
+    let (delete_status, _) = delete.await.unwrap();
+    assert_eq!(delete_status, StatusCode::NO_CONTENT);
+    let (first_status, first_body) = first.await.unwrap();
+    let (dup_status, dup_body) = duplicate.await.unwrap();
+    assert_eq!(first_status, dup_status);
+    assert_eq!(first_body, dup_body);
 }
