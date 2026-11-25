@@ -1494,6 +1494,10 @@ pub struct TypedClassField {
     /// `true` when this field shadows a method or accessor declared on a class
     /// in the inheritance chain.
     pub over_prototype: bool,
+    /// Declared as an abstract property (`abstract x: T;`), which emits no
+    /// storage at run time: an instance has no own property until a subclass
+    /// defines it.
+    pub abstract_property: bool,
     /// Set when this declaration *narrows* an inherited one. See
     /// [`FieldNarrowingCheck`]. Boxed because every class field carries this and
     /// almost none of them narrow.

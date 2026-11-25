@@ -80,6 +80,13 @@ struct ClassLayout {
     parent: Option<MangledName>,
     /// Full field list (inherited prefix then own), in object payload order.
     fields: Vec<FieldLayout>,
+    /// Unimplemented abstract properties on this class (declared here or
+    /// inherited without a concrete field, method, or accessor implementation).
+    abstract_fields: BTreeSet<String>,
+    /// Narrowing guards carried by unimplemented abstract properties, kept so
+    /// reads through this abstract class enforce its narrowing check and so
+    /// `has_instance_guards` agrees with cross-package reconstruction.
+    abstract_narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
     /// Full method slot list (inherited prefix then own/new), in vtable order.
     methods: Vec<MethodSlot>,
     /// Methods declared on *this* class (own or override) — each gets a real body.
@@ -150,11 +157,11 @@ impl ClassLayout {
             .iter()
             .map(|f| super::field_names::FieldName {
                 name: f.name.clone(),
-                // An `over_prototype` field starts absent (`flag = 0`) so
-                // accesses during `super()` and earlier field initializers
-                // still reach the inherited prototype member; field setup marks
-                // it present at its initialization point.
-                optional: f.optional || f.over_prototype,
+                // An `over_prototype` or `starts_absent` field starts absent
+                // (`flag = 0`) so accesses during `super()` and earlier field
+                // initializers still see the base/prototype state; field setup
+                // marks it present at its initialization point.
+                optional: f.optional || f.over_prototype || f.starts_absent,
                 is_accessor: false,
                 is_method: false,
                 is_private: self.private_members.contains(&f.name),
@@ -179,6 +186,11 @@ struct FieldLayout {
     name: String,
     optional: bool,
     over_prototype: bool,
+    /// `true` when this slot implements an inherited `abstract_property` (or is
+    /// inherited from a subclass that did): allocated absent so base
+    /// constructors do not see the property before the defining subclass runs
+    /// its field setup.
+    starts_absent: bool,
     /// Inherited along the layout prefix, so a subclass that does not redeclare
     /// still reads at the narrowed type. See [`crate::FieldNarrowingCheck`].
     narrowing_check: Option<Box<crate::FieldNarrowingCheck>>,
@@ -246,10 +258,6 @@ impl ClassPlan {
         // when its child is processed.
         let mut layouts: BTreeMap<MangledName, ResolvedLayout> = BTreeMap::new();
         let mut ordered: Vec<MangledName> = Vec::new();
-        // Which of each class's data-field slots came from its parent prefix —
-        // read back below to decide which own fields need a construction-time
-        // reset (see [`field_setup_steps`]).
-        let mut inherited_fields: BTreeMap<MangledName, BTreeSet<String>> = BTreeMap::new();
 
         for mangled in &order {
             let decl = class_decl(&by_mangled, mangled)?;
@@ -261,7 +269,7 @@ impl ClassPlan {
                 None => BTreeSet::new(),
             };
             for field in &decl.fields {
-                if field.visibility == crate::Visibility::Private {
+                if !field.abstract_property && field.visibility == crate::Visibility::Private {
                     private.insert(field.name.name.clone());
                 }
             }
@@ -274,9 +282,14 @@ impl ClassPlan {
             private_members.insert(mangled.clone(), private);
             // Parent prefix: a local parent (resolved earlier this pass) or an
             // imported parent (its full layout reconstructed in `imported_classes`).
-            let (parent_fields, parent_methods) = match decl.parent() {
+            let ParentPrefix {
+                fields: parent_fields,
+                methods: parent_methods,
+                abstract_fields: parent_abstract_fields,
+                abstract_narrowing_checks: parent_abstract_narrowing_checks,
+            } = match decl.parent() {
                 Some(parent) => parent_prefix(parent, &layouts, imported)?,
-                None => (Vec::new(), Vec::new()),
+                None => ParentPrefix::default(),
             };
 
             // Slot order is an internal ABI, not source order: own members sort
@@ -306,12 +319,27 @@ impl ClassPlan {
                 .collect();
             sorted_methods.sort_by(|(a, _, _), (b, _, _)| a.name.name.cmp(&b.name.name));
 
-            inherited_fields.insert(
-                mangled.clone(),
-                parent_fields.iter().map(|f| f.name.clone()).collect(),
-            );
+            let inherited: BTreeSet<String> =
+                parent_fields.iter().map(|f| f.name.clone()).collect();
+            let inherited_abstract = parent_abstract_fields.clone();
             let mut fields: Vec<FieldLayout> = parent_fields;
+            let mut abstract_fields = parent_abstract_fields;
+            let mut abstract_narrowing_checks = parent_abstract_narrowing_checks;
             for f in &own_fields {
+                if f.abstract_property {
+                    if let Some(slot) = fields.iter_mut().find(|e| e.name == f.name.name) {
+                        if let Some(check) = f.narrowing_check.clone() {
+                            slot.narrowing_check = Some(check);
+                        }
+                    } else {
+                        abstract_fields.insert(f.name.name.clone());
+                        if let Some(check) = &f.narrowing_check {
+                            abstract_narrowing_checks
+                                .insert(f.name.name.clone(), (**check).clone());
+                        }
+                    }
+                    continue;
+                }
                 let shadows_parent = !f.method_signature
                     && has_prototype_member(
                         parent_methods
@@ -331,12 +359,27 @@ impl ClassPlan {
                     }
                     continue;
                 }
+                let implements_abstract = abstract_fields.remove(&f.name.name);
+                let inherited_abstract_check = abstract_narrowing_checks.remove(&f.name.name);
                 fields.push(FieldLayout {
                     name: f.name.name.clone(),
                     optional: f.optional,
                     over_prototype: f.over_prototype || shadows_parent,
-                    narrowing_check: f.narrowing_check.clone(),
+                    starts_absent: implements_abstract,
+                    narrowing_check: f
+                        .narrowing_check
+                        .clone()
+                        .or_else(|| inherited_abstract_check.map(Box::new)),
                 });
+            }
+            let field_setup = field_setup_steps(decl, &inherited, &inherited_abstract, &fields)?;
+            for accessor in &decl.accessors {
+                abstract_fields.remove(&accessor.name().name);
+                abstract_narrowing_checks.remove(&accessor.name().name);
+            }
+            for method in &decl.methods {
+                abstract_fields.remove(&method.name.name);
+                abstract_narrowing_checks.remove(&method.name.name);
             }
 
             let mut methods: Vec<SlotDraft> = parent_methods;
@@ -437,7 +480,17 @@ impl ClassPlan {
                     });
                 }
             }
-            layouts.insert(mangled.clone(), (fields, methods, own_methods));
+            layouts.insert(
+                mangled.clone(),
+                ResolvedLayout {
+                    fields,
+                    methods,
+                    own_methods,
+                    field_setup,
+                    abstract_fields,
+                    abstract_narrowing_checks,
+                },
+            );
             ordered.push(mangled.clone());
         }
 
@@ -453,7 +506,14 @@ impl ClassPlan {
         let mut classes: Vec<ClassLayout> = Vec::with_capacity(ordered.len());
         for mangled in ordered {
             let decl = class_decl(&by_mangled, &mangled)?;
-            let (fields, method_drafts, own_methods) = layouts
+            let ResolvedLayout {
+                fields,
+                methods: method_drafts,
+                own_methods,
+                field_setup,
+                abstract_fields,
+                abstract_narrowing_checks,
+            } = layouts
                 .remove(&mangled)
                 .ok_or_else(|| internal_failure("a class layout was resolved out of order"))?;
             // An inherited signature comes from the typed AST with the
@@ -464,10 +524,6 @@ impl ClassPlan {
             let ctor_params = decl.effective_ctor_params().to_vec();
             let ctor_body = decl.constructor.as_ref().map(|c| c.body);
             ctor_params_by_mangled.insert(mangled.clone(), ctor_params.clone());
-            let inherited = inherited_fields.remove(&mangled).ok_or_else(|| {
-                internal_failure("a class's inherited field names were not recorded")
-            })?;
-            let field_setup = field_setup_steps(decl, &inherited, &fields)?;
             // get + set share a property name; dedup for the per-name string globals.
             let accessor_names: Vec<String> = decl
                 .accessors
@@ -487,6 +543,8 @@ impl ClassPlan {
                 name_span: decl.name.span,
                 parent: decl.parent().cloned(),
                 fields,
+                abstract_fields,
+                abstract_narrowing_checks,
                 field_setup,
                 accessor_names,
                 methods: method_drafts
@@ -695,7 +753,8 @@ impl ClassPlan {
                     || class
                         .fields
                         .iter()
-                        .any(|field| field.narrowing_check.is_some()),
+                        .any(|field| field.narrowing_check.is_some())
+                    || !class.abstract_narrowing_checks.is_empty(),
             )?;
             for (i, f) in class.fields.iter().enumerate() {
                 symbols.record_class_field_slot(
@@ -711,6 +770,18 @@ impl ClassPlan {
                     );
                 }
             }
+            let mut own_abstract_guards = Vec::new();
+            for (name, check) in &class.abstract_narrowing_checks {
+                symbols.record_class_field_narrowing_check(
+                    class.mangled.clone(),
+                    name.clone(),
+                    check.clone(),
+                );
+                if check.declaration.as_ref() == Some(&class.mangled) {
+                    own_abstract_guards.push(name.clone());
+                }
+            }
+            symbols.record_class_abstract_guard_slots(class.mangled.clone(), own_abstract_guards);
             // Method vtable slot (universal slots + parent link precede user
             // methods) + its sig, for every slot in the chain so a parent-typed
             // receiver resolves too.
@@ -1169,7 +1240,13 @@ impl ClassPlan {
                 None if extends_error => {
                     emit_error_slot_body(ctx.symbols, intrinsics, 0, intrinsics.to_string_fn)?
                 }
-                None => emit_class_to_string_body(ctx.symbols, intrinsics)?,
+                None => emit_object_vtable_slot_body(
+                    ctx.symbols,
+                    intrinsics,
+                    0,
+                    1,
+                    intrinsics.to_string_fn,
+                )?,
             };
             code.function(&to_string);
             code.function(&super::vtable_walk::guarded_body(
@@ -1193,6 +1270,19 @@ impl ClassPlan {
                 equals.instruction(&Instruction::RefEq);
                 equals.instruction(&Instruction::End);
                 code.function(&equals);
+            } else if !class.abstract_fields.is_empty() {
+                // An unimplemented abstract property may be defined dynamically
+                // via constructor write (`this.x = v`), appending slots past
+                // `class.fields.len()`. Delegate to the host object vtable,
+                // which checks exact class vtable identity and compares all
+                // present own data fields (skipping methods and accessors).
+                code.function(&emit_object_vtable_slot_body(
+                    ctx.symbols,
+                    intrinsics,
+                    2,
+                    2,
+                    intrinsics.equals_fn,
+                )?);
             } else {
                 let equals = emit_class_equals_body(field_count, intrinsics);
                 super::check_generated_body(&equals, "equals", describe_class)?;
@@ -1208,6 +1298,14 @@ impl ClassPlan {
                     ctx.symbols,
                     intrinsics,
                     3,
+                    intrinsics.hash_fn,
+                )?);
+            } else if !class.abstract_fields.is_empty() {
+                code.function(&emit_object_vtable_slot_body(
+                    ctx.symbols,
+                    intrinsics,
+                    3,
+                    1,
                     intrinsics.hash_fn,
                 )?);
             } else {
@@ -1853,17 +1951,25 @@ impl ClassPlan {
 /// order). Parameter-property fields are the auto-assigned own fields; their copy
 /// reads the matching constructor param (init-fn local `position + 1`; self is 0).
 ///
-/// A field that only redeclares an inherited one contributes a
-/// [`FieldSetup::Reset`] instead — see [`redeclares_uninitialized_slot`].
-/// `inherited` names the slots the parent prefix already owns.
+/// A field that only redeclares an inherited one, or implements an inherited
+/// abstract property without an initializer, contributes a [`FieldSetup::Reset`]
+/// instead — see [`redeclares_uninitialized_slot`] and
+/// [`defines_uninitialized_abstract_slot`]. `inherited` names the concrete slots
+/// the parent prefix already owns, and `inherited_abstract` names the parent's
+/// unimplemented abstract properties.
 fn field_setup_steps(
     decl: &TypedClassDecl,
     inherited: &BTreeSet<String>,
+    inherited_abstract: &BTreeSet<String>,
     fields: &[FieldLayout],
 ) -> Result<Vec<FieldSetup>, CompilerFailure> {
     let mut steps = Vec::new();
     if let Some(ctor) = &decl.constructor {
-        for field in decl.fields.iter().filter(|f| f.auto_assigned) {
+        for field in decl
+            .fields
+            .iter()
+            .filter(|f| f.auto_assigned && !f.abstract_property)
+        {
             if let Some(param) = ctor.params.iter().find(|p| p.name.name == field.name.name) {
                 steps.push(FieldSetup::ParamCopy {
                     field: field.name.name.clone(),
@@ -1873,6 +1979,9 @@ fn field_setup_steps(
         }
     }
     for field in &decl.fields {
+        if field.abstract_property {
+            continue;
+        }
         let over_prototype = fields
             .iter()
             .find(|layout| layout.name == field.name.name)
@@ -1884,6 +1993,7 @@ fn field_setup_steps(
             });
         } else if redeclares_uninitialized_slot(field, inherited)
             || (over_prototype && !field.auto_assigned && !field.method_signature)
+            || defines_uninitialized_abstract_slot(field, inherited_abstract)
         {
             steps.push(FieldSetup::Reset {
                 field: field.name.name.clone(),
@@ -1986,7 +2096,22 @@ fn redeclares_uninitialized_slot(
     field.optional
         && !field.auto_assigned
         && !field.method_signature
+        && !field.abstract_property
         && inherited.contains(&field.name.name)
+}
+
+/// Whether this concrete field implements an inherited abstract property
+/// without an initializer. Its slot starts absent so base constructors do not
+/// see it, then becomes defined (holding `undefined`, discarding any write made
+/// by a base constructor) at this class's field initialization point.
+fn defines_uninitialized_abstract_slot(
+    field: &crate::TypedClassField,
+    inherited_abstract: &BTreeSet<String>,
+) -> bool {
+    !field.auto_assigned
+        && !field.method_signature
+        && !field.abstract_property
+        && inherited_abstract.contains(&field.name.name)
 }
 
 /// Export/linker field name of a class's vtable-singleton global. The space in
@@ -2145,20 +2270,40 @@ struct SlotDraft {
     absent: bool,
 }
 
-/// A class's resolved (fields, method slots, own-method names) during the
-/// inheritance-folding pass in [`ClassPlan::collect`].
-type ResolvedLayout = (Vec<FieldLayout>, Vec<SlotDraft>, Vec<OwnMethod>);
+/// A class's resolved fields, method slots, own methods, field setup, and
+/// abstract properties during the inheritance-folding pass in [`ClassPlan::collect`].
+struct ResolvedLayout {
+    fields: Vec<FieldLayout>,
+    methods: Vec<SlotDraft>,
+    own_methods: Vec<OwnMethod>,
+    field_setup: Vec<FieldSetup>,
+    abstract_fields: BTreeSet<String>,
+    abstract_narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
+}
 
-/// The inherited field and method-slot prefix of a class whose parent is
-/// `parent`: a local class laid out earlier in topological order, or an
-/// imported one reconstructed before local classes.
+#[derive(Default)]
+struct ParentPrefix {
+    fields: Vec<FieldLayout>,
+    methods: Vec<SlotDraft>,
+    abstract_fields: BTreeSet<String>,
+    abstract_narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
+}
+
+/// The inherited field, method-slot, and abstract-field prefix of a class whose
+/// parent is `parent`: a local class laid out earlier in topological order, or
+/// an imported one reconstructed before local classes.
 fn parent_prefix(
     parent: &MangledName,
     layouts: &BTreeMap<MangledName, ResolvedLayout>,
     imported: &BTreeMap<MangledName, ImportedClassLayout>,
-) -> Result<(Vec<FieldLayout>, Vec<SlotDraft>), CompilerFailure> {
-    if let Some((fields, methods, _)) = layouts.get(parent) {
-        return Ok((fields.clone(), methods.clone()));
+) -> Result<ParentPrefix, CompilerFailure> {
+    if let Some(resolved) = layouts.get(parent) {
+        return Ok(ParentPrefix {
+            fields: resolved.fields.clone(),
+            methods: resolved.methods.clone(),
+            abstract_fields: resolved.abstract_fields.clone(),
+            abstract_narrowing_checks: resolved.abstract_narrowing_checks.clone(),
+        });
     }
     let layout = imported
         .get(parent)
@@ -2170,6 +2315,7 @@ fn parent_prefix(
             name: name.clone(),
             optional: layout.optional_fields.contains(name),
             over_prototype: layout.over_prototype_fields.contains(name),
+            starts_absent: layout.starts_absent_fields.contains(name),
             narrowing_check: layout.narrowing_checks.get(name).cloned().map(Box::new),
         })
         .collect();
@@ -2187,7 +2333,22 @@ fn parent_prefix(
             absent: s.absent,
         })
         .collect();
-    Ok((fields, methods))
+    let abstract_narrowing_checks = layout
+        .abstract_fields
+        .iter()
+        .filter_map(|name| {
+            layout
+                .narrowing_checks
+                .get(name)
+                .map(|check| (name.clone(), check.clone()))
+        })
+        .collect();
+    Ok(ParentPrefix {
+        fields,
+        methods,
+        abstract_fields: layout.abstract_fields.clone(),
+        abstract_narrowing_checks,
+    })
 }
 
 fn unavailable_parent(parent: &MangledName) -> CompilerFailure {
@@ -2536,24 +2697,30 @@ fn emit_universal_slot_thunk(
     emitter.build()
 }
 
-/// A class without a `toString` method converts through the host object vtable,
-/// which calls an own `toString` field when it holds a function and gives
-/// `[object Object]` otherwise.
-fn emit_class_to_string_body(
+/// Forward a class's universal vtable slot (`toString`, `equals`, `hash`) to
+/// the host `object_vtable`: used for default class `toString` (which invokes
+/// an own `toString` field when present), or for `equals`/`hash` when an
+/// unimplemented abstract property may be inserted dynamically at run time.
+fn emit_object_vtable_slot_body(
     symbols: &SymbolTable,
     intrinsics: IntrinsicTypeIndices,
+    slot: u32,
+    arity: u32,
+    slot_fn_type: u32,
 ) -> Result<Function, CompilerFailure> {
     let object_vtable = symbols
         .prelude_global_idx("object_vtable")
         .ok_or_else(|| internal_failure("object_vtable is not imported from the prelude"))?;
     let mut f = Function::new([]);
-    f.instruction(&Instruction::LocalGet(0));
+    for param in 0..arity {
+        f.instruction(&Instruction::LocalGet(param));
+    }
     f.instruction(&Instruction::GlobalGet(object_vtable));
     f.instruction(&Instruction::StructGet {
         struct_type_index: intrinsics.vtable,
-        field_index: 0,
+        field_index: slot,
     });
-    f.instruction(&Instruction::CallRef(intrinsics.to_string_fn));
+    f.instruction(&Instruction::CallRef(slot_fn_type));
     f.instruction(&Instruction::End);
     Ok(f)
 }
@@ -2765,15 +2932,19 @@ mod tests {
                     name: "message".to_string(),
                     optional: false,
                     over_prototype: false,
+                    starts_absent: false,
                     narrowing_check: None,
                 },
                 FieldLayout {
                     name: "name".to_string(),
                     optional: false,
                     over_prototype: false,
+                    starts_absent: false,
                     narrowing_check: None,
                 },
             ],
+            abstract_fields: BTreeSet::new(),
+            abstract_narrowing_checks: BTreeMap::new(),
             methods: Vec::new(),
             own_methods: Vec::new(),
             adapter_slots: Vec::new(),

@@ -73,7 +73,15 @@ pub(super) async fn get(
     if let Some(property) = find(caller, object, &key, false)?
         && field_is_present(caller, &property.name, &property.value)?
     {
-        return checked_data_value(caller, object, property.slot, property.value).await;
+        let mut had_effect = false;
+        return checked_data_value(
+            caller,
+            object,
+            property.slot,
+            property.value,
+            &mut had_effect,
+        )
+        .await;
     }
     if let Some(property) = find(caller, object, &accessor_key("get ", &key)?, true)? {
         return super::super::closure::read(caller, &property.value, "property getter")?
@@ -89,12 +97,15 @@ pub(super) async fn get(
 }
 
 /// Hidden payload rows retain concrete class validators across structural views.
-/// Insertion preserves one guard per named slot plus the row's generic context.
+/// Insertion preserves one guard per named slot plus the row's generic context
+/// (whose environment array also carries `(field_name, guard_closure)` pairs for
+/// abstract narrowed properties declared on that class).
 async fn checked_data_value(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
     slot: u32,
     mut value: Val,
+    had_effect: &mut bool,
 ) -> wasmtime::Result<Val> {
     let Some((names, fields)) = shape_arrays(caller, object)? else {
         return Err(crate::runtime::host::fatal_host_error(
@@ -114,15 +125,106 @@ async fn checked_data_value(
             "malformed class field guard rows",
         ));
     }
+    if hidden == 0 {
+        return Ok(value);
+    }
+    charge_or_settle_elem(caller, u64::from(hidden / width), *had_effect)?;
+    let mut slot_key: Option<Vec<u16>> = None;
     for row in (named_len..total).step_by(width as usize) {
         let guard = fields.get(&mut *caller, row + slot)?;
         if !matches!(guard, Val::AnyRef(None)) {
+            *had_effect = true;
             value = super::super::closure::read(caller, &guard, "class field guard")?
                 .call(caller, &[value])
                 .await?;
         }
+        let ctx_val = fields.get(&mut *caller, row + named_len)?;
+        value = check_row_abstract_guards(
+            caller,
+            &names,
+            slot,
+            &ctx_val,
+            &mut slot_key,
+            value,
+            had_effect,
+        )
+        .await?;
     }
     Ok(value)
+}
+
+async fn check_row_abstract_guards(
+    caller: &mut Caller<'_, StoreData>,
+    names: &wasmtime::Rooted<wasmtime::ArrayRef>,
+    slot: u32,
+    ctx_val: &Val,
+    slot_key: &mut Option<Vec<u16>>,
+    mut value: Val,
+    had_effect: &mut bool,
+) -> wasmtime::Result<Val> {
+    if matches!(ctx_val, Val::AnyRef(None)) {
+        return Ok(value);
+    }
+    let env_val = super::super::closure::read(caller, ctx_val, "class context")?.env();
+    let Val::AnyRef(Some(env_ref)) = env_val else {
+        return Ok(value);
+    };
+    let Some(env) = env_ref.as_array(&mut *caller)? else {
+        return Ok(value);
+    };
+    let env_len = env.len(&mut *caller)?;
+    charge_or_settle_elem(caller, u64::from(env_len), *had_effect)?;
+    let intr = super::intrinsic_types(&mut *caller)?;
+    let mut idx = 0;
+    while idx < env_len.saturating_sub(1) {
+        let entry = env.get(&mut *caller, idx)?;
+        if !super::super::collection::is_a(caller, &entry, &intr.string)? {
+            idx += 1;
+            continue;
+        }
+        let target_key = if let Some(key) = slot_key.as_ref() {
+            key.as_slice()
+        } else {
+            let slot_name = names.get(&mut *caller, slot)?;
+            let units = read_name_units(caller, &slot_name, *had_effect)?;
+            slot_key.insert(units).as_slice()
+        };
+        if read_name_units(caller, &entry, *had_effect)?.as_slice() == target_key {
+            let abs_guard = env.get(&mut *caller, idx + 1)?;
+            if !matches!(abs_guard, Val::AnyRef(None)) {
+                *had_effect = true;
+                value = super::super::closure::read(caller, &abs_guard, "class field guard")?
+                    .call(caller, &[value])
+                    .await?;
+            }
+        }
+        idx += 2;
+    }
+    Ok(value)
+}
+
+fn charge_or_settle_elem(
+    caller: &mut Caller<'_, StoreData>,
+    count: u64,
+    had_effect: bool,
+) -> wasmtime::Result<()> {
+    if had_effect {
+        fuel::settle(&mut *caller, fuel::ELEM, count)
+    } else {
+        fuel::charge(&mut *caller, fuel::ELEM, count)
+    }
+}
+
+fn read_name_units(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+    had_effect: bool,
+) -> wasmtime::Result<Vec<u16>> {
+    if had_effect {
+        fuel::settle_result(caller, |caller| read_string_units(caller, name, FIELD_NAME))
+    } else {
+        read_string_units(caller, name, FIELD_NAME)
+    }
 }
 
 pub(super) async fn set(
@@ -501,7 +603,8 @@ async fn values(
                 result.push(caller, got)?;
             }
             Some(RecordEntry::Data) => {
-                let checked = checked_data_value(caller, object, slot, value).await?;
+                let checked =
+                    checked_data_value(caller, object, slot, value, &mut had_effect).await?;
                 result.push(caller, checked)?;
             }
             None => {}

@@ -339,6 +339,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                     optional: false, doc: None,
                     method: false,
                     over_prototype: false,
+                    abstract_property: false,
                 })]),
                 narrowing_checks: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),

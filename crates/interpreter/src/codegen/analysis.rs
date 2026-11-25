@@ -193,6 +193,10 @@ impl CodegenAnalysis {
                 .runtime_class_contexts
                 .values()
                 .any(|contexts| !contexts.is_empty())
+            || ta
+                .runtime_field_guards
+                .values()
+                .any(|guards| !guards.is_empty())
             // A generic closure reached without type arguments binds poisoned
             // descriptors, which test as `never`.
             || super::generic_binding::binds_type_arguments(ta, dependencies)?
@@ -217,6 +221,11 @@ impl CodegenAnalysis {
                 if let crate::FunctionArgumentCheck::Checked(check) = argument {
                     analysis.note_cast(&check.target, Some(&check.check))?;
                 }
+            }
+        }
+        for guards in ta.runtime_field_guards.values() {
+            for guard in guards {
+                analysis.extra_field_names.push(guard.field.clone());
             }
         }
         analysis.note_narrowing_checks(ta)?;

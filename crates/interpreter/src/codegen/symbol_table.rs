@@ -103,6 +103,11 @@ pub struct SymbolTable {
     /// Struct slot index (4 + declaration position) of a class field, for
     /// `struct.get`/`struct.set` on a class-typed receiver.
     class_field_slot: BTreeMap<(MangledName, String), u32>,
+    /// Sorted names of abstract properties whose narrowing check is declared by
+    /// this class. Each entry occupies a fixed tail slot in this class's
+    /// context-row environment so instance field guards survive dynamic field
+    /// insertion and are available before/during/after construction.
+    class_abstract_guard_slots: BTreeMap<MangledName, Vec<String>>,
     /// Read guards, keyed by `(class, field)`. See [`crate::FieldNarrowingCheck`].
     class_field_narrowing_check: BTreeMap<(MangledName, String), crate::FieldNarrowingCheck>,
     /// Constructor field-setup steps (parameter-property copies then own-field
@@ -425,6 +430,21 @@ impl SymbolTable {
             .copied()
     }
 
+    pub fn class_abstract_guard_slot(&self, class: &MangledName, field: &str) -> Option<u32> {
+        let fields = self.class_abstract_guard_slots.get(class)?;
+        fields
+            .binary_search_by(|name| name.as_str().cmp(field))
+            .ok()
+            .and_then(|idx| u32::try_from(idx).ok())
+    }
+
+    pub fn class_abstract_guard_count(&self, class: &MangledName) -> u32 {
+        self.class_abstract_guard_slots
+            .get(class)
+            .and_then(|fields| u32::try_from(fields.len()).ok())
+            .unwrap_or(0)
+    }
+
     /// `None` for every ordinary field. See [`crate::FieldNarrowingCheck`].
     pub fn class_field_narrowing_check(
         &self,
@@ -707,6 +727,18 @@ impl SymbolTable {
 
     pub fn record_class_field_slot(&mut self, class: MangledName, field: String, slot: u32) {
         self.class_field_slot.insert((class, field), slot);
+    }
+
+    pub fn record_class_abstract_guard_slots(
+        &mut self,
+        class: MangledName,
+        mut fields: Vec<String>,
+    ) {
+        if !fields.is_empty() {
+            fields.sort();
+            fields.dedup();
+            self.class_abstract_guard_slots.insert(class, fields);
+        }
     }
 
     pub fn record_class_field_setup(&mut self, class: MangledName, setup: Vec<FieldSetup>) {

@@ -1444,6 +1444,11 @@ pub struct FieldSig {
     /// in the inheritance chain.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub over_prototype: bool,
+    /// Declared as an abstract property (`abstract x: T;`), which defines no
+    /// storage on this class; a subclass defines the property or implements it
+    /// with an accessor.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub abstract_property: bool,
     pub doc: Option<crate::DocComment>,
 }
 
@@ -1708,6 +1713,7 @@ mod non_finite_artifact_roundtrip {
             optional: false,
             method: false,
             over_prototype: false,
+            abstract_property: false,
             doc: None,
         };
         let plain_json = serde_json::to_string(&plain).unwrap();
@@ -1732,6 +1738,49 @@ mod non_finite_artifact_roundtrip {
         assert_eq!(
             serde_json::from_str::<super::FieldSig>(&shadowing_json).unwrap(),
             shadowing
+        );
+    }
+}
+
+#[cfg(test)]
+mod field_sig_tests {
+    use super::FieldSig;
+    use crate::Type;
+
+    #[test]
+    fn field_sig_abstract_property_defaults_and_round_trips() {
+        let concrete = FieldSig {
+            ty: Type::Number,
+            visibility: crate::Visibility::Public,
+            readonly: false,
+            optional: false,
+            method: false,
+            over_prototype: false,
+            abstract_property: false,
+            doc: None,
+        };
+        let concrete_json = serde_json::to_string(&concrete).unwrap();
+        assert!(
+            !concrete_json.contains("abstract_property"),
+            "default false flag should be omitted from JSON: {concrete_json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<FieldSig>(&concrete_json).unwrap(),
+            concrete
+        );
+
+        let abstract_field = FieldSig {
+            abstract_property: true,
+            ..concrete
+        };
+        let abstract_json = serde_json::to_string(&abstract_field).unwrap();
+        assert!(
+            abstract_json.contains(r#""abstract_property":true"#),
+            "true flag should serialize: {abstract_json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<FieldSig>(&abstract_json).unwrap(),
+            abstract_field
         );
     }
 }
