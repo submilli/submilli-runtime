@@ -658,6 +658,8 @@ pub(crate) async fn prepare_execution(
         mcp_transport,
         tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
         approval_provider,
+        // This server puts no question to a person: `ask` is unanswerable here.
+        ask_provider: None,
         session_kv,
         session_finalizers: match manager.finalizer_provider(session_id, &packages) {
             Ok(provider) => Some(provider),

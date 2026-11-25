@@ -529,6 +529,26 @@ const VARIABLES: &[Capability] = &[Capability {
     example_filter: "name == \"BROWSER_STORE_NAME\"",
 }];
 
+const HUMAN: &[Capability] = &[Capability {
+    name: "human.ask",
+    main_denial: None,
+    summary: "Ask a person a question and wait for the answer (a sensitive question is refused to main, including a Function, whatever the policy says)",
+    filter_fields: &[
+        field(
+            "to",
+            "string",
+            "Whom the question goes to: \"human\" or \"admin\"",
+        ),
+        field(
+            "answer",
+            "string",
+            "How it is answered: \"text\" or \"choice\"",
+        ),
+        field("sensitive", "boolean", "Whether the answer is a credential"),
+    ],
+    example_filter: "to == \"human\"",
+}];
+
 const SESSION: &[Capability] = &[
     Capability {
         name: "session.finalize",
@@ -590,6 +610,10 @@ const CORE_CATALOG: &[CapabilityGroup] = &[
     CapabilityGroup {
         module: "submilli:http",
         capabilities: HTTP,
+    },
+    CapabilityGroup {
+        module: "submilli:human",
+        capabilities: HUMAN,
     },
     CapabilityGroup {
         module: "submilli:llm",

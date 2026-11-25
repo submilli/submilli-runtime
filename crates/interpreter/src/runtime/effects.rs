@@ -332,3 +332,92 @@ mod tests {
         }
     }
 }
+
+/// An in-memory history for tests: records a run's outcomes, then replays them.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::Mutex;
+
+    use super::{EffectCall, EffectHistory, HistoryError, RecordedOutcome};
+    use crate::runtime::durable::EffectId;
+
+    #[derive(Default)]
+    pub(crate) struct MemoryHistory {
+        state: Mutex<ReplayState>,
+    }
+
+    #[derive(Default)]
+    struct ReplayState {
+        outcomes: Vec<RecordedOutcome>,
+        cursor: usize,
+        replay: bool,
+    }
+
+    impl MemoryHistory {
+        /// Replays the recorded outcomes from the start; past them, the run continues live.
+        pub(crate) fn replay(&self) {
+            let mut state = self.state.lock().expect("history mutex");
+            state.replay = true;
+            state.cursor = 0;
+        }
+
+        pub(crate) fn recorded_len(&self) -> usize {
+            self.state.lock().expect("history mutex").outcomes.len()
+        }
+
+        pub(crate) fn outcomes(&self) -> Vec<RecordedOutcome> {
+            self.state.lock().expect("history mutex").outcomes.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EffectHistory for MemoryHistory {
+        async fn begin(
+            &self,
+            _operation: &str,
+            _fingerprint: [u8; 32],
+        ) -> Result<EffectCall, HistoryError> {
+            let mut state = self.state.lock().expect("history mutex");
+            let id = EffectId::stub().map_err(|err| HistoryError(err.to_string()))?;
+            if state.replay
+                && let Some(recorded) = state.outcomes.get(state.cursor).cloned()
+            {
+                let sequence = state.cursor as u64;
+                state.cursor += 1;
+                return Ok(EffectCall {
+                    id,
+                    sequence,
+                    recorded: Some(recorded),
+                });
+            }
+            Ok(EffectCall {
+                id,
+                sequence: state.outcomes.len() as u64,
+                recorded: None,
+            })
+        }
+
+        async fn complete(
+            &self,
+            call: &EffectCall,
+            outcome: RecordedOutcome,
+        ) -> Result<(), HistoryError> {
+            let mut state = self.state.lock().expect("history mutex");
+            if state.replay && (call.sequence as usize) < state.outcomes.len() {
+                return Ok(());
+            }
+            if call.sequence as usize != state.outcomes.len() {
+                return Err(HistoryError("effect completed out of order".into()));
+            }
+            state.outcomes.push(outcome);
+            if state.replay {
+                state.cursor = state.outcomes.len();
+            }
+            Ok(())
+        }
+
+        async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
+            Ok(())
+        }
+    }
+}

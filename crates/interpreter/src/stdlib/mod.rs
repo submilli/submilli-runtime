@@ -24,6 +24,7 @@ pub mod fs;
 pub mod functions;
 pub mod git;
 pub mod http;
+pub mod human;
 pub(crate) mod json_schema;
 pub mod llm;
 pub mod secrets;
@@ -231,6 +232,7 @@ fn core_package_declarations() -> Vec<PackageDeclaration> {
         fs::package_declaration(),
         git::package_declaration(),
         http::package_declaration(),
+        human::package_declaration(),
         llm::package_declaration(),
         secrets::package_declaration(),
         security::package_declaration(),
@@ -249,6 +251,7 @@ fn install_core_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Resu
     fs::install(linker)?;
     git::install(linker)?;
     http::install(linker)?;
+    human::install(linker)?;
     llm::install(linker)?;
     secrets::install(linker)?;
     security::install(linker)?;

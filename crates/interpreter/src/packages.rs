@@ -1116,6 +1116,9 @@ fn module_description(name: &str) -> &'static str {
         "submilli:fs" => "Sandbox filesystem: files and directories under the VFS root.",
         "submilli:git" => "Capability-controlled Git repositories in the VFS, with HTTPS remotes.",
         "submilli:http" => "Outbound HTTP requests, and downloads into the filesystem.",
+        "submilli:human" => {
+            "Ask a person a question, answered with text or a choice, and wait durably for the answer."
+        }
         "submilli:llm" => {
             "Gated model calls: text/texts for text, call<T>/batch<T> for checked values, and models() to discover them."
         }
@@ -5284,6 +5287,7 @@ mod tests {
             "PermissionDeniedError",
             "TimeoutError",
             "MissingValueError",
+            "NoAnswerError",
         ] {
             assert!(
                 lib.contains(&format!("declare class {class} extends Error {{")),

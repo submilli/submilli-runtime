@@ -66,10 +66,11 @@ pub(crate) enum BuiltinErrorClass {
     PermissionDenied,
     Timeout,
     MissingValue,
+    NoAnswer,
 }
 
 impl BuiltinErrorClass {
-    const SUBCLASSES: [Self; 9] = [
+    const SUBCLASSES: [Self; 10] = [
         Self::Range,
         Self::QuotaExceeded,
         Self::Type,
@@ -79,6 +80,7 @@ impl BuiltinErrorClass {
         Self::PermissionDenied,
         Self::Timeout,
         Self::MissingValue,
+        Self::NoAnswer,
     ];
 
     pub(crate) fn name_text(self) -> &'static str {
@@ -93,6 +95,7 @@ impl BuiltinErrorClass {
             Self::PermissionDenied => "PermissionDeniedError",
             Self::Timeout => "TimeoutError",
             Self::MissingValue => "MissingValueError",
+            Self::NoAnswer => "NoAnswerError",
         }
     }
 
@@ -112,14 +115,15 @@ impl BuiltinErrorClass {
             | Self::Timeout
             | Self::MissingValue => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
+            Self::NoAnswer => &["reason"],
         }
     }
 
     /// Whether the constructor takes `ErrorOptions` after the message, as the
-    /// standard classes do. `PermissionDeniedError`'s trailing parameters are
-    /// its own fields.
+    /// standard classes do. `PermissionDeniedError`'s and `NoAnswerError`'s
+    /// trailing parameters are their own fields.
     fn takes_options(self) -> bool {
-        self != Self::PermissionDenied
+        !matches!(self, Self::PermissionDenied | Self::NoAnswer)
     }
 
     fn vtable(self, handles: &crate::runtime::host::HostAbiHandles) -> Global {
@@ -134,6 +138,7 @@ impl BuiltinErrorClass {
             Self::PermissionDenied => handles.permission_denied_vtable,
             Self::Timeout => handles.timeout_vtable,
             Self::MissingValue => handles.missing_value_vtable,
+            Self::NoAnswer => handles.no_answer_vtable,
         }
     }
 
@@ -149,6 +154,7 @@ impl BuiltinErrorClass {
             | Self::Timeout
             | Self::MissingValue => handles.error_field_names,
             Self::PermissionDenied => handles.permission_denied_field_names,
+            Self::NoAnswer => handles.no_answer_field_names,
         }
     }
 
@@ -163,7 +169,8 @@ impl BuiltinErrorClass {
             | Self::Reference
             | Self::PermissionDenied
             | Self::Timeout
-            | Self::MissingValue => handles.error_subclass_type.clone(),
+            | Self::MissingValue
+            | Self::NoAnswer => handles.error_subclass_type.clone(),
         }
     }
 }
@@ -181,8 +188,10 @@ pub(crate) struct ErrorHost {
     pub permission_denied_vtable: Global,
     pub timeout_vtable: Global,
     pub missing_value_vtable: Global,
+    pub no_answer_vtable: Global,
     pub field_names: Global,
     pub permission_denied_field_names: Global,
+    pub no_answer_field_names: Global,
     pub tag: Tag,
 }
 
@@ -338,6 +347,9 @@ pub(crate) fn install_store_bound(
     let mut pd_names = ERROR_FIELDS.to_vec();
     pd_names.extend(BuiltinErrorClass::PermissionDenied.own_fields());
     let permission_denied_field_names = field_names_global(store, &pd_names)?;
+    let mut no_answer_names = ERROR_FIELDS.to_vec();
+    no_answer_names.extend(BuiltinErrorClass::NoAnswer.own_fields());
+    let no_answer_field_names = field_names_global(store, &no_answer_names)?;
 
     let slots = build_error_vtable(store, intr)?;
     let pre = StructRefPre::new(&mut *store, intr.error_vtable.clone());
@@ -386,6 +398,7 @@ pub(crate) fn install_store_bound(
         permission_denied_vtable,
         timeout_vtable,
         missing_value_vtable,
+        no_answer_vtable,
     ] = BuiltinErrorClass::SUBCLASSES.map(|class| {
         install_subclass_vtable(
             linker,
@@ -408,8 +421,10 @@ pub(crate) fn install_store_bound(
         permission_denied_vtable: permission_denied_vtable?,
         timeout_vtable: timeout_vtable?,
         missing_value_vtable: missing_value_vtable?,
+        no_answer_vtable: no_answer_vtable?,
         field_names,
         permission_denied_field_names,
+        no_answer_field_names,
         tag,
     })
 }
@@ -639,6 +654,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         BuiltinErrorClass::PermissionDenied,
         BuiltinErrorClass::Timeout,
         BuiltinErrorClass::MissingValue,
+        BuiltinErrorClass::NoAnswer,
     ] {
         let mut init_params = vec![object_ref.clone()];
         init_params.extend(ctor_params(class, &string_ref, &nullable_object));
@@ -1351,6 +1367,51 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     );
 
     defs.types.insert(
+        "NoAnswerError".to_string(),
+        TypeSymbol {
+            name: "NoAnswerError".to_string(),
+            mangled_name: crate::mangle::prelude("NoAnswerError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Default::default(),
+                // Own field beyond the inherited `cause`/`message`/`name`. Keep
+                // `BuiltinErrorClass::NoAnswer.own_fields()` in sync.
+                fields: BTreeMap::from([(
+                    "reason".to_string(),
+                    crate::FieldSig {
+                        ty: no_answer_reason_type(),
+                        visibility: crate::Visibility::Public,
+                        readonly: false,
+                        optional: false,
+                        method: false,
+                        over_prototype: false,
+                        doc: doc(
+                            "/** Why there is no answer: `\"declined\"` (the person said no; `message` holds what they said, if anything), `\"expired\"` (nobody answered before the deadline), or `\"unanswerable\"` (this run cannot ask anyone). */",
+                        ),
+                    },
+                )]),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: vec![
+                    Param::new("message", Type::String),
+                    Param::new("reason", no_answer_reason_type()),
+                ],
+                constructor_visibility: crate::Visibility::Public,
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** A question `ask` (`submilli:human`) put to a person got no answer (`extends Error`, `name` = `\"NoAnswerError\"`). Branch on `reason`; for `\"declined\"`, `message` holds what the person said instead. Catch it to carry on without the answer: `catch (e: NoAnswerError)`. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
         "SyntaxError".to_string(),
         TypeSymbol {
             name: "SyntaxError".to_string(),
@@ -1435,6 +1496,16 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     );
 }
 
+/// `NoAnswerError.reason`: why a question got no answer.
+fn no_answer_reason_type() -> crate::Type {
+    crate::Type::union(
+        crate::runtime::host::NoAnswerReason::ALL
+            .iter()
+            .map(|reason| crate::Type::StringLiteral(reason.as_str().to_string()))
+            .collect(),
+    )
+}
+
 /// The standard error constructor's `(message?, options?)`.
 fn message_and_options_params() -> Vec<crate::Param> {
     vec![
@@ -1470,6 +1541,8 @@ mod tests {
             (BuiltinErrorClass::Error, 1),
             (BuiltinErrorClass::PermissionDenied, 0),
             (BuiltinErrorClass::PermissionDenied, 4),
+            (BuiltinErrorClass::NoAnswer, 0),
+            (BuiltinErrorClass::NoAnswer, 2),
         ] {
             let error = validate_own_field_count(class, invalid).unwrap_err();
             assert!(error.is::<crate::runtime::host::FatalHostError>());

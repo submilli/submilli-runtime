@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a1fec31084ca557d2d745b5e1843740604debf8a00acb5160cd577755308dac7"
+  contentHash: "8683aaaf49a00d9bcdcb5d7c9f34fa8a94e103e229c8243d3c32cecb2b597c1d"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -403,6 +403,15 @@ A read found no value (`extends Error`): an array or string index out of range, 
 | Member | Description |
 | --- | --- |
 | `constructor(message?: string, options?: ErrorOptions)` |  |
+
+## `NoAnswerError`
+
+A question `ask` (`submilli:human`) put to a person got no answer (`extends Error`, `name` = `"NoAnswerError"`).
+
+| Member | Description |
+| --- | --- |
+| `reason: "declined" \| "expired" \| "unanswerable"` | Why there is no answer: `"declined"` (the person said no; `message` holds what they said, if anything), `"expired"` (nobody answered before the deadline), or `"unanswerable"` (this run cannot ask anyone). |
+| `constructor(message: string, reason: "declined" \| "expired" \| "unanswerable")` |  |
 
 ## `NoInfer`
 

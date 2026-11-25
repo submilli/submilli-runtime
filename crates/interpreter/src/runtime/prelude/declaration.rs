@@ -523,6 +523,7 @@ mod tests {
                 "Map",
                 "MapConstructor",
                 "MissingValueError",
+                "NoAnswerError",
                 "NoInfer",
                 "NonNullable",
                 "Number",
@@ -632,6 +633,7 @@ mod tests {
                     | "SyntaxError"
                     | "URIError"
                     | "PermissionDeniedError"
+                    | "NoAnswerError"
             ) {
                 assert!(matches!(&defs.types[*name].kind, TypeKind::Class { .. }));
                 continue;

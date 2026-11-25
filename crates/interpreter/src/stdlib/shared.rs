@@ -142,6 +142,20 @@ pub(crate) async fn check_and_approve_call(
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<Option<CallTicket>> {
+    check_and_approve_call_refusing_main(caller, capability, context, None)
+        .await
+        .map(|(_, ticket)| ticket)
+}
+
+/// [`check_and_approve_call`], also refusing `main` ahead of the policy when
+/// `main_refusal` gives a reason: for a use of a capability `main` may otherwise be
+/// granted (a sensitive `human.ask`). Returns the principal the call was attributed to.
+pub(crate) async fn check_and_approve_call_refusing_main(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    capability: &str,
+    context: serde_json::Value,
+    main_refusal: Option<&'static str>,
+) -> wasmtime::Result<(String, Option<CallTicket>)> {
     let (principal, ticket) = enter_gate(&mut *caller, capability, &context)?;
     let site = CallSite::new(ticket, EntryPath::GatedOp);
     let checked = {
@@ -153,12 +167,13 @@ pub(crate) async fn check_and_approve_call(
             &context,
             data.vfs.cwd(),
             site,
+            main_refusal,
         )?
     };
     if let Checked::Ask(request) = checked {
         approvals::ask(caller, request, site).await?;
     }
-    Ok(ticket)
+    Ok((principal, ticket))
 }
 
 /// The check a listing makes for one candidate, the check its use would make,
@@ -181,6 +196,7 @@ pub(crate) fn check_candidate(
         &context,
         data.vfs.cwd(),
         site,
+        None,
     )? {
         Checked::Allowed => Ok(()),
         Checked::Ask(_) if data.approval_provider.is_some() => Ok(()),
@@ -313,7 +329,7 @@ pub(crate) fn authorize_capability(
     cwd: &str,
     site: CallSite,
 ) -> wasmtime::Result<()> {
-    match authorize_or_ask(caller, security_check, capability, context, cwd, site)? {
+    match authorize_or_ask(caller, security_check, capability, context, cwd, site, None)? {
         Checked::Allowed => Ok(()),
         Checked::Ask(request) => Err(approvals::refuse(
             request,
@@ -326,7 +342,8 @@ pub(crate) fn authorize_capability(
 }
 
 /// [`authorize_capability`], handing back a call the policy asks about instead of
-/// refusing it.
+/// refusing it. `main_refusal` refuses `main` for this use even where the capability's
+/// own catalog entry would not (a sensitive `human.ask`).
 fn authorize_or_ask(
     caller: &str,
     security_check: &dyn SecurityCheck,
@@ -334,14 +351,16 @@ fn authorize_or_ask(
     context: &serde_json::Value,
     cwd: &str,
     site: CallSite,
+    main_refusal: Option<&'static str>,
 ) -> wasmtime::Result<Checked> {
     // The ordering is the invariant. This must precede both the delegation
     // below and any work the host fn does after we return — a reorder that
     // consults the policy first makes the refusal conditional on a policy
     // existing, and the default check allows everything.
     if caller == crate::mangle::USER_PACKAGE
-        && let Some(reason) =
+        && let Some(reason) = main_refusal.or_else(|| {
             crate::stdlib::capabilities::find_any(capability).and_then(|entry| entry.main_denial)
+        })
     {
         audit_denial_at(
             security_check,

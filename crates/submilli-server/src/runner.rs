@@ -122,6 +122,9 @@ pub struct HostServices {
     /// What decides a call an `ask-human` or `ask-admin` rule matches. `None`
     /// when the run cannot suspend, which refuses such a call.
     pub approval_provider: Option<Arc<dyn interpreter::runtime::ApprovalProvider>>,
+    /// What answers `submilli:human`'s `ask`. `None` when the run cannot put a
+    /// question to a person, which makes every `ask` unanswerable.
+    pub ask_provider: Option<Arc<dyn interpreter::runtime::AskProvider>>,
     /// `submilli:session` storage for the session this run belongs to.
     pub session_kv: Arc<dyn SessionKvStore>,
     pub session_finalizers:
@@ -371,6 +374,7 @@ async fn run_inner(
     data.mcp_transport = Some(services.mcp_transport);
     data.tool_provider = services.tool_provider;
     data.approval_provider = services.approval_provider;
+    data.ask_provider = services.ask_provider;
     data.session_kv = Some(services.session_kv);
     data.session_finalizers = services.session_finalizers;
     data.cursor_keys = services.cursor_keys;
@@ -1126,6 +1130,7 @@ mod tests {
             mcp_transport: Arc::new(UnusedMcp),
             tool_provider: None,
             approval_provider: None,
+            ask_provider: None,
             session_kv: Arc::new(InMemorySessionKv::default()),
             session_finalizers: None,
             resource_use: None,

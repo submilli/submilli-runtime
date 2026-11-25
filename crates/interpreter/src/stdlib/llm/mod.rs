@@ -1464,8 +1464,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::{filters_candidate, sanitize_description};
-    use crate::runtime::durable::EffectId;
-    use crate::runtime::effects::{EffectCall, EffectHistory, HistoryError, RecordedOutcome};
+    use crate::runtime::effects::EffectHistory;
+    use crate::runtime::effects::testing::MemoryHistory;
     use crate::runtime::llm::{
         ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmLimits, LlmModel,
         LlmOutcome, LlmPrompt, LlmProvider, SharedTokenBudget,
@@ -2994,7 +2994,7 @@ mod tests {
         let provider = QueuedProvider::new(vec![vec![
             LlmOutcome::success(text).with_usage(Some(3), Some(4)),
         ]]);
-        let history = Arc::new(MemoryHistory::new());
+        let history = Arc::new(MemoryHistory::default());
         let source = r#"import llm from "submilli:llm";
             function main(): string {
                 try {
@@ -3175,7 +3175,7 @@ mod tests {
             LlmOutcome::success("b").with_usage(Some(3), Some(4)),
             LlmOutcome::success("c").with_usage(Some(5), Some(6)),
         ]]);
-        let history = Arc::new(MemoryHistory::new());
+        let history = Arc::new(MemoryHistory::default());
         let source = r#"import llm from "submilli:llm";
             function main(): string {
               return String(llm.texts("haiku", ["a", "b", "c"]).length);
@@ -3211,7 +3211,7 @@ mod tests {
     #[tokio::test]
     async fn a_replayed_call_with_files_does_not_read_them_again() {
         let provider = QueuedProvider::new(vec![vec![LlmOutcome::success("summary")]]);
-        let history = Arc::new(MemoryHistory::new());
+        let history = Arc::new(MemoryHistory::default());
         let source = r#"import llm from "submilli:llm";
             import fs from "submilli:fs";
             function main(): string {
@@ -3396,85 +3396,6 @@ mod tests {
             Box<dyn std::future::Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>,
         > {
             Box::pin(async { Ok(Vec::new()) })
-        }
-    }
-
-    struct MemoryHistory {
-        state: Mutex<ReplayState>,
-    }
-
-    struct ReplayState {
-        outcomes: Vec<RecordedOutcome>,
-        cursor: usize,
-        replay: bool,
-    }
-
-    impl MemoryHistory {
-        fn new() -> Self {
-            Self {
-                state: Mutex::new(ReplayState {
-                    outcomes: Vec::new(),
-                    cursor: 0,
-                    replay: false,
-                }),
-            }
-        }
-
-        fn replay(&self) {
-            let mut state = self.state.lock().expect("history");
-            state.replay = true;
-            state.cursor = 0;
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl EffectHistory for MemoryHistory {
-        async fn begin(
-            &self,
-            _operation: &str,
-            _fingerprint: [u8; 32],
-        ) -> Result<EffectCall, HistoryError> {
-            let mut state = self.state.lock().expect("history");
-            let id = EffectId::stub().map_err(|error| HistoryError(error.to_string()))?;
-            if state.replay {
-                let recorded = state
-                    .outcomes
-                    .get(state.cursor)
-                    .cloned()
-                    .ok_or_else(|| HistoryError("replay past recorded effects".into()))?;
-                let sequence = state.cursor as u64;
-                state.cursor += 1;
-                return Ok(EffectCall {
-                    id,
-                    sequence,
-                    recorded: Some(recorded),
-                });
-            }
-            Ok(EffectCall {
-                id,
-                sequence: state.outcomes.len() as u64,
-                recorded: None,
-            })
-        }
-
-        async fn complete(
-            &self,
-            call: &EffectCall,
-            outcome: RecordedOutcome,
-        ) -> Result<(), HistoryError> {
-            let mut state = self.state.lock().expect("history");
-            if state.replay {
-                return Ok(());
-            }
-            if call.sequence as usize != state.outcomes.len() {
-                return Err(HistoryError("effect completed out of order".into()));
-            }
-            state.outcomes.push(outcome);
-            Ok(())
-        }
-
-        async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
-            Ok(())
         }
     }
 }
