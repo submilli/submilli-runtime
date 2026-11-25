@@ -1206,6 +1206,7 @@ mod tests {
             readonly,
             optional: false,
             method: false,
+            over_prototype: false,
             doc: None,
         };
         let mut static_fields = BTreeMap::new();

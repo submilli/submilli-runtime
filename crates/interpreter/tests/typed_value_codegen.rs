@@ -1738,3 +1738,728 @@ fn super_accessor_and_prototype_invalid_targets_fail_cleanly() {
         Err(submilli_engine::compiler_error::CompilerFailure::Internal { .. })
     ));
 }
+
+#[test]
+fn field_over_prototype_shadows_base_method_and_accessor() {
+    let source = include_str!("typed_value_sources/field-over-prototype.ts")
+        .replace(
+            "m: () => number = (): number => 2;",
+            "__shadow_m: () => number = (): number => 2;",
+        )
+        .replace("x: number = 20;", "__shadow_x: number = 20;")
+        .replace("x?: number;", "__shadow_x?: number;")
+        .replace("const bound = asBase.m;", "const bound = readM(asBase);")
+        .replace(
+            "const spreadD = { ...d };",
+            "const spreadD = { ...(d as unknown as Record<string, unknown>) };",
+        )
+        .replace("delete (d as { m?: () => number }).m;", "deleteM(d);")
+        .replace(
+            "const spreadS = { ...s };",
+            "const spreadS = { ...(s as unknown as Record<string, unknown>) };",
+        )
+        .replace("String(spreadS.x),", r#"String(spreadS["x"]),"#);
+    let source = format!(
+        "function readM(_o: BaseMethod): () => number {{ return () => 0; }}\n\
+         function deleteM(_o: SubMethod): boolean {{ return false; }}\n\
+         {source}"
+    );
+    assert_eq!(
+        run(&source, |ast| {
+            let mut marked = 0;
+            for decl in &mut ast.types {
+                let submilli_engine::TypedTypeDecl::Class(class) = decl else {
+                    continue;
+                };
+                for field in &mut class.fields {
+                    if let Some(real) = field.name.name.strip_prefix("__shadow_") {
+                        field.name.name = real.to_string();
+                        field.over_prototype = true;
+                        marked += 1;
+                    }
+                }
+            }
+            assert_eq!(marked, 3);
+            let mut reads = 0;
+            let mut deletes = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr(id).unwrap().clone();
+                let TypedExprKind::Call { mangled, args, .. } = expr.kind else {
+                    continue;
+                };
+                match mangled.as_str() {
+                    "main#readM" => {
+                        ast.try_expr_mut(id).unwrap().kind = TypedExprKind::FieldAccess {
+                            receiver: args[0],
+                            name: Ident {
+                                name: "m".into(),
+                                span: expr.span,
+                            },
+                        };
+                        reads += 1;
+                    }
+                    "main#deleteM" => {
+                        ast.try_expr_mut(id).unwrap().kind = TypedExprKind::DeleteField {
+                            receiver: args[0],
+                            name: Ident {
+                                name: "m".into(),
+                                span: expr.span,
+                            },
+                        };
+                        deletes += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(reads, 1);
+            assert_eq!(deletes, 1);
+        }),
+        [
+            r#"1|1|2|2|2|20|2|1|1|10|baseField,beforeInit,m,post,pre|baseField,beforeInit,m,post,pre|baseField,beforeInit,m,post,pre|true|true|false|true|{"baseField":10,"beforeInit":1,"post":2,"pre":1}"#,
+            "10|1|false|true",
+            r#"10|20|25|25|25|get,ctor:10,get|get,ctor:10,get|log,after,before,tail,x|log,after,before,tail,x|true|true|25|{"after":20,"before":10,"log":["get","ctor:10","get"],"tail":30,"x":25}"#,
+            "true|true|true|log,x",
+        ]
+        .join(" // ")
+    );
+}
+
+#[test]
+fn assign_field_creates_own_property_over_prototype_method() {
+    let source = include_str!("typed_value_sources/assign-over-method.ts")
+        .replace("b1.m = () => 99;", "writeM(b1, () => 99);")
+        .replace("b1.m = () => 77;", "writeM(b1, () => 77);")
+        .replace(
+            r#"b1.toString = () => "custom-b1";"#,
+            r#"writeToString(b1, () => "custom-b1");"#,
+        )
+        .replace(
+            r#"e1.toString = () => "custom-err";"#,
+            r#"writeErrToString(e1, () => "custom-err");"#,
+        )
+        .replace("super.m = f;", "writeSuperM(this, f);")
+        .replace(
+            "Object.keys({ ...b1 }).join(\",\")",
+            "Object.keys({ ...(b1 as unknown as Record<string, unknown>) }).join(\",\")",
+        );
+    let source = format!(
+        "function writeM(_o: Base, _f: () => number): void {{}}\n\
+         function writeSuperM(_o: Derived, _f: () => number): void {{}}\n\
+         function writeToString(_o: Base, _f: () => string): void {{}}\n\
+         function writeErrToString(_o: Error, _f: () => string): void {{}}\n\
+         {source}"
+    );
+    assert_eq!(
+        run(&source, |ast| {
+            let mut replaced = 0;
+            for id in ast.stmt_ids().unwrap() {
+                let stmt = ast.try_stmt(id).unwrap();
+                let TypedStmtKind::Expr(expr) = stmt.kind else {
+                    continue;
+                };
+                let TypedExprKind::Call { mangled, args, .. } = &ast.try_expr(expr).unwrap().kind
+                else {
+                    continue;
+                };
+                let prop = match mangled.as_str() {
+                    "main#writeM" | "main#writeSuperM" => "m",
+                    "main#writeToString" | "main#writeErrToString" => "toString",
+                    _ => continue,
+                };
+                ast.try_stmt_mut(id).unwrap().kind = TypedStmtKind::AssignField {
+                    receiver: args[0],
+                    value: args[1],
+                    name: Ident {
+                        name: prop.into(),
+                        span: stmt.span,
+                    },
+                };
+                replaced += 1;
+            }
+            assert_eq!(replaced, 5);
+        }),
+        [
+            "99|990|1|10|true|false|true|true|a,m|a,m|a,m",
+            "770|a,m",
+            r#"custom-b1|custom-b1|[object Object]|[object Object]|true|false|a,m,toString|{"a":1}"#,
+            "custom-err|custom-err|Error: ok|true|false",
+            "55|550|10|true|a,extra,m",
+            "42|false",
+            "0,2,b,a|0,2,b,a|0,2,b,a",
+        ]
+        .join(" // ")
+    );
+}
+
+#[test]
+fn accessor_half_redeclared_alone_clears_inherited_half() {
+    let source = include_str!("typed_value_sources/accessor-half-redeclared.ts");
+    assert_eq!(
+        run(source, |_| {}),
+        r#"123|10|true|true|true|true|false|{"held":10,"last":123}|99|99|99|TypeError|TypeError|TypeError|10|true|false|{"held":10,"x":99}"#
+    );
+}
+
+#[test]
+fn cross_package_field_over_prototype_and_method_assign() {
+    use submilli_engine::FrontEnd;
+    use submilli_engine::front_end::EngineFrontEnd;
+    use submilli_engine::runtime::{
+        LinkedPackageModule, StoreData, Vfs, install_package_modules_async, install_runtime_async,
+        install_tenant_limits,
+    };
+    use submilli_engine::{
+        ModulePath, PackageSourceModule, Sources, TypeKind, compile_package, dispatch_main_async,
+    };
+    use wasmtime::{Linker, Module};
+
+    let lib_source = r#"
+/** Base class with a prototype method. */
+export class Base {
+  a: number = 1;
+  before: number = 0;
+
+  constructor() {
+    this.before = this.m();
+  }
+
+  m(): number {
+    return 1;
+  }
+
+  call(): number {
+    return this.m() * 10;
+  }
+}
+
+/** Subclass with an over-prototype field. */
+export class ExportedSub extends Base {
+  __shadow_m: () => number = (): number => 2;
+  tail: number = 3;
+}
+"#;
+
+    let app_source = r#"
+import { Base, ExportedSub } from "@test/proto";
+
+function writeM(_o: Base, _f: () => number): void {}
+
+class LocalGrandChild extends ExportedSub {
+  gc: number = 4;
+}
+
+class LocalSub extends Base {
+  __shadow_m: () => number = (): number => 5;
+}
+
+export function main(): string {
+  const es = new ExportedSub();
+  const esBase: Base = es;
+  const gc = new LocalGrandChild();
+  const ls = new LocalSub();
+  const b1 = new Base();
+  const b2 = new Base();
+  writeM(b1, () => 99);
+  return [
+    String(es.before),
+    String(es.call()),
+    String(esBase.m()),
+    Object.keys(es).join(","),
+    String(gc.before),
+    String(gc.call()),
+    Object.keys(gc).join(","),
+    String(ls.before),
+    String(ls.call()),
+    Object.keys(ls).join(","),
+    String(b1.call()),
+    String(b2.call()),
+    String(Object.hasOwn(b1, "m")),
+    String(Object.hasOwn(b2, "m")),
+  ].join("|");
+}
+"#;
+
+    let result = std::thread::Builder::new()
+        .stack_size(submilli_engine::compiler_limits::COMPILER_STACK_BYTES)
+        .spawn(move || {
+            let (prelude, host, internal) =
+                submilli_engine::runtime::prelude::cached_runtime_package_declarations();
+            let runtime_deps: Vec<_> = prelude.iter().chain(host).chain(internal).collect();
+            let stdlib = submilli_engine::runtime::stdlib_package_declarations();
+            let stdlib_refs: Vec<_> = stdlib.iter().collect();
+
+            // Compile `@test/proto` with `ExportedSub.m` marked `over_prototype: true`.
+            let lib_modules = vec![PackageSourceModule {
+                path: ModulePath::from("lib"),
+                source: lib_source,
+            }];
+            let mut lib_decl =
+                compile_package("@test/proto", ModulePath::from("lib"), &lib_modules, &[])
+                    .expect("placeholder lib package compiles")
+                    .declaration;
+            let (mut lib_ast, lib_diags) = submilli_engine::compile::typecheck_package_to_typed_ast(
+                "@test/proto",
+                ModulePath::from("lib"),
+                &lib_modules,
+            );
+            assert!(lib_diags.is_empty(), "{lib_diags:?}");
+            for decl in &mut lib_ast.types {
+                if let submilli_engine::TypedTypeDecl::Class(class) = decl {
+                    for field in &mut class.fields {
+                        if let Some(real) = field.name.name.strip_prefix("__shadow_") {
+                            field.name.name = real.to_string();
+                            field.over_prototype = true;
+                        }
+                    }
+                }
+            }
+            for sym in lib_decl
+                .types
+                .values_mut()
+                .chain(lib_decl.runtime_types.values_mut())
+            {
+                if let TypeKind::Class { fields, .. } = &mut sym.kind
+                    && let Some(mut sig) = fields.remove("__shadow_m")
+                {
+                    sig.over_prototype = true;
+                    fields.insert("m".to_string(), sig);
+                }
+            }
+            let lib_ast =
+                submilli_engine::desugar(submilli_engine::capture(lib_ast).unwrap(), FileId(0))
+                    .unwrap();
+            let (lib_sources, _) = Sources::single("lib.ts", lib_source).unwrap();
+            let lib_gen = submilli_engine::codegen::codegen_package_with_type_info(
+                &lib_sources,
+                FileId(0),
+                &lib_ast,
+                &runtime_deps,
+            )
+            .unwrap();
+
+            // Compile `app` against `@test/proto`.
+            let deps_slice = [&lib_decl];
+            let mut request = submilli_engine::front_end::script_request(&stdlib_refs);
+            request.dependencies = &deps_slice;
+            let checked = EngineFrontEnd
+                .parse_script(app_source.to_string(), FileId(0))
+                .check(&request)
+                .unwrap();
+            let mut app_ast = checked.typed_ast;
+            for decl in &mut app_ast.types {
+                if let submilli_engine::TypedTypeDecl::Class(class) = decl {
+                    for field in &mut class.fields {
+                        if let Some(real) = field.name.name.strip_prefix("__shadow_") {
+                            field.name.name = real.to_string();
+                            field.over_prototype = true;
+                        }
+                    }
+                }
+            }
+            for id in app_ast.stmt_ids().unwrap() {
+                let stmt = app_ast.try_stmt(id).unwrap();
+                let TypedStmtKind::Expr(expr) = stmt.kind else {
+                    continue;
+                };
+                let TypedExprKind::Call { mangled, args, .. } =
+                    &app_ast.try_expr(expr).unwrap().kind
+                else {
+                    continue;
+                };
+                if mangled.as_str() == "main#writeM" {
+                    app_ast.try_stmt_mut(id).unwrap().kind = TypedStmtKind::AssignField {
+                        receiver: args[0],
+                        value: args[1],
+                        name: Ident {
+                            name: "m".into(),
+                            span: stmt.span,
+                        },
+                    };
+                }
+            }
+            let app_ast =
+                submilli_engine::desugar(submilli_engine::capture(app_ast).unwrap(), FileId(0))
+                    .unwrap();
+            let mut app_deps = runtime_deps;
+            app_deps.push(&lib_decl);
+            let app_gen = submilli_engine::codegen::codegen_with_type_info(
+                app_source,
+                "app.ts",
+                FileId(0),
+                &app_ast,
+                &app_deps,
+            )
+            .unwrap();
+
+            let config = RuntimeConfig::default();
+            let engine = config.engine_async().unwrap();
+            let data = StoreData::with_vfs("cross-pkg-proto".into(), Vfs::none());
+            let mut store = config.store_async(&engine, data).unwrap();
+            install_tenant_limits(&mut store);
+            let mut linker = Linker::new(&engine);
+            let lib_mod = Module::new(&engine, &lib_gen.wasm).unwrap();
+            let app_mod = Module::new(&engine, &app_gen.wasm).unwrap();
+            let linked = [LinkedPackageModule {
+                module: &lib_mod,
+                declaration: &lib_decl,
+                type_info: &lib_gen.type_info,
+            }];
+            pollster::block_on(async {
+                install_runtime_async(&mut linker, &mut store)
+                    .await
+                    .unwrap();
+                install_package_modules_async(&mut linker, &mut store, &linked)
+                    .await
+                    .unwrap();
+                store
+                    .data_mut()
+                    .install_type_info(app_gen.type_info.clone());
+                let instance = linker
+                    .instantiate_async(&mut store, &app_mod)
+                    .await
+                    .unwrap();
+                dispatch_main_async(&mut store, &instance)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            })
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+
+    assert_eq!(
+        result,
+        "1|20|2|a,before,m,tail|1|20|a,before,m,tail,gc|1|50|a,before,m|990|10|true|false"
+    );
+}
+
+#[test]
+fn own_over_prototype_edge_cases() {
+    let source = r#"
+class Base {
+  baseVal: number = 7;
+  before: number = 0;
+
+  constructor() {
+    this.before = this.m();
+  }
+
+  m(): number {
+    return 1;
+  }
+
+  add(n: number): number {
+    return n + 10;
+  }
+
+  boxed(): { unseenEdgeField: number } {
+    return { unseenEdgeField: this.m() };
+  }
+
+  toString(): string {
+    return "base-str";
+  }
+}
+
+class ParamSub extends Base {
+  constructor(public __shadow_m: () => number) {
+    super();
+  }
+}
+
+class ToStringSub extends Base {
+  __shadow_toString: () => string = (): string => "own-str";
+}
+
+class AccBase {
+  held: number = 10;
+
+  get x(): number {
+    return this.held;
+  }
+
+  set x(v: number) {
+    this.held = v;
+  }
+}
+
+class UninitAccSub extends AccBase {
+  __shadow_x?: number;
+}
+
+class AltGet extends AccBase {
+  get x(): number {
+    return 20;
+  }
+}
+
+class AltSet extends AltGet {
+  last: number = 0;
+  set x(v: number) {
+    this.last = v;
+  }
+}
+
+class AltLeaf extends AltSet {}
+
+function callGeneric<T extends Base>(v: T): number {
+  return v.boxed().unseenEdgeField;
+}
+
+function callOptional(v: Base | null): number | undefined {
+  return v?.boxed().unseenEdgeField;
+}
+
+function catchTypeError(fn: () => void): string {
+  try {
+    fn();
+    return "ok";
+  } catch (e) {
+    return e instanceof TypeError ? "TypeError" : "other";
+  }
+}
+
+function writeM(_o: Base, _f: () => number): void {}
+function deleteM(_o: Base): boolean {
+  return false;
+}
+
+export function main(): string {
+  // 1. Parameter property with over_prototype: true
+  const ps = new ParamSub(() => 42);
+  const psBase: Base = ps;
+  const paramRes = [String(ps.before), String(psBase.m()), String(callGeneric(ps))];
+
+  // 2. Generic/optional receiver + Base.toString shadowed by over_prototype field
+  const ts = new ToStringSub();
+  const toStrRes = [
+    ts.toString(),
+    String(ts),
+    `${ts}`,
+    String(callGeneric(ts)),
+    String(callOptional(ps)),
+  ];
+
+  // 3. Spread of class with toString method must NOT invoke class method on plain object
+  const plainSpread = { ...(new Base() as unknown as Record<string, unknown>) };
+  const spreadToString = String(plainSpread);
+
+  // 4. Shadowed method slots do not break structural equality or symmetry on spread objects
+  const f = (): number => 99;
+  const o1 = { ...(new Base() as unknown as Record<string, unknown>) };
+  o1["m"] = f;
+  const o2 = { ...(new Base() as unknown as Record<string, unknown>) };
+  o2["m"] = f;
+  const bSym = new Base();
+  const symLeft: Record<string, unknown> = {
+    baseVal: 7,
+    before: 1,
+    m: (bSym as unknown as Record<string, unknown>)["m"],
+  };
+  const symRight = { ...(bSym as unknown as Record<string, unknown>), z: 99 };
+  const spreadEq = [
+    String(o1 === o2),
+    String(symLeft === symRight),
+    String(symRight === symLeft),
+  ].join("|");
+
+  // 5. Dynamic index write, Object.assign, delete + Object.assign non-resurrection,
+  //    re-assign, non-arrow `this` function, callee-before-arg order, Error#toJson,
+  //    two-operand spread precedence, and non-callable overrides
+  const b = new Base();
+  const rec = b as unknown as Record<string, unknown>;
+  rec["m"] = () => 88;
+  const afterDyn = b.m();
+  Object.assign(b, { m: () => 77 });
+  const afterAssign = b.m();
+  deleteM(b);
+  Object.assign(b, new Base());
+  const assignAfterDeleteHasOwn = Object.hasOwn(b, "m");
+  const afterDel = b.m();
+  writeM(b, () => 66);
+  const afterReassign = b.m();
+  rec["m"] = function (this: Base): number {
+    return this.baseVal + 100;
+  };
+  const thisMethodVal = b.m();
+  let protoArgCount = 0;
+  const protoToOwnVal = b.add(
+    (() => {
+      protoArgCount += 1;
+      rec["add"] = (n: number): number => n + 2000;
+      return 5;
+    })(),
+  );
+  const afterProtoToOwnVal = b.add(5);
+  let ownArgCount = 0;
+  rec["add"] = (n: number): number => n + 1000;
+  const ownToOwnVal = b.add(
+    (() => {
+      ownArgCount += 1;
+      rec["add"] = (n: number): number => n + 3000;
+      return 5;
+    })(),
+  );
+  const afterOwnToOwnVal = b.add(5);
+  const errCustom = new Error("boom");
+  (errCustom as unknown as Record<string, unknown>)["toJson"] = () => '"custom-err-json"';
+  const errToJson = JSON.stringify(errCustom);
+  const spreadBaseSub = {
+    ...(new Base() as unknown as Record<string, unknown>),
+    ...(ps as unknown as Record<string, unknown>),
+  };
+  const spreadSubBase = {
+    ...(ps as unknown as Record<string, unknown>),
+    ...(new Base() as unknown as Record<string, unknown>),
+  };
+  const spreadPrec = [
+    String((spreadBaseSub["m"] as () => number)()),
+    String((spreadSubBase["m"] as () => number)()),
+  ].join(",");
+  rec["m"] = 123;
+  const callNonCallable = catchTypeError(() => {
+    b.m();
+  });
+  rec["toString"] = "not-a-fn";
+  const nonFnToString = catchTypeError(() => {
+    String(b);
+  });
+
+  // 6. Uninitialized over_prototype field reads as undefined and rejects number methods cleanly
+  const u: AccBase = new UninitAccSub();
+  const uninitReadIsUndef = String((u.x as unknown) === undefined);
+  const uninitReadErr = catchTypeError(() => {
+    const _s: string = u.x.toFixed(0);
+    if (_s === "never") {
+      throw new Error("unreachable");
+    }
+  });
+
+  // 7. 3-level alternating accessor halves + postfix on getter-only via interface + interface cast
+  const leaf = new AltLeaf();
+  const leafBase: AccBase = leaf;
+  leafBase.x = 55;
+  const altGetIface: { x: number } = new AltGet() as unknown as { x: number };
+  const postfixErr = catchTypeError(() => {
+    altGetIface.x++;
+  });
+  const castErr = catchTypeError(() => {
+    const _v = leaf as unknown as { x: number };
+    if (_v.x === 999) {
+      throw new Error("unreachable");
+    }
+  });
+
+  // 8. Integer-key boundary ordering (2^32-1, "01", "-1" are non-indices; overwrite keeps position)
+  const boundary: Record<string, number> = {};
+  boundary["4294967295"] = 1;
+  boundary["01"] = 2;
+  boundary["-1"] = 3;
+  boundary["10"] = 4;
+  boundary["2"] = 5;
+  boundary["0"] = 6;
+  const boundarySpread = { ...boundary, ["01"]: 99 };
+  const boundaryKeys = [
+    Object.keys(boundary).join(","),
+    Object.keys(boundarySpread).join(","),
+  ];
+
+  return [
+    paramRes.join("|"),
+    toStrRes.join("|"),
+    spreadToString,
+    spreadEq,
+    [
+      String(afterDyn),
+      String(afterAssign),
+      String(assignAfterDeleteHasOwn),
+      String(afterDel),
+      String(afterReassign),
+      String(thisMethodVal),
+      `${protoArgCount}:${protoToOwnVal}:${afterProtoToOwnVal}/${ownArgCount}:${ownToOwnVal}:${afterOwnToOwnVal}`,
+      errToJson,
+      spreadPrec,
+      callNonCallable,
+      nonFnToString,
+    ].join("|"),
+    [uninitReadIsUndef, uninitReadErr].join("|"),
+    [String(leaf.last), String((leafBase.x as unknown) === undefined), postfixErr, castErr].join(
+      "|",
+    ),
+    boundaryKeys.join("|"),
+  ].join(" // ");
+}
+"#;
+    assert_eq!(
+        run(source, |ast| {
+            let mut marked = 0;
+            for decl in &mut ast.types {
+                let submilli_engine::TypedTypeDecl::Class(class) = decl else {
+                    continue;
+                };
+                for field in &mut class.fields {
+                    if let Some(real) = field.name.name.strip_prefix("__shadow_") {
+                        field.name.name = real.to_string();
+                        field.over_prototype = true;
+                        marked += 1;
+                    }
+                }
+                if let Some(ctor) = &mut class.constructor {
+                    for param in &mut ctor.params {
+                        if let Some(real) = param.name.name.strip_prefix("__shadow_") {
+                            param.name.name = real.to_string();
+                        }
+                    }
+                }
+            }
+            assert_eq!(marked, 3);
+            for id in ast.stmt_ids().unwrap() {
+                let stmt = ast.try_stmt(id).unwrap();
+                let TypedStmtKind::Expr(expr) = stmt.kind else {
+                    continue;
+                };
+                let TypedExprKind::Call { mangled, args, .. } = &ast.try_expr(expr).unwrap().kind
+                else {
+                    continue;
+                };
+                if mangled.as_str() == "main#writeM" {
+                    ast.try_stmt_mut(id).unwrap().kind = TypedStmtKind::AssignField {
+                        receiver: args[0],
+                        value: args[1],
+                        name: Ident {
+                            name: "m".into(),
+                            span: stmt.span,
+                        },
+                    };
+                }
+            }
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr(id).unwrap().clone();
+                let TypedExprKind::Call { mangled, args, .. } = expr.kind else {
+                    continue;
+                };
+                if mangled.as_str() == "main#deleteM" {
+                    ast.try_expr_mut(id).unwrap().kind = TypedExprKind::DeleteField {
+                        receiver: args[0],
+                        name: Ident {
+                            name: "m".into(),
+                            span: expr.span,
+                        },
+                    };
+                }
+            }
+        }),
+        [
+            "1|42|42",
+            "own-str|own-str|own-str|1|42",
+            "[object Object]",
+            "true|false|false",
+            r#"88|77|false|1|66|107|1:15:2005/1:1005:3005|"custom-err-json"|42,42|TypeError|TypeError"#,
+            "true|TypeError",
+            "55|true|TypeError|TypeError",
+            "0,2,10,4294967295,01,-1|0,2,10,4294967295,01,-1",
+        ]
+        .join(" // ")
+    );
+}

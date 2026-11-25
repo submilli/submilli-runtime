@@ -15,7 +15,7 @@ use wasm_encoder::{BlockType, HeapType, Instruction, RefType, ValType};
 
 use super::cast;
 use super::expr::{
-    emit_expr, emit_method_call, emit_object_property_write, stash_receiver_as_object_shape,
+    class_has_accessor, emit_expr, emit_object_property_write, stash_receiver_as_object_shape,
 };
 
 /// Does this statement contain a body some execution can skip, or re-enter?
@@ -515,7 +515,7 @@ fn emit_assign_field(
     match receiver_ty.lowered() {
         // Class instance: nominal receiver, array-backed object payload.
         Type::ClassRef { mangled, .. } => {
-            emit_class_field_store(emitter, ctx, receiver, recv, mangled, name, value)?;
+            emit_class_field_store(emitter, ctx, recv, mangled, name, value)?;
         }
         _ => emit_object_field_store(emitter, ctx, &receiver_ty, recv, name, value)?,
     }
@@ -570,33 +570,39 @@ fn host_property_setter<'a>(
     ctx.symbols.top_level_fn(&key)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_class_field_store(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
-    receiver: ExprId,
     recv: u32,
     mangled: &crate::MangledName,
     name: &Ident,
     value: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    // Accessor property (no data slot): dispatch the synthetic setter. The
-    // call leaves its `undefined` result, which the store discards.
-    let Some(slot) = ctx.symbols.class_field_slot(mangled, &name.name) else {
-        let setter = crate::codegen::classes::accessor_setter_name(&name.name);
-        emit_method_call(
-            emitter,
-            ctx,
-            receiver,
-            mangled,
-            &setter,
-            std::slice::from_ref(&value),
-            None,
-            &[],
-            None,
-            &Type::Void,
-        )?;
-        emitter.instruction(Instruction::Drop);
+    let has_accessor = class_has_accessor(ctx, mangled, &name.name);
+    // Accessor properties, fields shadowing an inherited accessor, and writes
+    // over methods or inherited Object members (e.g. `toString`) go through the
+    // property write helper: an existing own data property wins, an accessor
+    // calls its setter (or throws when getter-only), and a method/missing name
+    // creates an own data property without mutating the prototype slot.
+    let Some(slot) = ctx
+        .symbols
+        .class_field_slot(mangled, &name.name)
+        .filter(|_| !has_accessor)
+    else {
+        let object_shape = ctx
+            .symbols
+            .intrinsic_type_indices()
+            .ok_or_else(|| {
+                crate::codegen::internal_failure("intrinsics declared by codegen entry")
+            })?
+            .object_shape;
+        let rcv_shape = emitter.add_anonymous_local(ValType::Ref(RefType {
+            nullable: false,
+            heap_type: HeapType::Concrete(object_shape),
+        }))?;
+        emitter.instruction(Instruction::LocalGet(recv));
+        emitter.instruction(Instruction::LocalSet(rcv_shape));
+        emit_object_property_write(emitter, ctx, rcv_shape, name, value)?;
         return Ok(());
     };
     let struct_idx = ctx.symbols.class_struct_type_idx(mangled).ok_or_else(|| {

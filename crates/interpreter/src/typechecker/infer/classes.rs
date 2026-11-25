@@ -260,6 +260,7 @@ impl<'a> Inferer<'a> {
                             readonly: modifiers.readonly.is_some(),
                             optional: false,
                             method: false,
+                            over_prototype: false,
                             doc: f_doc.clone(),
                         },
                     );
@@ -322,6 +323,7 @@ impl<'a> Inferer<'a> {
                             readonly: modifiers.readonly.is_some(),
                             optional: *optional,
                             method: *method_signature,
+                            over_prototype: false,
                             doc: f_doc.clone(),
                         },
                     );
@@ -416,6 +418,7 @@ impl<'a> Inferer<'a> {
                                 readonly: modifiers.readonly.is_some(),
                                 optional: false,
                                 method: false,
+                                over_prototype: false,
                                 doc: None,
                             },
                         );
@@ -469,6 +472,7 @@ impl<'a> Inferer<'a> {
                                     readonly: true,
                                     optional: false,
                                     method: false,
+                                    over_prototype: false,
                                     doc: None,
                                 });
                             accessor_sigs.push(AccessorSig::Getter {
@@ -495,6 +499,7 @@ impl<'a> Inferer<'a> {
                                     readonly: false,
                                     optional: false,
                                     method: false,
+                                    over_prototype: false,
                                     doc: None,
                                 });
                             accessor_sigs.push(AccessorSig::Setter {
@@ -1421,8 +1426,9 @@ impl<'a> Inferer<'a> {
                         &self.type_limits,
                     )))
                 }
-                // A class that redeclares the property's other half but not this
-                // one still leaves this half inherited from further up.
+                // Keep walking past a class that declares only the other half so
+                // override checks still validate against the originating slot's
+                // signature; runtime descriptor clearing is handled separately.
                 None => ControlFlow::Continue(()),
             }
         })
@@ -3112,15 +3118,14 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// Walk the `extends` chain to the class that declares the requested half of
-    /// accessor `prop` and `extract` its type, substituted at the declaring
-    /// class's bindings.
+    /// Walk the `extends` chain to the nearest class declaring `prop` and
+    /// `extract` the requested accessor half, substituted at that class's
+    /// bindings.
     ///
-    /// The two halves inherit independently, matching the vtable layout: a class
-    /// that declares only `set prop` leaves `get prop` in the slot its ancestor
-    /// filled, and a parent-typed receiver reads it. So a level declaring only
-    /// the other half is not the end of the search. A plain data field of the
-    /// same name *is* — it shadows any inherited accessor outright.
+    /// As in JavaScript, declaring one accessor half (`get` or `set`) on a
+    /// class replaces the whole prototype descriptor for `prop`: the other half
+    /// is absent rather than inherited from an ancestor. A plain data field of
+    /// the same name also stops the search.
     fn find_accessor(
         &self,
         class_mangled: &MangledName,
@@ -3144,10 +3149,9 @@ impl<'a> Inferer<'a> {
                     super::generic::substitute_typevars(&ty, bindings, &self.type_limits),
                 ));
             }
-            // An accessor synthesizes a `fields` entry for typing, so the data-field
-            // shadow only applies where this level declares neither half.
-            let declares_other_half = accessors.iter().any(|a| a.name() == prop);
-            if fields.contains_key(prop) && !declares_other_half {
+            // Any own declaration of `prop` — either a data field or the other
+            // half of an accessor — owns the whole property on this class.
+            if fields.contains_key(prop) || accessors.iter().any(|a| a.name() == prop) {
                 return ControlFlow::Break(None);
             }
             ControlFlow::Continue(())
@@ -4103,6 +4107,7 @@ impl<'a> Inferer<'a> {
                 initializer: typed_init,
                 auto_assigned: false,
                 method_signature: sig.method,
+                over_prototype: false,
                 narrowing_check: self.narrowing_check_for(mangled, &name.name),
                 doc: doc.clone(),
             });
@@ -4136,6 +4141,7 @@ impl<'a> Inferer<'a> {
                     initializer: None,
                     auto_assigned: true,
                     method_signature: false,
+                    over_prototype: false,
                     narrowing_check: self.narrowing_check_for(mangled, &param.name.name),
                     doc: None,
                 });

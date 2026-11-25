@@ -61,6 +61,13 @@ struct MethodSlot {
     /// trailing `$types` and its payload closure binds type arguments per call
     /// (`generic_binding`). Overrides keep the originating declaration's.
     generic: bool,
+    /// Synthetic accessor half (`get <p>` / `set <p>`), as distinct from a user
+    /// method whose string-literal key happens to start with `"get "` / `"set "`.
+    accessor: Option<crate::AccessorKind>,
+    /// True when this class (or an ancestor) redeclared only the *other* half
+    /// of this accessor property, replacing the prototype descriptor so this
+    /// half is absent on instances of this class.
+    absent: bool,
 }
 
 struct ClassLayout {
@@ -109,7 +116,9 @@ struct ClassLayout {
     /// guard + structural compare of the data-field payload slots.
     equals_func_idx: u32,
     /// Per-class universal slot 0 body: a user `toString(): string` method
-    /// thunk, else the `"[object Object]"` default.
+    /// thunk, else the Error formatter (for Error subclasses) or the host object
+    /// `toString` hook (calling an own `toString` function property if present,
+    /// else returning `"[object Object]"`).
     to_string_func_idx: u32,
     /// Per-class universal slot 1 body: a user `toJson(): string` method
     /// thunk, else data-field JSON in canonical sorted-key order.
@@ -121,13 +130,14 @@ struct ClassLayout {
 }
 
 impl ClassLayout {
-    /// The vtable slots that enter the instance payload, in slot
-    /// order — every method in the inheritance chain, not just the declared
-    /// ones. An interface-typed receiver resolves a method by scanning this
-    /// payload, and `implements` conformance may be satisfied by an inherited
-    /// member, so a subclass instance has to carry the whole chain.
+    /// The active vtable slots that enter the instance payload, in slot
+    /// order — every live method and accessor half in the inheritance chain
+    /// (excluding accessor halves cleared by a single-half override). An
+    /// interface-typed receiver resolves a member by scanning this payload,
+    /// and `implements` conformance may be satisfied by an inherited member,
+    /// so a subclass instance has to carry the whole active chain.
     fn payload_slots(&self) -> impl Iterator<Item = &MethodSlot> {
-        self.methods.iter()
+        self.methods.iter().filter(|s| !s.absent)
     }
 
     /// Instance payload names: the full data fields (inherited prefix then own,
@@ -140,14 +150,18 @@ impl ClassLayout {
             .iter()
             .map(|f| super::field_names::FieldName {
                 name: f.name.clone(),
-                optional: f.optional,
+                // An `over_prototype` field starts absent (`flag = 0`) so
+                // accesses during `super()` and earlier field initializers
+                // still reach the inherited prototype member; field setup marks
+                // it present at its initialization point.
+                optional: f.optional || f.over_prototype,
                 is_accessor: false,
                 is_method: false,
                 is_private: self.private_members.contains(&f.name),
             })
             .collect();
         names.extend(self.payload_slots().map(|s| {
-            let is_accessor = s.name.starts_with("get ") || s.name.starts_with("set ");
+            let is_accessor = s.accessor.is_some();
             super::field_names::FieldName {
                 name: s.name.clone(),
                 optional: false,
@@ -164,9 +178,17 @@ impl ClassLayout {
 struct FieldLayout {
     name: String,
     optional: bool,
+    over_prototype: bool,
     /// Inherited along the layout prefix, so a subclass that does not redeclare
     /// still reads at the narrowed type. See [`crate::FieldNarrowingCheck`].
     narrowing_check: Option<Box<crate::FieldNarrowingCheck>>,
+}
+
+#[derive(Clone, Copy)]
+enum OwnMethodBody {
+    User(crate::StmtId),
+    AbsentGetter,
+    AbsentSetter,
 }
 
 /// A method declared on the class itself (own or override) — gets a real Wasm body.
@@ -177,7 +199,7 @@ struct OwnMethod {
     /// The backtrace name: `C.m`, or `get C.x` / `set C.x` for an accessor.
     frame_name: String,
     params: Vec<crate::TypedParam>,
-    body: crate::StmtId,
+    body: OwnMethodBody,
     return_type: crate::Type,
     /// The method's own type parameters, bound from the slot's `$types`.
     generics: crate::GenericParameters,
@@ -268,13 +290,21 @@ impl ClassPlan {
             // Accessors lower to internal getter/setter methods here in codegen —
             // they are not methods in the typed AST or `PackageDeclaration`.
             let synth_methods = accessor_methods(decl);
-            let mut sorted_methods: Vec<(&crate::TypedClassMethod, String)> = decl
+            let mut sorted_methods: Vec<(
+                &crate::TypedClassMethod,
+                String,
+                Option<crate::AccessorKind>,
+            )> = decl
                 .methods
                 .iter()
-                .map(|m| (m, format!("{}.{}", decl.name.name, m.name.name)))
-                .chain(synth_methods.iter().map(|(m, frame)| (m, frame.clone())))
+                .map(|m| (m, format!("{}.{}", decl.name.name, m.name.name), None))
+                .chain(
+                    synth_methods
+                        .iter()
+                        .map(|(m, frame, kind)| (m, frame.clone(), Some(*kind))),
+                )
                 .collect();
-            sorted_methods.sort_by(|(a, _), (b, _)| a.name.name.cmp(&b.name.name));
+            sorted_methods.sort_by(|(a, _, _), (b, _, _)| a.name.name.cmp(&b.name.name));
 
             inherited_fields.insert(
                 mangled.clone(),
@@ -282,12 +312,20 @@ impl ClassPlan {
             );
             let mut fields: Vec<FieldLayout> = parent_fields;
             for f in &own_fields {
+                let shadows_parent = !f.method_signature
+                    && has_prototype_member(
+                        parent_methods
+                            .iter()
+                            .map(|slot| (slot.name.as_str(), slot.accessor)),
+                        &f.name.name,
+                    );
                 // A redeclaration reuses the parent's slot. Its guard replaces the
                 // inherited one only if it has its own: redeclaring at the *same*
                 // type as the parent narrows nothing and records none, and the
                 // guard the ancestor installed still describes this slot.
                 if let Some(slot) = fields.iter_mut().find(|e| e.name == f.name.name) {
                     slot.optional = f.optional;
+                    slot.over_prototype |= f.over_prototype || shadows_parent;
                     if let Some(check) = f.narrowing_check.clone() {
                         slot.narrowing_check = Some(check);
                     }
@@ -296,21 +334,26 @@ impl ClassPlan {
                 fields.push(FieldLayout {
                     name: f.name.name.clone(),
                     optional: f.optional,
+                    over_prototype: f.over_prototype || shadows_parent,
                     narrowing_check: f.narrowing_check.clone(),
                 });
             }
 
             let mut methods: Vec<SlotDraft> = parent_methods;
-            for (m, _) in &sorted_methods {
+            for (m, _, accessor) in &sorted_methods {
                 let param_tys: Vec<crate::Type> = m.params.iter().map(|p| p.ty.clone()).collect();
                 let argument_metadata = super::call_arguments::typed_metadata(&m.params);
-                if let Some(slot) = methods.iter_mut().find(|s| s.name == m.name.name) {
+                if let Some(slot) = methods
+                    .iter_mut()
+                    .find(|s| s.name == m.name.name && s.accessor == *accessor)
+                {
                     // Override: same slot, body now supplied by this class — so
                     // the slot must describe *this* body, not the ancestor's.
                     slot.owner = decl.mangled_name.clone();
                     slot.param_tys = param_tys;
                     slot.argument_metadata = argument_metadata;
                     slot.ret_ty = m.return_type.clone();
+                    slot.absent = false;
                 } else {
                     methods.push(SlotDraft {
                         name: m.name.name.clone(),
@@ -319,21 +362,81 @@ impl ClassPlan {
                         argument_metadata,
                         ret_ty: m.return_type.clone(),
                         generic: !m.generics.is_empty(),
+                        accessor: *accessor,
+                        absent: false,
                     });
                 }
             }
-            let own_methods: Vec<OwnMethod> = sorted_methods
+            let mut own_methods: Vec<OwnMethod> = sorted_methods
                 .into_iter()
-                .map(|(m, frame_name)| OwnMethod {
+                .map(|(m, frame_name, _)| OwnMethod {
                     name: m.name.name.clone(),
                     name_span: m.name.span,
                     frame_name,
                     params: m.params.clone(),
-                    body: m.body,
+                    body: OwnMethodBody::User(m.body),
                     return_type: m.return_type.clone(),
                     generics: m.generics.clone(),
                 })
                 .collect();
+            // Redeclaring one accessor half replaces the whole prototype
+            // descriptor for that property, so any inherited complementary half
+            // becomes absent on this class.
+            let missing_halves =
+                unpaired_accessor_halves(decl.accessors.iter().map(|acc| match acc {
+                    crate::TypedClassAccessor::Getter { name, .. } => {
+                        (name.name.as_str(), crate::AccessorKind::Get)
+                    }
+                    crate::TypedClassAccessor::Setter { name, .. } => {
+                        (name.name.as_str(), crate::AccessorKind::Set)
+                    }
+                }));
+            for (prop, missing) in missing_halves {
+                let slot_name = match missing {
+                    crate::AccessorKind::Get => accessor_getter_name(prop),
+                    crate::AccessorKind::Set => accessor_setter_name(prop),
+                };
+                if let Some(slot) = methods
+                    .iter_mut()
+                    .find(|s| s.accessor == Some(missing) && s.name == slot_name)
+                {
+                    slot.owner = decl.mangled_name.clone();
+                    slot.absent = true;
+                    let (frame_name, params, body, return_type) = match missing {
+                        crate::AccessorKind::Get => (
+                            format!("get {}.{prop}", decl.name.name),
+                            Vec::new(),
+                            OwnMethodBody::AbsentGetter,
+                            crate::Type::Unknown,
+                        ),
+                        crate::AccessorKind::Set => (
+                            format!("set {}.{prop}", decl.name.name),
+                            vec![crate::TypedParam {
+                                name: crate::Ident {
+                                    name: "value".to_string(),
+                                    span: decl.name.span,
+                                },
+                                ty: crate::Type::Unknown,
+                                optional: false,
+                                boxed: false,
+                                rest: false,
+                                default: None,
+                            }],
+                            OwnMethodBody::AbsentSetter,
+                            crate::Type::Void,
+                        ),
+                    };
+                    own_methods.push(OwnMethod {
+                        name: slot_name,
+                        name_span: decl.name.span,
+                        frame_name,
+                        params,
+                        body,
+                        return_type,
+                        generics: Default::default(),
+                    });
+                }
+            }
             layouts.insert(mangled.clone(), (fields, methods, own_methods));
             ordered.push(mangled.clone());
         }
@@ -364,7 +467,7 @@ impl ClassPlan {
             let inherited = inherited_fields.remove(&mangled).ok_or_else(|| {
                 internal_failure("a class's inherited field names were not recorded")
             })?;
-            let field_setup = field_setup_steps(decl, &inherited)?;
+            let field_setup = field_setup_steps(decl, &inherited, &fields)?;
             // get + set share a property name; dedup for the per-name string globals.
             let accessor_names: Vec<String> = decl
                 .accessors
@@ -396,6 +499,8 @@ impl ClassPlan {
                         argument_metadata: d.argument_metadata,
                         ret_ty: d.ret_ty,
                         generic: d.generic,
+                        accessor: d.accessor,
+                        absent: d.absent,
                     })
                     .collect(),
                 own_methods,
@@ -507,7 +612,14 @@ impl ClassPlan {
                         .map(|_| symbols.value_type(&crate::Type::Unknown))
                         .collect::<Result<Vec<_>, _>>()?,
                 );
-                let results = symbols.slot_wasm_result(&method.return_type)?;
+                // Getter vtable slots always return a boxed `(ref null $Object)`
+                // so a subclass that redeclares only the setter can override the
+                // slot with an absent-getter returning `undefined`.
+                let results = if slot.accessor == Some(crate::AccessorKind::Get) {
+                    vec![symbols.value_type(&crate::Type::Unknown)?]
+                } else {
+                    symbols.slot_wasm_result(&method.return_type)?
+                };
                 let abi = MethodSlotAbi {
                     params: params.iter().skip(1).copied().collect(),
                     ret: results.first().copied(),
@@ -603,7 +715,7 @@ impl ClassPlan {
             // methods) + its sig, for every slot in the chain so a parent-typed
             // receiver resolves too.
             for (i, slot) in class.methods.iter().enumerate() {
-                if !slot.name.starts_with("get ") && !slot.name.starts_with("set ") {
+                if slot.accessor.is_none() {
                     symbols.record_class_payload_method(class.mangled.clone(), slot.name.clone());
                 }
                 symbols.record_class_method_slot(
@@ -783,6 +895,9 @@ impl ClassPlan {
             // receiver as `(ref $Object)` and casts.
             let mut adapter_slots: Vec<usize> = Vec::new();
             for (i, slot) in class.methods.iter().enumerate() {
+                if slot.absent {
+                    continue;
+                }
                 let reused = (slot.owner != class.mangled)
                     .then(|| symbols.class_method_adapter_func_idx(&slot.owner, &slot.name))
                     .flatten();
@@ -1022,12 +1137,6 @@ impl ClassPlan {
                 ValType::I32,
                 ctx.symbols,
             )?);
-            let string_vtable_global_idx = ctx
-                .symbols
-                .prelude_global_idx("string_vtable")
-                .ok_or_else(|| {
-                    internal_failure("string_vtable is not imported from the prelude")
-                })?;
             // A user `toString`/`toJson` method fills the universal slot (the
             // universal slots require strings even when the authored method's
             // physical return has widened to preserve live values).
@@ -1036,7 +1145,7 @@ impl ClassPlan {
                     class
                         .methods
                         .iter()
-                        .find(|s| s.name == name)
+                        .find(|s| s.accessor.is_none() && s.name == name)
                         .map(|slot| emit_universal_slot_thunk(ctx, &slot.name))
                         .transpose()
                 };
@@ -1057,13 +1166,10 @@ impl ClassPlan {
                 });
             let to_string = match user_method_thunk("toString")? {
                 Some(thunk) => thunk,
-                None if class.fields.iter().any(|field| field.name == "toString") => {
-                    emit_class_to_string_field_body(ctx.symbols, intrinsics)?
-                }
                 None if extends_error => {
                     emit_error_slot_body(ctx.symbols, intrinsics, 0, intrinsics.to_string_fn)?
                 }
-                None => emit_class_to_string_body(intrinsics, string_vtable_global_idx)?,
+                None => emit_class_to_string_body(ctx.symbols, intrinsics)?,
             };
             code.function(&to_string);
             code.function(&super::vtable_walk::guarded_body(
@@ -1280,6 +1386,22 @@ impl ClassPlan {
             ));
         }
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
+        let body = match method.body {
+            OwnMethodBody::AbsentGetter => {
+                super::function_emitter::expr::emit_undefined(&mut emitter, ctx)?;
+                return emitter.build_with_lines();
+            }
+            OwnMethodBody::AbsentSetter => {
+                super::throw::emit_type_error_throw(
+                    &mut emitter,
+                    ctx,
+                    super::throw::READ_ONLY_PROPERTY_MESSAGE,
+                );
+                emitter.instruction(Instruction::Unreachable);
+                return emitter.build_with_lines();
+            }
+            OwnMethodBody::User(body) => body,
+        };
         if abi.types && !method.generics.is_empty() {
             let bound = wasm_u32(method.params.len())?
                 .checked_add(1)
@@ -1293,7 +1415,7 @@ impl ClassPlan {
             super::runtime_descriptors::bind(&mut emitter, &method.generics.names, types)?;
         }
         let param_slots = rebind_erased_params(&mut emitter, ctx, &method.params, &abi.params)?;
-        emitter.prepare_parameter_initialization(Some(method.body))?;
+        emitter.prepare_parameter_initialization(Some(body))?;
         // Param prologue boxes captured-mutated method params.
         emitter.emit_boxed_param_prologue(&method.params, &param_slots)?;
 
@@ -1313,7 +1435,7 @@ impl ClassPlan {
                 None => ctx.symbols.slot_value_type(&method.return_type)?,
             }));
         }
-        stmt::emit_statement(&mut emitter, ctx, method.body)?;
+        stmt::emit_statement(&mut emitter, ctx, body)?;
         emit_body_end(&mut emitter, ctx, &method.return_type)?;
         emitter.build_with_lines()
     }
@@ -1466,7 +1588,12 @@ impl ClassPlan {
                 emitter.instruction(Instruction::I64Const(0));
                 emitter.instruction(Instruction::StructNew(closure_struct));
                 emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
-                if let Some(field_slot) = class.fields.iter().position(|f| f.name == method.name) {
+                if method.accessor.is_none()
+                    && let Some(field_slot) = class
+                        .fields
+                        .iter()
+                        .position(|f| f.name == method.name && !f.over_prototype)
+                {
                     emit_fill_optional_method(
                         &mut emitter,
                         (this_slot, class.struct_type_idx),
@@ -1732,6 +1859,7 @@ impl ClassPlan {
 fn field_setup_steps(
     decl: &TypedClassDecl,
     inherited: &BTreeSet<String>,
+    fields: &[FieldLayout],
 ) -> Result<Vec<FieldSetup>, CompilerFailure> {
     let mut steps = Vec::new();
     if let Some(ctor) = &decl.constructor {
@@ -1745,18 +1873,72 @@ fn field_setup_steps(
         }
     }
     for field in &decl.fields {
+        let over_prototype = fields
+            .iter()
+            .find(|layout| layout.name == field.name.name)
+            .is_some_and(|layout| layout.over_prototype);
         if let Some(value) = field.initializer {
             steps.push(FieldSetup::Init {
                 field: field.name.name.clone(),
                 value,
             });
-        } else if redeclares_uninitialized_slot(field, inherited) {
+        } else if redeclares_uninitialized_slot(field, inherited)
+            || (over_prototype && !field.auto_assigned && !field.method_signature)
+        {
             steps.push(FieldSetup::Reset {
                 field: field.name.name.clone(),
             });
         }
     }
     Ok(steps)
+}
+
+/// Whether `slots` carries a prototype method or accessor half for property
+/// `name`. Shared by local and imported class layout builders so both agree on
+/// which subclass fields shadow an ancestor prototype member.
+pub(crate) fn has_prototype_member<'a>(
+    slots: impl IntoIterator<Item = (&'a str, Option<crate::AccessorKind>)>,
+    name: &str,
+) -> bool {
+    let getter = accessor_getter_name(name);
+    let setter = accessor_setter_name(name);
+    slots.into_iter().any(|(slot_name, accessor)| {
+        (accessor.is_none() && slot_name == name)
+            || (accessor == Some(crate::AccessorKind::Get) && slot_name == getter)
+            || (accessor == Some(crate::AccessorKind::Set) && slot_name == setter)
+    })
+}
+
+/// Complementary accessor halves absent on a class because it declared only one
+/// half of the descriptor, returned in deterministic ABI order (missing setters
+/// first, then missing getters, sorted by property name).
+pub(crate) fn unpaired_accessor_halves<'a>(
+    accessors: impl IntoIterator<Item = (&'a str, crate::AccessorKind)>,
+) -> Vec<(&'a str, crate::AccessorKind)> {
+    let mut own_getters: BTreeSet<&'a str> = BTreeSet::new();
+    let mut own_setters: BTreeSet<&'a str> = BTreeSet::new();
+    for (name, kind) in accessors {
+        match kind {
+            crate::AccessorKind::Get => {
+                own_getters.insert(name);
+            }
+            crate::AccessorKind::Set => {
+                own_setters.insert(name);
+            }
+        }
+    }
+    let mut missing = Vec::new();
+    for prop in &own_getters {
+        if !own_setters.contains(prop) {
+            missing.push((*prop, crate::AccessorKind::Set));
+        }
+    }
+    for prop in &own_setters {
+        if !own_getters.contains(prop) {
+            missing.push((*prop, crate::AccessorKind::Get));
+        }
+    }
+    missing
 }
 
 /// Vtable field of the method in class slot `slot`, after the universal slots
@@ -1872,19 +2054,23 @@ pub(crate) fn shadows_inherited_field<'a>(
 /// Each comes with its backtrace name, `get C.x` / `set C.x`. It is built here
 /// rather than parsed back out of the internal name, which a method with a
 /// string-literal key such as `"get x"()` can share.
-fn accessor_methods(decl: &TypedClassDecl) -> Vec<(crate::TypedClassMethod, String)> {
+fn accessor_methods(
+    decl: &TypedClassDecl,
+) -> Vec<(crate::TypedClassMethod, String, crate::AccessorKind)> {
     decl.accessors
         .iter()
         .map(|acc| {
-            let (kind, name, params, return_type) = match acc {
+            let (kind, accessor_kind, name, params, return_type) = match acc {
                 crate::TypedClassAccessor::Getter { name, ret_ty, .. } => (
                     "get",
+                    crate::AccessorKind::Get,
                     accessor_getter_name(&name.name),
                     Vec::new(),
                     ret_ty.clone(),
                 ),
                 crate::TypedClassAccessor::Setter { name, param, .. } => (
                     "set",
+                    crate::AccessorKind::Set,
                     accessor_setter_name(&name.name),
                     vec![param.clone()],
                     crate::Type::Void,
@@ -1903,7 +2089,7 @@ fn accessor_methods(decl: &TypedClassDecl) -> Vec<(crate::TypedClassMethod, Stri
                 visibility: acc.visibility(),
                 doc: None,
             };
-            (method, frame_name)
+            (method, frame_name, accessor_kind)
         })
         .collect()
 }
@@ -1955,6 +2141,8 @@ struct SlotDraft {
     argument_metadata: Option<String>,
     ret_ty: crate::Type,
     generic: bool,
+    accessor: Option<crate::AccessorKind>,
+    absent: bool,
 }
 
 /// A class's resolved (fields, method slots, own-method names) during the
@@ -1981,6 +2169,7 @@ fn parent_prefix(
         .map(|name| FieldLayout {
             name: name.clone(),
             optional: layout.optional_fields.contains(name),
+            over_prototype: layout.over_prototype_fields.contains(name),
             narrowing_check: layout.narrowing_checks.get(name).cloned().map(Box::new),
         })
         .collect();
@@ -1994,6 +2183,8 @@ fn parent_prefix(
             argument_metadata: s.argument_metadata.clone(),
             ret_ty: s.ret_ty.clone(),
             generic: s.generic,
+            accessor: s.accessor,
+            absent: s.absent,
         })
         .collect();
     Ok((fields, methods))
@@ -2345,25 +2536,10 @@ fn emit_universal_slot_thunk(
     emitter.build()
 }
 
+/// A class without a `toString` method converts through the host object vtable,
+/// which calls an own `toString` field when it holds a function and gives
+/// `[object Object]` otherwise.
 fn emit_class_to_string_body(
-    intrinsics: IntrinsicTypeIndices,
-    string_vtable_global_idx: u32,
-) -> Result<Function, CompilerFailure> {
-    let mut f = Function::new([]);
-    crate::codegen::intrinsics::push_string_literal(
-        &mut f,
-        intrinsics,
-        string_vtable_global_idx,
-        "[object Object]",
-    )?;
-    f.instruction(&Instruction::End);
-    Ok(f)
-}
-
-/// A class whose `toString` is a field converts through the host object vtable,
-/// which calls the field when it holds a function and gives `[object Object]`
-/// otherwise, as when an optional one is absent.
-fn emit_class_to_string_field_body(
     symbols: &SymbolTable,
     intrinsics: IntrinsicTypeIndices,
 ) -> Result<Function, CompilerFailure> {
@@ -2486,104 +2662,6 @@ fn emit_class_hash_body(n_fields: u32, intrinsics: IntrinsicTypeIndices) -> Func
     f
 }
 
-/// Member names this module may write through a structural alias. A method is
-/// fixed on its class, but a `{ m: () => T }` view of the instance, or a record
-/// holding functions, writes the payload slot the method's closure lives in.
-///
-/// The rule is by name, so it covers imported classes too: this module's write
-/// reaches an imported instance as easily as a local one.
-#[derive(Clone, Debug)]
-pub(crate) enum RewritableMembers {
-    Named(std::collections::BTreeSet<String>),
-    /// A computed-key write of a function-capable value may reach any member.
-    Every,
-}
-
-impl Default for RewritableMembers {
-    fn default() -> Self {
-        Self::Named(std::collections::BTreeSet::new())
-    }
-}
-
-impl RewritableMembers {
-    pub(crate) fn of(ta: &TypedAst) -> Result<Self, crate::compiler_error::CompilerFailure> {
-        let mut members = Self::default();
-        for id in ta.stmt_ids().map_err(super::arena_failure)? {
-            match &ta.try_stmt(id).map_err(super::arena_failure)?.kind {
-                crate::TypedStmtKind::AssignField { name, .. } => {
-                    members.note_name(&name.name);
-                }
-                crate::TypedStmtKind::AssignIndex { index, elem_ty, .. } => {
-                    members.note_index(ta, *index, elem_ty)?;
-                }
-                _ => {}
-            }
-        }
-        for id in ta.expr_ids().map_err(super::arena_failure)? {
-            let crate::TypedExprKind::PostfixUnary { target, .. } =
-                &ta.try_expr(id).map_err(super::arena_failure)?.kind
-            else {
-                continue;
-            };
-            match target {
-                crate::PostfixTarget::Field { name, .. } => {
-                    members.note_name(&name.name);
-                }
-                crate::PostfixTarget::Index { index, elem_ty, .. } => {
-                    members.note_index(ta, *index, elem_ty)?;
-                }
-                _ => {}
-            }
-        }
-        Ok(members)
-    }
-
-    fn note_index(
-        &mut self,
-        ta: &TypedAst,
-        index: crate::ExprId,
-        elem_ty: &crate::Type,
-    ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        if !may_hold_function(elem_ty) {
-            return Ok(());
-        }
-        match &ta.try_expr(index).map_err(super::arena_failure)?.kind {
-            crate::TypedExprKind::String(name) => self.note_name(name),
-            _ => *self = Self::Every,
-        }
-        Ok(())
-    }
-
-    fn note_name(&mut self, name: &str) {
-        if let Self::Named(names) = self {
-            names.insert(name.to_string());
-        }
-    }
-
-    pub(crate) fn includes(&self, name: &str) -> bool {
-        match self {
-            Self::Named(names) => names.contains(name),
-            Self::Every => true,
-        }
-    }
-}
-
-fn may_hold_function(ty: &crate::Type) -> bool {
-    match ty.peel() {
-        crate::Type::Union(members) => members.iter().any(may_hold_function),
-        crate::Type::Function { .. }
-        | crate::Type::Unknown
-        | crate::Type::NonPrimitive
-        | crate::Type::TypeVar(_)
-        | crate::Type::GenericParam { .. }
-        | crate::Type::Error => true,
-        // `T[K]`, `T & U` and the other erased forms hold what `T` may;
-        // `keyof T` holds only keys.
-        crate::Type::KeyOf(_) => false,
-        other => other.lowers_to_erased_slot(),
-    }
-}
-
 fn ref_to(idx: u32) -> ValType {
     ValType::Ref(RefType {
         nullable: false,
@@ -2686,11 +2764,13 @@ mod tests {
                 FieldLayout {
                     name: "message".to_string(),
                     optional: false,
+                    over_prototype: false,
                     narrowing_check: None,
                 },
                 FieldLayout {
                     name: "name".to_string(),
                     optional: false,
+                    over_prototype: false,
                     narrowing_check: None,
                 },
             ],

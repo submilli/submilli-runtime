@@ -476,6 +476,13 @@ fn build_error_vtable(
         intr.to_string_fn.clone(),
         |mut caller, params, results| {
             Box::new(async move {
+                if let Some(value) =
+                    super::vtable::object_override(&mut caller, abi_arg(params, 0)?, "toString")
+                        .await?
+                {
+                    *abi_result(results, 0)? = value;
+                    return Ok(());
+                }
                 let name = payload_units(
                     &mut caller,
                     abi_arg(params, 0)?,
@@ -508,8 +515,15 @@ fn build_error_vtable(
     let to_json = host_func_async(
         &mut *store,
         intr.to_json_fn.clone(),
-        |mut caller, _params, results| {
+        |mut caller, params, results| {
             Box::new(async move {
+                if let Some(value) =
+                    super::vtable::object_override(&mut caller, abi_arg(params, 0)?, "toJson")
+                        .await?
+                {
+                    *abi_result(results, 0)? = value;
+                    return Ok(());
+                }
                 let units: Vec<u16> = "{}".encode_utf16().collect();
                 let st = write_submilli_string_struct_units(&mut caller, &units)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
@@ -1018,6 +1032,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             readonly: false,
                             optional: true,
                             method: false,
+                            over_prototype: false,
                             doc: doc(
                                 "/** The error that led to this one, passed as `new Error(message, { cause })`; `undefined` when none was. */",
                             ),
@@ -1031,6 +1046,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             readonly: false,
                             optional: false,
                             method: false,
+                            over_prototype: false,
                             doc: doc(
                                 "/** The human-readable message passed to `new Error(message)`. */",
                             ),
@@ -1044,6 +1060,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             readonly: false,
                             optional: false,
                             method: false,
+                            over_prototype: false,
                             doc: doc(
                                 "/** The error class name. Defaults to `\"Error\"`; subclasses conventionally set `this.name` in their constructor. */",
                             ),
@@ -1277,6 +1294,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             readonly: false,
                             optional: false,
                             method: false,
+                            over_prototype: false,
                             doc: doc(
                                 "/** The Package the denied call was attributed to (e.g. `\"main\"`). */",
                             ),
@@ -1290,6 +1308,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             readonly: false,
                             optional: false,
                             method: false,
+                            over_prototype: false,
                             doc: doc(
                                 "/** The denied capability name (e.g. `\"fs.read\"`, `\"http.get\"`). */",
                             ),
@@ -1303,6 +1322,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             readonly: false,
                             optional: false,
                             method: false,
+                            over_prototype: false,
                             doc: doc("/** The policy-supplied denial reason. */"),
                         },
                     ),

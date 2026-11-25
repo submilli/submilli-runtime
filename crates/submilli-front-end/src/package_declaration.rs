@@ -1440,6 +1440,10 @@ pub struct FieldSig {
     /// may override with a method.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub method: bool,
+    /// `true` when this field shadows a method or accessor declared on a class
+    /// in the inheritance chain.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub over_prototype: bool,
     pub doc: Option<crate::DocComment>,
 }
 
@@ -1693,5 +1697,41 @@ mod non_finite_artifact_roundtrip {
         };
         assert_eq!(variants[0].1.to_bits(), f64::INFINITY.to_bits());
         assert_eq!(variants[1].1, 1.0);
+    }
+
+    #[test]
+    fn field_sig_over_prototype_serde_round_trip() {
+        let plain = super::FieldSig {
+            ty: Type::Number,
+            visibility: crate::Visibility::Public,
+            readonly: false,
+            optional: false,
+            method: false,
+            over_prototype: false,
+            doc: None,
+        };
+        let plain_json = serde_json::to_string(&plain).unwrap();
+        assert!(
+            !plain_json.contains("over_prototype"),
+            "false over_prototype should be omitted: {plain_json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<super::FieldSig>(&plain_json).unwrap(),
+            plain
+        );
+
+        let shadowing = super::FieldSig {
+            over_prototype: true,
+            ..plain
+        };
+        let shadowing_json = serde_json::to_string(&shadowing).unwrap();
+        assert!(
+            shadowing_json.contains(r#""over_prototype":true"#),
+            "true over_prototype should serialize: {shadowing_json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<super::FieldSig>(&shadowing_json).unwrap(),
+            shadowing
+        );
     }
 }

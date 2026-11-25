@@ -1,8 +1,27 @@
-//! Shared two-pass lookup for data and accessor names on ObjectShape values.
+//! Shared two-pass lookup for data, method, and accessor names on ObjectShape values.
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
 
+use super::field_names::{ACCESSOR_MARKER, METHOD_MARKER, PROTOCOL_MARKER, emit_name_flag};
 use super::{CodegenCtx, function_emitter::FunctionEmitter};
 use crate::{Ident, Span};
+
+/// Read lookup: present own data property first, else prototype method/protocol.
+pub(crate) const LOOKUP_DATA_OR_METHOD: i32 = 0;
+/// Accessor lookup: internal `get <prop>` / `set <prop>` slot.
+pub(crate) const LOOKUP_ACCESSOR: i32 = 1;
+/// Own data lookup: present own data property only (ignores methods/accessors/absent).
+pub(crate) const LOOKUP_OWN_DATA: i32 = 2;
+/// Writable data lookup: present own data property first, else absent data slot
+/// (never overwrites a method or protocol slot in place).
+pub(crate) const LOOKUP_WRITABLE_DATA: i32 = 3;
+
+#[derive(Clone, Copy)]
+enum SlotFilter {
+    PresentOwnData,
+    PrototypeMember,
+    AbsentData,
+    Accessor,
+}
 
 pub(super) fn allocate(
     types: &mut wasm_encoder::TypeSection,
@@ -46,7 +65,7 @@ pub(super) fn body(ctx: &CodegenCtx) -> Result<Function, crate::compiler_error::
             }),
         ),
         ("name", ctx.symbols.value_type(&crate::Type::String)?),
-        ("accessor", ValType::I32),
+        ("mode", ValType::I32),
     ]
     .map(|(name, ty)| {
         (
@@ -94,32 +113,57 @@ fn emit_lookup(
         .prelude_func_idx("string_eq")
         .ok_or_else(|| crate::codegen::internal_failure("submilli:prelude.string_eq imported"))?;
 
-    emitter.emit_block(BlockType::Result(ValType::I32));
-    emit_field_name_scan_pass(
-        emitter,
-        field_names_type_idx,
-        names_local,
-        i_local,
-        len_local,
-        1,
-        None,
-        ctx,
-        2,
-    )?;
-    emit_field_name_scan_pass(
-        emitter,
-        field_names_type_idx,
-        names_local,
-        i_local,
-        len_local,
-        1,
-        Some(string_eq_idx),
-        ctx,
-        2,
-    )?;
-    emitter.instruction(Instruction::I32Const(-1));
+    let scan = |emitter: &mut FunctionEmitter,
+                filter: SlotFilter|
+     -> Result<(), crate::compiler_error::CompilerFailure> {
+        emit_field_name_scan_pass(
+            emitter,
+            field_names_type_idx,
+            names_local,
+            i_local,
+            len_local,
+            1,
+            None,
+            ctx,
+            filter,
+        )?;
+        emit_field_name_scan_pass(
+            emitter,
+            field_names_type_idx,
+            names_local,
+            i_local,
+            len_local,
+            1,
+            Some(string_eq_idx),
+            ctx,
+            filter,
+        )
+    };
+
+    emitter.instruction(Instruction::LocalGet(2));
+    emitter.instruction(Instruction::I32Const(LOOKUP_ACCESSOR));
+    emitter.instruction(Instruction::I32Eq);
+    emitter.emit_if(BlockType::Empty);
+    scan(emitter, SlotFilter::Accessor)?;
+    emitter.emit_else();
+    // Modes 0, 2, and 3 all give present own data properties first priority.
+    scan(emitter, SlotFilter::PresentOwnData)?;
+    emitter.instruction(Instruction::LocalGet(2));
+    emitter.instruction(Instruction::I32Const(LOOKUP_DATA_OR_METHOD));
+    emitter.instruction(Instruction::I32Eq);
+    emitter.emit_if(BlockType::Empty);
+    scan(emitter, SlotFilter::PrototypeMember)?;
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(2));
+    emitter.instruction(Instruction::I32Const(LOOKUP_WRITABLE_DATA));
+    emitter.instruction(Instruction::I32Eq);
+    emitter.emit_if(BlockType::Empty);
+    scan(emitter, SlotFilter::AbsentData)?;
+    emitter.emit_end();
+    emitter.emit_end();
     emitter.emit_end();
 
+    emitter.instruction(Instruction::I32Const(-1));
     Ok(())
 }
 
@@ -133,7 +177,7 @@ fn emit_field_name_scan_pass(
     name_local: u32,
     string_eq_idx: Option<u32>,
     ctx: &CodegenCtx,
-    accessor_local: u32,
+    filter: SlotFilter,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(i_local));
@@ -152,16 +196,15 @@ fn emit_field_name_scan_pass(
     } else {
         emitter.instruction(Instruction::RefEq);
     }
+    emitter.emit_if(BlockType::Empty);
     emitter.instruction(Instruction::LocalGet(names_local));
     emitter.instruction(Instruction::LocalGet(i_local));
     emitter.instruction(Instruction::ArrayGet(field_names_type_idx));
-    crate::codegen::field_names::emit_name_is_accessor(emitter, ctx)?;
-    emitter.instruction(Instruction::LocalGet(accessor_local));
-    emitter.instruction(Instruction::I32Eq);
-    emitter.instruction(Instruction::I32And);
+    emit_slot_filter(emitter, ctx, filter)?;
     emitter.emit_if(BlockType::Empty);
     emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::Br(3));
+    emitter.instruction(Instruction::Return);
+    emitter.emit_end();
     emitter.emit_end();
     emitter.instruction(Instruction::LocalGet(i_local));
     emitter.instruction(Instruction::I32Const(1));
@@ -171,5 +214,37 @@ fn emit_field_name_scan_pass(
     emitter.emit_end();
     emitter.emit_end();
 
+    Ok(())
+}
+
+fn emit_slot_filter(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    filter: SlotFilter,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_name_flag(emitter, ctx)?;
+    match filter {
+        SlotFilter::PresentOwnData => {
+            emitter.instruction(Instruction::I32Const(0));
+            emitter.instruction(Instruction::I32GtS);
+        }
+        SlotFilter::AbsentData => {
+            emitter.instruction(Instruction::I32Eqz);
+        }
+        SlotFilter::Accessor => {
+            emitter.instruction(Instruction::I32Const(ACCESSOR_MARKER));
+            emitter.instruction(Instruction::I32Eq);
+        }
+        SlotFilter::PrototypeMember => {
+            let flag = emitter.add_anonymous_local(ValType::I32)?;
+            emitter.instruction(Instruction::LocalTee(flag));
+            emitter.instruction(Instruction::I32Const(METHOD_MARKER));
+            emitter.instruction(Instruction::I32Eq);
+            emitter.instruction(Instruction::LocalGet(flag));
+            emitter.instruction(Instruction::I32Const(PROTOCOL_MARKER));
+            emitter.instruction(Instruction::I32Eq);
+            emitter.instruction(Instruction::I32Or);
+        }
+    }
     Ok(())
 }

@@ -1491,6 +1491,9 @@ pub struct TypedClassField {
     /// Declared as a bodyless optional method (`f?(): T;`), which, as in
     /// TypeScript, emits nothing: it neither initializes nor resets the slot.
     pub method_signature: bool,
+    /// `true` when this field shadows a method or accessor declared on a class
+    /// in the inheritance chain.
+    pub over_prototype: bool,
     /// Set when this declaration *narrows* an inherited one. See
     /// [`FieldNarrowingCheck`]. Boxed because every class field carries this and
     /// almost none of them narrow.

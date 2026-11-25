@@ -92,8 +92,6 @@ pub struct SymbolTable {
     class_method_slot: BTreeMap<(MangledName, String), u32>,
     /// Methods whose current callable value lives in the mutable instance payload.
     class_payload_methods: BTreeSet<(MangledName, String)>,
-    /// Member names this module may write through a structural alias.
-    rewritable_members: crate::codegen::classes::RewritableMembers,
     /// Wasm fn-type index of a class method's signature, for the `call_ref`.
     class_method_sig: BTreeMap<(MangledName, String), u32>,
     /// Physical Wasm signature of a class method's vtable slot, keyed for every
@@ -673,20 +671,6 @@ impl SymbolTable {
 
     pub fn record_class_payload_method(&mut self, class: MangledName, method: String) {
         self.class_payload_methods.insert((class, method));
-    }
-
-    pub(crate) fn record_rewritable_members(
-        &mut self,
-        members: crate::codegen::classes::RewritableMembers,
-    ) {
-        self.rewritable_members = members;
-    }
-
-    /// A payload method, local or imported, that this module may overwrite
-    /// through a structural alias, so a direct call must read the payload rather
-    /// than the class vtable. Every other call keeps the cheaper vtable dispatch.
-    pub fn is_rewritable_class_method(&self, class: &MangledName, method: &str) -> bool {
-        self.rewritable_members.includes(method) && self.is_class_payload_method(class, method)
     }
 
     pub fn record_class_method_sig(&mut self, class: MangledName, method: String, sig: u32) {
