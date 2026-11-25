@@ -1384,6 +1384,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         readonly: false,
                         optional: false,
                         method: false,
+                        over_prototype: false,
                         doc: doc(
                             "/** Why there is no answer: `\"declined\"` (the person said no; `message` holds what they said, if anything), `\"expired\"` (nobody answered before the deadline), or `\"unanswerable\"` (this run cannot ask anyone). */",
                         ),
