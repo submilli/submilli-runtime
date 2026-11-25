@@ -58,6 +58,7 @@ pub fn emit_expr(
             | TypedExprKind::IntrinsicCall { .. }
             | TypedExprKind::SuperCtorCall { .. }
             | TypedExprKind::SuperMethodCall { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::OptionalChain { .. }
     );
     let mark = call_boundary.then(|| emitter.single_evaluation_mark());
@@ -283,30 +284,56 @@ fn emit_expr_value(
             let this = emitter.this_local().ok_or_else(|| {
                 crate::codegen::internal_failure("super.method() only inside a method body")
             })?;
-            emitter.instruction(Instruction::LocalGet(this));
-            let abi = ctx.symbols.class_method_abi(owner, &name.name).cloned();
-            if args.is_empty() {
-                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            if let Some(func) = ctx.symbols.class_method_func_idx(owner, &name.name) {
+                emitter.instruction(Instruction::LocalGet(this));
+                let abi = ctx.symbols.class_method_abi(owner, &name.name).cloned();
+                if args.is_empty() {
+                    emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+                }
+                emit_args_into_slots(
+                    emitter,
+                    ctx,
+                    args,
+                    abi.as_ref().map(|a| a.params.as_slice()),
+                )?;
+                // `super.m()` on a generic method is rejected, so a generic slot's
+                // parent body here is a plain override, which ignores `$types`.
+                if abi.as_ref().is_some_and(|abi| abi.types) {
+                    crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
+                }
+                emitter.instruction(Instruction::Call(func));
+                emit_slot_return_cast(emitter, ctx, &expr.ty, abi.as_ref())?;
+            } else if name.name == "toString" {
+                emit_super_prototype_to_string(
+                    emitter, ctx, this, owner, args, expr.span, &expr.ty,
+                )?;
+            } else {
+                return Err(crate::codegen::internal_failure(
+                    "parent method body fn allocated",
+                ));
             }
-            emit_args_into_slots(
-                emitter,
-                ctx,
-                args,
-                abi.as_ref().map(|a| a.params.as_slice()),
-            )?;
-            // `super.m()` on a generic method is rejected, so a generic slot's
-            // parent body here is a plain override, which ignores `$types`.
+        }
+        TypedExprKind::SuperGet { owner, name } => {
+            // Direct call of `owner`'s synthetic getter body (`get <name>`),
+            // skipping vtable dispatch so an override in the class itself or
+            // below is not called.
+            let this = emitter.this_local().ok_or_else(|| {
+                crate::codegen::internal_failure("super.x only inside a class member body")
+            })?;
+            let getter = crate::codegen::classes::accessor_getter_name(&name.name);
+            let abi = ctx.symbols.class_method_abi(owner, &getter).cloned();
+            let func = ctx
+                .symbols
+                .class_method_func_idx(owner, &getter)
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("parent getter body fn allocated")
+                })?;
+            emitter.instruction(Instruction::LocalGet(this));
             if abi.as_ref().is_some_and(|abi| abi.types) {
                 crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
             }
-            let func = ctx
-                .symbols
-                .class_method_func_idx(owner, &name.name)
-                .ok_or_else(|| {
-                    crate::codegen::internal_failure("parent method body fn allocated")
-                })?;
             emitter.instruction(Instruction::Call(func));
-            emit_slot_return_cast(emitter, ctx, &expr.ty.clone(), abi.as_ref())?;
+            emit_slot_return_cast(emitter, ctx, &expr.ty, abi.as_ref())?;
         }
         TypedExprKind::VirtualCall { target, tool, args } => {
             // No per-tool import: serialize the args to JSON, dispatch the package's
@@ -6096,12 +6123,12 @@ fn emit_callee(
     callee: ExprId,
 ) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
     let reference = reference_expression(ctx.ta, callee)?;
-    let receiver = match &ctx
+    let ref_kind = &ctx
         .ta
         .try_expr(reference)
         .map_err(crate::codegen::arena_failure)?
-        .kind
-    {
+        .kind;
+    let receiver = match ref_kind {
         TypedExprKind::FieldAccess { receiver, .. }
         | TypedExprKind::IndexAccess { receiver, .. }
         | TypedExprKind::InterfacePropertyAccess { receiver, .. } => Some(*receiver),
@@ -6126,19 +6153,11 @@ fn emit_callee(
         .transpose()?;
     emit_expr(emitter, ctx, callee)?;
     emitter.end_single_evaluations(mark)?;
-    Ok(
-        if matches!(
-            ctx.ta
-                .try_expr(reference)
-                .map_err(crate::codegen::arena_failure)?
-                .kind,
-            TypedExprKind::OptionalChain { .. }
-        ) {
-            emitter.call_receiver.take()
-        } else {
-            slot
-        },
-    )
+    Ok(match ref_kind {
+        TypedExprKind::OptionalChain { .. } => emitter.call_receiver.take(),
+        TypedExprKind::SuperGet { .. } => emitter.this_local(),
+        _ => slot,
+    })
 }
 
 fn reference_expression(
@@ -7366,13 +7385,65 @@ pub(super) fn emit_vtable_dispatch_on_object_stack(
 /// Push each argument, coercing it into the callee's recorded slot type.
 /// `slots` is `None` when no ABI was recorded, in which case the arguments are
 /// already at their declared types.
-fn emit_args_into_slots(
+pub(super) fn emit_args_into_slots(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     args: &[ExprId],
     slots: Option<&[ValType]>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     emit_args_into_slots_with_defaults(emitter, ctx, args, slots, &[])
+}
+
+/// Direct `super.toString()` targeting a global-scope built-in prototype whose
+/// `toString` is not declared as a class method (`submilli:prelude#Error`, its
+/// built-in subclasses, or `submilli:prelude#Object`).
+fn emit_super_prototype_to_string(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    this: u32,
+    owner: &crate::MangledName,
+    args: &[ExprId],
+    span: crate::Span,
+    call_ret_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    if args.is_empty() {
+        emit_discarded_call_arguments(emitter, ctx, span)?;
+    } else {
+        for &arg in args {
+            emit_expr(emitter, ctx, arg)?;
+            emitter.instruction(Instruction::Drop);
+        }
+    }
+    if owner.as_str().starts_with("submilli:prelude#")
+        && let Some(vtable) = ctx.symbols.class_vtable_global_idx(owner)
+    {
+        // Every prelude class is a built-in `Error` class whose vtable slot 0
+        // holds the non-virtual host `Error#toString` implementation.
+        emitter.instruction(Instruction::LocalGet(this));
+        emitter.instruction(Instruction::GlobalGet(vtable));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: intrinsics.vtable,
+            field_index: 0,
+        });
+        emitter.instruction(Instruction::CallRef(intrinsics.to_string_fn));
+    } else if *owner == crate::mangle::prelude("Object") {
+        super::emit_inline_string_literal(emitter, ctx, "[object Object]")?;
+    } else {
+        return Err(crate::codegen::internal_failure(
+            "global-scope base class vtable allocated for super.toString()",
+        ));
+    }
+    let abi = MethodSlotAbi {
+        types: false,
+        params: Vec::new(),
+        ret: Some(ctx.symbols.value_type(&Type::String)?),
+    };
+    emit_slot_return_cast(emitter, ctx, call_ret_ty, Some(&abi))?;
+    Ok(())
 }
 
 fn emit_args_into_slots_with_defaults(
@@ -7488,23 +7559,22 @@ fn emit_slot_return_cast(
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
     }
+    let slot_ret = abi.and_then(|abi| abi.ret);
     // A resultless slot still produces `undefined`, including when a widened
     // call site reads it as `unknown`.
     if abi.is_some_and(|abi| abi.ret.is_none()) {
         emit_undefined(emitter, ctx)?;
     }
-    if call_ret_ty.is_void() {
-        return Ok(());
-    }
-    if matches!(call_ret_ty, Type::Unknown) {
-        match abi.and_then(|abi| abi.ret) {
+    let target_is_untyped = matches!(call_ret_ty.lowered(), Type::Void | Type::Unknown);
+    if target_is_untyped || slot_ret != Some(ctx.symbols.value_type(call_ret_ty)?) {
+        match slot_ret {
             Some(ValType::F64) => cast::emit_box(emitter, ctx, &Type::Number)?,
             Some(ValType::I32) => cast::emit_box(emitter, ctx, &Type::Boolean)?,
             _ => {}
         }
-        return Ok(());
-    }
-    if abi.and_then(|a| a.ret) != Some(ctx.symbols.value_type(call_ret_ty)?) {
+        if target_is_untyped {
+            return Ok(());
+        }
         crate::codegen::cast_check::emit_checked_cast_on_stack(
             emitter,
             ctx,

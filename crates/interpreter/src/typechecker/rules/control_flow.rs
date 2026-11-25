@@ -131,6 +131,7 @@ fn completion(
             | TypedStmtKind::AssignLocal { .. }
             | TypedStmtKind::AssignGlobal { .. }
             | TypedStmtKind::AssignField { .. }
+            | TypedStmtKind::SuperSet { .. }
             | TypedStmtKind::AssignIndex { .. }
             | TypedStmtKind::Expr(_) => falls,
         },

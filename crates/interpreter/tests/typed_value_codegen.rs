@@ -975,3 +975,766 @@ fn calls_a_saved_closure_with_an_explicit_receiver() {
         "1231442"
     );
 }
+
+#[test]
+fn super_get_and_super_set_dispatch_base_accessors() {
+    let source = include_str!("typed_value_sources/super-accessors.ts")
+        .replace("override ", "")
+        .replace("(this: Base) => number", "() => number")
+        .replace(
+            "return super.x * 10;",
+            "return superGetNumber(\"Base\", \"x\") * 10;",
+        )
+        .replace("super.x = v + 1;", "superSetNumber(\"Base\", \"x\", v + 1);")
+        .replace(
+            "() => () => super.x;",
+            "() => () => superGetNumber(\"Base\", \"x\");",
+        )
+        .replace("() => super.x;", "() => superGetNumber(\"Base\", \"x\");")
+        .replace(
+            "const assigned = (super.x = v);",
+            "const assigned = superAssignNumber(\"Base\", \"x\", v);",
+        )
+        .replace("super.x = v;", "superSetNumber(\"Base\", \"x\", v);")
+        .replace(
+            "return super.reader();",
+            "return superGetReader(\"Base\", \"reader\")();",
+        )
+        .replace(
+            "return String(super.pureNum) + \":\" + String(super.pureFlag);",
+            "return String(superGetNumber(\"Base\", \"pureNum\")) + \":\" + String(superGetBool(\"Base\", \"pureFlag\"));",
+        )
+        .replace(
+            "super.x += 3;",
+            "superSetNumber(\"Base\", \"x\", superGetNumber(\"Base\", \"x\") + 3);",
+        )
+        .replace(
+            "const prev = super.x++;",
+            "const prev = superGetNumber(\"Base\", \"x\"); superSetNumber(\"Base\", \"x\", prev + 1);",
+        )
+        .replace(
+            "super.maybe ??= fallback();",
+            "if (superGetOpt(\"Base\", \"maybe\") === undefined) { superSetOpt(\"Base\", \"maybe\", fallback()); }",
+        )
+        .replace(
+            "return super.maybe ?? -1;",
+            "return superGetOpt(\"Base\", \"maybe\") ?? -1;",
+        )
+        .replace(
+            "return super.x + 1000;",
+            "return superGetNumber(\"Mid\", \"x\") + 1000;",
+        )
+        .replace("super.x = v * 2;", "superSetNumber(\"Mid\", \"x\", v * 2);")
+        .replace(
+            "super.maybe = v;",
+            "superSetOpt(\"Base\", \"maybe\", v);",
+        )
+        .replace(
+            "super.value = super.value + 5;",
+            "superSetNumber(\"Box\", \"value\", superGetNumber(\"Box\", \"value\") + 5);",
+        )
+        .replace(
+            "return super.value * 3;",
+            "return superGetNumber(\"Box\", \"value\") * 3;",
+        )
+        .replace(
+            "super.value = v - 1;",
+            "superSetNumber(\"Box\", \"value\", v - 1);",
+        )
+        .replace(
+            "const inner = super.value;",
+            "const inner = superGetObj(\"Box\", \"value\");",
+        )
+        .replace(
+            "super.value = { a: v.a * 2 };",
+            "superSetObj(\"Box\", \"value\", { a: v.a * 2 });",
+        );
+    let source = format!(
+        "function superGetNumber(owner: string, name: string): number {{ return 0; }}
+         function superGetBool(owner: string, name: string): boolean {{ return false; }}
+         function superGetReader(owner: string, name: string): () => number {{ return () => 0; }}
+         function superSetNumber(owner: string, name: string, value: number): void {{}}
+         function superAssignNumber(owner: string, name: string, value: number): number {{ return value; }}
+         function superGetOpt(owner: string, name: string): number | undefined {{ return undefined; }}
+         function superSetOpt(owner: string, name: string, value: number | undefined): void {{}}
+         function superGetObj(owner: string, name: string): {{ a: number }} {{ return {{ a: 0 }}; }}
+         function superSetObj(owner: string, name: string, value: {{ a: number }}): void {{}}
+         {source}"
+    );
+    let (sources, _) = submilli_engine::Sources::single("super-accessors.ts", &source).unwrap();
+    assert_eq!(
+        run(&source, move |ast| {
+            let (gets, sets) = replace_super_accessor_markers(ast, "main");
+            assert_eq!((gets, sets), (14, 12));
+
+            let diagnostics = submilli_engine::typechecker::rules::check_script_submilli(ast, &[])
+                .expect("rules check super accessors");
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+            let (prelude, host, internal) =
+                submilli_engine::runtime::prelude::cached_runtime_package_declarations();
+            let declaration = submilli_engine::PackageDeclaration::with_package("main");
+            let authority = submilli_engine::authority::analyse(
+                &declaration,
+                ast,
+                &sources,
+                prelude.iter().chain(host).chain(internal),
+            )
+            .unwrap();
+            assert!(
+                authority.edges.iter().any(|edge| {
+                    edge.caller == "main#Mid#get#x"
+                        && edge.target.as_deref() == Some("main#Base#get#x")
+                        && !edge.unresolved
+                }),
+                "expected direct SuperGet edge: {:?}",
+                authority.edges
+            );
+            assert!(
+                authority.edges.iter().any(|edge| {
+                    edge.caller == "main#Mid#set#x"
+                        && edge.target.as_deref() == Some("main#Base#set#x")
+                        && !edge.unresolved
+                }),
+                "expected direct SuperSet edge: {:?}",
+                authority.edges
+            );
+            assert!(
+                !authority.edges.iter().any(|edge| {
+                    edge.caller.starts_with("main#Mid#")
+                        && edge.unresolved
+                        && edge.reason.as_deref()
+                            == Some("virtual accessor target may be overridden")
+                }),
+                "super accessor must not be marked virtual/unresolved: {:?}",
+                authority.edges
+            );
+        }),
+        "20|5|100|10|10|7|8|7|7|42:true|34|35|42|42|1|1020|7|1140|123|45|57|6|15"
+    );
+}
+
+#[test]
+fn super_get_unwidened_primitive_return_coercions() {
+    // Getters that do not read a field keep unwidened primitive slots (`f64`
+    // and `i32`), exercising every boxing/coercion branch in `emit_slot_return_cast`.
+    let source = r#"
+        function superGetNumUnion(owner: string, name: string): number | string { return 0; }
+        function superGetBoolUnion(owner: string, name: string): boolean | undefined { return undefined; }
+        function superGetUnknown(owner: string, name: string): unknown { return 0; }
+        function superGetVoid(owner: string, name: string): void {}
+        class Base {
+            get n(): number { return 42; }
+            get flag(): boolean { return true; }
+        }
+        class Sub extends Base {
+            asUnion(): string {
+                const a = superGetNumUnion("Base", "n");
+                const b = superGetBoolUnion("Base", "flag");
+                return String(a) + "|" + String(b);
+            }
+            asUnknown(): string {
+                const a = superGetUnknown("Base", "n");
+                const b = superGetUnknown("Base", "flag");
+                return String(a) + "|" + String(b);
+            }
+            asVoid(): void {
+                return superGetVoid("Base", "n");
+            }
+        }
+        function main(): string {
+            const s = new Sub();
+            s.asVoid();
+            return s.asUnion() + "|" + s.asUnknown();
+        }
+    "#;
+    assert_eq!(
+        run(source, |ast| {
+            let mut replaced = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr(id).unwrap().clone();
+                let TypedExprKind::Call { mangled, args, .. } = &expr.kind else {
+                    continue;
+                };
+                if !matches!(
+                    mangled.as_str(),
+                    "main#superGetNumUnion"
+                        | "main#superGetBoolUnion"
+                        | "main#superGetUnknown"
+                        | "main#superGetVoid"
+                ) {
+                    continue;
+                }
+                let TypedExprKind::String(owner_name) = &ast.try_expr(args[0]).unwrap().kind else {
+                    panic!("owner marker must be a string literal");
+                };
+                let TypedExprKind::String(prop_name) = &ast.try_expr(args[1]).unwrap().kind else {
+                    panic!("property marker must be a string literal");
+                };
+                ast.try_expr_mut(id).unwrap().kind = TypedExprKind::SuperGet {
+                    owner: submilli_engine::mangle::package_symbol("main", owner_name),
+                    name: Ident {
+                        name: prop_name.clone(),
+                        span: expr.span,
+                    },
+                };
+                replaced += 1;
+            }
+            assert_eq!(replaced, 5);
+        }),
+        "42|true|42|true"
+    );
+}
+
+#[test]
+fn super_get_and_super_set_across_package_boundary() {
+    let base_pkg = submilli_engine::compile::compile_package_checked(
+        "@test/base",
+        submilli_engine::ModulePath::from("lib"),
+        &[submilli_engine::compile::PackageSourceModule {
+            path: submilli_engine::ModulePath::from("lib"),
+            source: "
+                /** Grandparent class with an inherited accessor. */
+                export class GrandBase {
+                    private g: number = 100;
+                    get gx(): number { return this.g; }
+                    set gx(v: number) { this.g = v; }
+                }
+                /** Base class extending GrandBase with its own accessor. */
+                export class Base extends GrandBase {
+                    private v: number = 10;
+                    get x(): number { return this.v; }
+                    set x(v: number) { this.v = v; }
+                }
+            ",
+        }],
+        &[],
+    )
+    .expect("compile base package");
+
+    let source = r#"
+        import { Base } from "@test/base";
+        function superGetNumber(owner: string, name: string): number { return 0; }
+        function superSetNumber(owner: string, name: string, value: number): void {}
+        class Sub extends Base {
+            get x(): number {
+                return superGetNumber("Base", "x") * 4;
+            }
+            set x(v: number) {
+                superSetNumber("Base", "x", v + 3);
+            }
+            get gx(): number {
+                return superGetNumber("GrandBase", "gx") + 1;
+            }
+            set gx(v: number) {
+                superSetNumber("GrandBase", "gx", v * 2);
+            }
+        }
+        function main(): string {
+            const s = new Sub();
+            const first = s.x;
+            s.x = 5;
+            const firstG = s.gx;
+            s.gx = 25;
+            return String(first) + "|" + String(s.x) + "|" + String(firstG) + "|" + String(s.gx);
+        }
+    "#;
+    let output = std::thread::Builder::new()
+        .stack_size(submilli_engine::compiler_limits::COMPILER_STACK_BYTES)
+        .spawn(move || {
+            let (prelude, host, internal) =
+                submilli_engine::runtime::prelude::cached_runtime_package_declarations();
+            let stdlib = submilli_engine::runtime::stdlib_package_declarations();
+            let mut deps = vec![&base_pkg.declaration];
+            deps.extend(stdlib.iter());
+            let request = submilli_engine::script_request(&deps);
+            let checked = submilli_engine::FrontEnd::parse_script(
+                &submilli_engine::EngineFrontEnd,
+                source.to_owned(),
+                FileId(0),
+            )
+            .check(&request)
+            .unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            let mut ast = checked.typed_ast;
+
+            let (gets, sets) = replace_super_accessor_markers(&mut ast, "@test/base");
+            assert_eq!((gets, sets), (2, 2));
+
+            let (sources, _) =
+                submilli_engine::Sources::single("cross-pkg-super.ts", source).unwrap();
+            let declaration = submilli_engine::PackageDeclaration::with_package("main");
+            let authority = submilli_engine::authority::analyse(
+                &declaration,
+                &ast,
+                &sources,
+                prelude
+                    .iter()
+                    .chain(host)
+                    .chain(internal)
+                    .chain(std::iter::once(&base_pkg.declaration)),
+            )
+            .unwrap();
+            for caller in [
+                "main#Sub#get#x",
+                "main#Sub#set#x",
+                "main#Sub#get#gx",
+                "main#Sub#set#gx",
+            ] {
+                assert!(
+                    authority.edges.iter().any(|edge| {
+                        edge.caller == caller
+                            && edge.unresolved
+                            && edge.reason.as_deref()
+                                == Some("external accessor body is not locally analyzable")
+                    }),
+                    "expected external accessor edge for {caller}: {:?}",
+                    authority.edges
+                );
+            }
+
+            let ast = submilli_engine::desugar(submilli_engine::capture(ast).unwrap(), FileId(0))
+                .unwrap();
+            let all_deps: Vec<_> = prelude
+                .iter()
+                .chain(host)
+                .chain(internal)
+                .chain(std::iter::once(&base_pkg.declaration))
+                .collect();
+            let generated = submilli_engine::codegen::codegen_with_type_info(
+                source,
+                "cross-pkg-super.ts",
+                FileId(0),
+                &ast,
+                &all_deps,
+            )
+            .unwrap();
+            let cfg = RuntimeConfig::default();
+            let engine = cfg.engine().unwrap();
+            let mut data = submilli_engine::runtime::StoreData::with_tempdir().unwrap();
+            data.install_type_info(generated.type_info);
+            let mut store = cfg.store_async(&engine, data).unwrap();
+            let mut linker = wasmtime::Linker::new(&engine);
+            let base_module = wasmtime::Module::new(&engine, &base_pkg.wasm).unwrap();
+            pollster::block_on(async {
+                submilli_engine::runtime::install_runtime_async(&mut linker, &mut store)
+                    .await
+                    .unwrap();
+                submilli_engine::runtime::install_package_modules_async(
+                    &mut linker,
+                    &mut store,
+                    &[submilli_engine::runtime::LinkedPackageModule {
+                        module: &base_module,
+                        declaration: &base_pkg.declaration,
+                        type_info: &base_pkg.type_info,
+                    }],
+                )
+                .await
+                .unwrap();
+                let module = wasmtime::Module::new(&engine, &generated.wasm).unwrap();
+                let inst = submilli_engine::instantiate_program_async(&linker, &mut store, &module)
+                    .await
+                    .unwrap();
+                submilli_engine::dispatch_main_async(&mut store, &inst)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            })
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(output, "40|32|101|51");
+}
+
+fn replace_super_accessor_markers(ast: &mut TypedAst, package: &str) -> (usize, usize) {
+    let mut sets = 0;
+    for id in ast.stmt_ids().unwrap() {
+        let stmt = ast.try_stmt(id).unwrap().clone();
+        let TypedStmtKind::Expr(expr_id) = stmt.kind else {
+            continue;
+        };
+        let TypedExprKind::Call { mangled, args, .. } = &ast.try_expr(expr_id).unwrap().kind else {
+            continue;
+        };
+        if !matches!(
+            mangled.as_str(),
+            "main#superSetNumber" | "main#superSetOpt" | "main#superSetObj"
+        ) {
+            continue;
+        }
+        let TypedExprKind::String(owner_name) = &ast.try_expr(args[0]).unwrap().kind else {
+            panic!("owner marker must be a string literal");
+        };
+        let TypedExprKind::String(prop_name) = &ast.try_expr(args[1]).unwrap().kind else {
+            panic!("property marker must be a string literal");
+        };
+        let owner = submilli_engine::mangle::package_symbol(package, owner_name);
+        let prop = Ident {
+            name: prop_name.clone(),
+            span: stmt.span,
+        };
+        let value = args[2];
+        ast.try_stmt_mut(id).unwrap().kind = TypedStmtKind::SuperSet {
+            owner,
+            name: prop,
+            value,
+        };
+        sets += 1;
+    }
+
+    let mut gets = 0;
+    for id in ast.expr_ids().unwrap() {
+        let expr = ast.try_expr(id).unwrap().clone();
+        let TypedExprKind::Call { mangled, args, .. } = &expr.kind else {
+            continue;
+        };
+        if mangled.as_str() == "main#superAssignNumber" {
+            let TypedExprKind::String(owner_name) = &ast.try_expr(args[0]).unwrap().kind else {
+                panic!("owner marker must be a string literal");
+            };
+            let TypedExprKind::String(prop_name) = &ast.try_expr(args[1]).unwrap().kind else {
+                panic!("property marker must be a string literal");
+            };
+            let owner = submilli_engine::mangle::package_symbol(package, owner_name);
+            let prop = Ident {
+                name: prop_name.clone(),
+                span: expr.span,
+            };
+            let value = args[2];
+            let tmp_name = Ident {
+                name: format!("$super_assign_{sets}"),
+                span: expr.span,
+            };
+            let let_stmt = ast
+                .try_push_stmt(submilli_engine::TypedStmt {
+                    kind: TypedStmtKind::Const {
+                        name: tmp_name.clone(),
+                        ty: Type::Number,
+                        value,
+                        doc: None,
+                    },
+                    span: expr.span,
+                })
+                .unwrap();
+            let tmp_read_for_set = ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::LocalRef {
+                        ident: tmp_name.clone(),
+                        boxed: false,
+                    },
+                    span: expr.span,
+                    ty: Type::Number,
+                })
+                .unwrap();
+            let set_stmt = ast
+                .try_push_stmt(submilli_engine::TypedStmt {
+                    kind: TypedStmtKind::SuperSet {
+                        owner,
+                        name: prop,
+                        value: tmp_read_for_set,
+                    },
+                    span: expr.span,
+                })
+                .unwrap();
+            let tmp_read_for_result = ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::LocalRef {
+                        ident: tmp_name,
+                        boxed: false,
+                    },
+                    span: expr.span,
+                    ty: Type::Number,
+                })
+                .unwrap();
+            ast.try_expr_mut(id).unwrap().kind = TypedExprKind::Sequence {
+                stmts: vec![let_stmt, set_stmt],
+                result: tmp_read_for_result,
+            };
+            sets += 1;
+            continue;
+        }
+        if !matches!(
+            mangled.as_str(),
+            "main#superGetNumber"
+                | "main#superGetBool"
+                | "main#superGetReader"
+                | "main#superGetOpt"
+                | "main#superGetObj"
+        ) {
+            continue;
+        }
+        let TypedExprKind::String(owner_name) = &ast.try_expr(args[0]).unwrap().kind else {
+            panic!("owner marker must be a string literal");
+        };
+        let TypedExprKind::String(prop_name) = &ast.try_expr(args[1]).unwrap().kind else {
+            panic!("property marker must be a string literal");
+        };
+        let owner = submilli_engine::mangle::package_symbol(package, owner_name);
+        let prop = Ident {
+            name: prop_name.clone(),
+            span: expr.span,
+        };
+        ast.try_expr_mut(id).unwrap().kind = TypedExprKind::SuperGet { owner, name: prop };
+        gets += 1;
+    }
+
+    (gets, sets)
+}
+
+#[test]
+fn super_method_call_reaches_global_prototype_to_string() {
+    let source = include_str!("typed_value_sources/super-prototype-to-string.ts")
+        .replace("override ", "")
+        .replace(
+            "\"wrapped(\" + super.toString()",
+            "\"wrapped(\" + superToStringMarker(\"Error\")",
+        )
+        .replace(
+            "\"mytype(\" + super.toString()",
+            "\"mytype(\" + superToStringMarker(\"TypeError\")",
+        )
+        .replace(
+            "\"plain(\" + super.toString()",
+            "\"plain(\" + superToStringMarker(\"Object\")",
+        );
+    let source =
+        format!("function superToStringMarker(owner: string): string {{ return \"\"; }}\n{source}");
+    let expected = "wrapped(MyErr: boom)|wrapped(MyErr)|sub(wrapped(MyErr: boom))|mytype(TypeError: bad)|plain([object Object])";
+    let (sources, _) =
+        submilli_engine::Sources::single("super-prototype-to-string.ts", &source).unwrap();
+    assert_eq!(
+        run(&source, move |ast| {
+            let mut replaced = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr(id).unwrap().clone();
+                let TypedExprKind::Call { mangled, args, .. } = &expr.kind else {
+                    continue;
+                };
+                if mangled.as_str() != "main#superToStringMarker" {
+                    continue;
+                }
+                let TypedExprKind::String(owner_name) = &ast.try_expr(args[0]).unwrap().kind else {
+                    panic!("owner marker must be a string literal");
+                };
+                ast.try_expr_mut(id).unwrap().kind = TypedExprKind::SuperMethodCall {
+                    owner: submilli_engine::mangle::prelude(owner_name),
+                    name: Ident {
+                        name: "toString".into(),
+                        span: expr.span,
+                    },
+                    args: vec![],
+                };
+                replaced += 1;
+            }
+            assert_eq!(replaced, 3);
+
+            let (prelude, host, internal) =
+                submilli_engine::runtime::prelude::cached_runtime_package_declarations();
+            let declaration = submilli_engine::PackageDeclaration::with_package("main");
+            let authority = submilli_engine::authority::analyse(
+                &declaration,
+                ast,
+                &sources,
+                prelude.iter().chain(host).chain(internal),
+            )
+            .unwrap();
+            assert!(
+                !authority.edges.iter().any(|edge| {
+                    edge.unresolved
+                        && edge.reason.as_deref() == Some("unresolved super-method target")
+                }),
+                "built-in prototype toString should resolve in authority: {:?}",
+                authority.edges
+            );
+        }),
+        expected
+    );
+
+    // Extra arguments are evaluated for their side effects and dropped, and
+    // widened `unknown` return types stay valid.
+    let extra_source = r#"
+        let trace = 0;
+        function bump(): number { trace = trace + 1; return trace; }
+        function superToStringWithArg(arg: number): unknown { return ""; }
+        class MyErr extends Error {
+            toString(): string {
+                return String(superToStringWithArg(bump()));
+            }
+        }
+        function main(): string {
+            return new MyErr("ok").toString() + "|" + String(trace);
+        }
+    "#;
+    assert_eq!(
+        run(extra_source, |ast| {
+            let mut replaced = 0;
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr(id).unwrap().clone();
+                let TypedExprKind::Call { mangled, args, .. } = &expr.kind else {
+                    continue;
+                };
+                if mangled.as_str() != "main#superToStringWithArg" {
+                    continue;
+                }
+                ast.try_expr_mut(id).unwrap().kind = TypedExprKind::SuperMethodCall {
+                    owner: submilli_engine::mangle::prelude("Error"),
+                    name: Ident {
+                        name: "toString".into(),
+                        span: expr.span,
+                    },
+                    args: args.clone(),
+                };
+                replaced += 1;
+            }
+            assert_eq!(replaced, 1);
+        }),
+        "Error: ok|1"
+    );
+}
+
+#[test]
+fn super_accessor_and_prototype_invalid_targets_fail_cleanly() {
+    fn compile_rewritten(
+        source: &str,
+        rewrite: impl FnOnce(&mut TypedAst) + Send + 'static,
+    ) -> Result<(), submilli_engine::compiler_error::CompilerFailure> {
+        let source = source.to_owned();
+        std::thread::Builder::new()
+            .stack_size(submilli_engine::compiler_limits::COMPILER_STACK_BYTES)
+            .spawn(move || {
+                let (mut ast, diagnostics) =
+                    submilli_engine::compile::typecheck_to_typed_ast(&source, FileId(0));
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                rewrite(&mut ast);
+                let ast = submilli_engine::desugar(submilli_engine::capture(ast)?, FileId(0))?;
+                let (prelude, host, internal) =
+                    submilli_engine::runtime::prelude::cached_runtime_package_declarations();
+                let dependencies: Vec<_> = prelude.iter().chain(host).chain(internal).collect();
+                submilli_engine::codegen::codegen_with_type_info(
+                    &source,
+                    "invalid-super.ts",
+                    FileId(0),
+                    &ast,
+                    &dependencies,
+                )
+                .map(|_| ())
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    // SuperGet on a setter-only accessor fails cleanly as an internal error.
+    let setter_only = r#"
+        function mark(): number { return 0; }
+        class A { private v: number = 0; set x(v: number) { this.v = v; } }
+        class B extends A { read(): number { return mark(); } }
+        function main(): number { return new B().read(); }
+    "#;
+    assert!(matches!(
+        compile_rewritten(setter_only, |ast| {
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                if let TypedExprKind::Call { mangled, .. } = &expr.kind
+                    && mangled.as_str() == "main#mark"
+                {
+                    expr.kind = TypedExprKind::SuperGet {
+                        owner: submilli_engine::mangle::package_symbol("main", "A"),
+                        name: Ident {
+                            name: "x".into(),
+                            span: expr.span,
+                        },
+                    };
+                }
+            }
+        }),
+        Err(submilli_engine::compiler_error::CompilerFailure::Internal { .. })
+    ));
+
+    // SuperSet on a getter-only accessor fails cleanly as an internal error.
+    let getter_only = r#"
+        function mark(v: number): void {}
+        class A { get x(): number { return 1; } }
+        class B extends A { write(v: number): void { mark(v); } }
+        function main(): void { new B().write(2); }
+    "#;
+    assert!(matches!(
+        compile_rewritten(getter_only, |ast| {
+            for id in ast.stmt_ids().unwrap() {
+                let stmt = ast.try_stmt(id).unwrap().clone();
+                if let TypedStmtKind::Expr(expr_id) = stmt.kind
+                    && let TypedExprKind::Call { mangled, args, .. } =
+                        &ast.try_expr(expr_id).unwrap().kind
+                    && mangled.as_str() == "main#mark"
+                {
+                    let value = args[0];
+                    ast.try_stmt_mut(id).unwrap().kind = TypedStmtKind::SuperSet {
+                        owner: submilli_engine::mangle::package_symbol("main", "A"),
+                        name: Ident {
+                            name: "x".into(),
+                            span: stmt.span,
+                        },
+                        value,
+                    };
+                }
+            }
+        }),
+        Err(submilli_engine::compiler_error::CompilerFailure::Internal { .. })
+    ));
+
+    // SuperGet outside a class member body fails cleanly in capture/codegen.
+    let outside_class = r#"
+        function mark(): number { return 0; }
+        class A { get x(): number { return 1; } }
+        function main(): number { return mark(); }
+    "#;
+    assert!(matches!(
+        compile_rewritten(outside_class, |ast| {
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                if let TypedExprKind::Call { mangled, .. } = &expr.kind
+                    && mangled.as_str() == "main#mark"
+                {
+                    expr.kind = TypedExprKind::SuperGet {
+                        owner: submilli_engine::mangle::package_symbol("main", "A"),
+                        name: Ident {
+                            name: "x".into(),
+                            span: expr.span,
+                        },
+                    };
+                }
+            }
+        }),
+        Err(submilli_engine::compiler_error::CompilerFailure::Internal { .. })
+    ));
+
+    // SuperMethodCall { owner: user class without toString method, name: "toString" }
+    // must fail cleanly instead of dispatching through the user class's vtable slot 0.
+    let non_declaring_user_owner = r#"
+        function mark(): string { return ""; }
+        class Plain {}
+        class Sub extends Plain { toString(): string { return mark(); } }
+        function main(): string { return new Sub().toString(); }
+    "#;
+    assert!(matches!(
+        compile_rewritten(non_declaring_user_owner, |ast| {
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                if let TypedExprKind::Call { mangled, .. } = &expr.kind
+                    && mangled.as_str() == "main#mark"
+                {
+                    expr.kind = TypedExprKind::SuperMethodCall {
+                        owner: submilli_engine::mangle::package_symbol("main", "Plain"),
+                        name: Ident {
+                            name: "toString".into(),
+                            span: expr.span,
+                        },
+                        args: vec![],
+                    };
+                }
+            }
+        }),
+        Err(submilli_engine::compiler_error::CompilerFailure::Internal { .. })
+    ));
+}

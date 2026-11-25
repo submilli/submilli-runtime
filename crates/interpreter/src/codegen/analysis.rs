@@ -616,6 +616,9 @@ impl CodegenAnalysis {
                 self.walk_expr(ta, *receiver)?;
                 self.walk_expr(ta, *value)?;
             }
+            TypedStmtKind::SuperSet { value, .. } => {
+                self.walk_expr(ta, *value)?;
+            }
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
@@ -891,6 +894,7 @@ impl CodegenAnalysis {
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
         };
@@ -960,6 +964,9 @@ impl CodegenAnalysis {
                 }
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
+            }
+            TypedStmtKind::SuperSet { owner, .. } => {
+                self.dependency_usage.note_type(owner.clone());
             }
             TypedStmtKind::AssignIndex {
                 receiver, elem_ty, ..
@@ -1455,6 +1462,13 @@ impl CodegenAnalysis {
                 // imported class) pulled into the dependency set; `expr.ty` is just `boolean`.
                 self.visit_type(class)?;
             }
+            TypedExprKind::SuperMethodCall { owner, .. }
+            | TypedExprKind::SuperGet { owner, .. } => {
+                self.dependency_usage.note_type(owner.clone());
+                if !expr.ty.is_void() && !matches!(expr.ty.lowered(), Type::Unknown) {
+                    self.note_cast(&expr.ty, Some(&expr.ty))?;
+                }
+            }
             TypedExprKind::Number(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
@@ -1464,7 +1478,6 @@ impl CodegenAnalysis {
             | TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::SuperCtorCall { .. }
-            | TypedExprKind::SuperMethodCall { .. }
             | TypedExprKind::TypeofTag { .. }
             | TypedExprKind::Ternary { .. }
             | TypedExprKind::NullishCoalesce { .. } => {}

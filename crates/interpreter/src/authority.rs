@@ -1744,6 +1744,9 @@ impl Visitor for CallVisitor<'_, '_> {
         if let TypedStmtKind::AssignField { receiver, name, .. } = kind {
             self.accessor(*receiver, &name.name, true, name.span)?;
         }
+        if let TypedStmtKind::SuperSet { owner, name, .. } = kind {
+            self.super_accessor(owner, &name.name, true, stmt.span)?;
+        }
         if let TypedStmtKind::Return(Some(value)) = kind
             && let Some(target) = self.builder.held_callable(*value)?
         {
@@ -1784,6 +1787,9 @@ impl Visitor for CallVisitor<'_, '_> {
             } => self.member_call(*receiver, iface, member, args, span)?,
             TypedExprKind::SuperMethodCall { owner, name, args } => {
                 self.super_method_call(owner, &name.name, args, span)?;
+            }
+            TypedExprKind::SuperGet { owner, name } => {
+                self.super_accessor(owner, &name.name, false, span)?;
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
@@ -2040,11 +2046,44 @@ impl CallVisitor<'_, '_> {
             .builder
             .known_methods
             .contains(&(owner.clone(), name.to_string()))
+            && !self.is_builtin_prototype_to_string(owner, name)
         {
             self.builder
                 .add_unresolved(self.caller, span, "unresolved super-method target")?;
         }
         Ok(())
+    }
+
+    fn is_builtin_prototype_to_string(&self, owner: &MangledName, name: &str) -> bool {
+        name == "toString"
+            && (*owner == crate::mangle::prelude("Object")
+                || (owner.as_str().starts_with("submilli:prelude#")
+                    && self.builder.class_hierarchy.contains_key(owner)))
+    }
+
+    fn super_accessor(
+        &mut self,
+        owner: &MangledName,
+        name: &str,
+        setter: bool,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        if let Some(&target) =
+            self.builder
+                .accessors
+                .get(&(owner.clone(), name.to_string(), setter))
+        {
+            return self.builder.add_edge(self.caller, target, span);
+        }
+        if self.builder.external_accessor_exists(owner, name, setter) {
+            return self.builder.add_unresolved(
+                self.caller,
+                span,
+                "external accessor body is not locally analyzable",
+            );
+        }
+        self.builder
+            .add_unresolved(self.caller, span, "unresolved super-accessor target")
     }
 
     fn closure_target(&self, id: ExprId) -> Result<Option<usize>, CompilerFailure> {

@@ -206,7 +206,8 @@ fn connect_statements(
                 flow.value(*value, Place::Global(mangled.clone()));
             }
             TypedStmtKind::AssignIndex { value, .. } => flow.value(*value, Place::Element),
-            TypedStmtKind::AssignField { name, value, .. } => {
+            TypedStmtKind::AssignField { name, value, .. }
+            | TypedStmtKind::SuperSet { name, value, .. } => {
                 flow.value(*value, Place::Field(name.name.clone()));
             }
             TypedStmtKind::NarrowRegion {
@@ -356,6 +357,7 @@ fn seed_never_read(
         TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::FieldAccess { .. }
+            | TypedExprKind::SuperGet { .. }
             | TypedExprKind::IndexAccess { .. }
     );
     if is_read && matches!(expr.ty, Type::Never) {
@@ -763,6 +765,9 @@ fn connect_expression(
         TypedExprKind::DeleteField { name, .. } => {
             // A required field can disappear through an optional structural view.
             flow.widened.insert(Place::Field(name.name.clone()));
+        }
+        TypedExprKind::SuperGet { name, .. } => {
+            flow.edge(Place::Field(name.name.clone()), target);
         }
         TypedExprKind::FieldAccess { receiver, name } => {
             flow.widened.insert(target.clone());
