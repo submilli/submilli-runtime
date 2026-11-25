@@ -779,13 +779,10 @@ async fn live_world(
     })
 }
 
-/// Registers the session and marks activity at entry as well as at exit. The idle reaper
-/// is wall-clock and has no notion of an execution in flight, so a session that was
-/// already nearly idle when this call arrived would otherwise be reaped moments into the
-/// run, taking its idempotency reservation with it. This buys the program a full idle
-/// window rather than whatever was left of one; it does not make the run un-reapable,
-/// and an execution that outlasts `idle_timeout` on its own is still collected
-/// mid-flight. Session activity is committed before dispatch.
+/// Registers the session and marks activity at entry as well as at exit. Active HTTP
+/// session runs are also held in `RunRegistry`, which keeps the reaper from expiring
+/// their session mid-flight; refreshing activity at entry still protects callers such
+/// as MCP that run outside `RunRegistry`. Session activity is committed before dispatch.
 pub(crate) async fn open_session(
     state: &AppState,
     session_id: &str,

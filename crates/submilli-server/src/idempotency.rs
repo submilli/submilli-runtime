@@ -12,18 +12,18 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio_util::task::TaskTracker;
 pub const MAX_KEY_BYTES: usize = 120;
-const DEFAULT_WAITER_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// What a caller may do with a key.
 pub enum Reservation {
     /// Run the program, then settle the guard with `complete` or `release`.
     Proceed(ReservationGuard),
     /// Return this completed run's retained response. Nothing runs.
     Replay(RunId),
-    /// The earlier request's run is still going, and may be waiting on the harness:
-    /// answer with that run's current state. Nothing new runs.
+    /// The earlier request's run is still going: answer through that run's
+    /// live entry. Nothing new runs.
     Attached(RunId),
     Refused(Refusal),
 }
@@ -37,12 +37,6 @@ pub enum Refusal {
     /// A reservation exists that never reached a recorded outcome. Never
     /// re-executed automatically.
     Indeterminate,
-    /// The original execution is provably still running — this waiter simply
-    /// outlived its own bound. Distinct from [`Refusal::Indeterminate`] because
-    /// it is *retryable*: the outcome is not unknown, it is not ready yet.
-    /// Collapsing the two would let a slow-but-healthy execution be reported as
-    /// permanently unknown, and then complete successfully afterwards.
-    InProgress,
     /// The ledger could not be read or written. The ledger is authoritative, so
     /// a request it cannot record is refused rather than run unguarded.
     Unavailable(String),
@@ -59,7 +53,6 @@ impl Refusal {
             Refusal::InvalidKey(_) => "idempotency_key_invalid",
             Refusal::Conflict => "idempotency_conflict",
             Refusal::Indeterminate => "idempotency_incomplete",
-            Refusal::InProgress => "idempotency_in_progress",
             Refusal::Unavailable(_) => "idempotency_unavailable",
             Refusal::Expired => "idempotency_response_expired",
         }
@@ -69,9 +62,7 @@ impl Refusal {
         match self {
             Refusal::InvalidKey(_) => StatusCode::BAD_REQUEST,
             Refusal::Conflict | Refusal::Indeterminate | Refusal::Expired => StatusCode::CONFLICT,
-            // Retryable, so it shares 503 with the ledger being down rather
-            // than sitting with the terminal 409s.
-            Refusal::InProgress | Refusal::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Refusal::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -86,13 +77,6 @@ impl Refusal {
                  whether its program ran is unknown, so it will not be retried automatically. \
                  Running the code again is a new, independent execution — decide on whether \
                  it is safe to run twice, not on this key"
-                    .to_string()
-            }
-            Refusal::InProgress => {
-                "an earlier request with this idempotency key is still executing; \
-                 it has not finished within the time this request was willing to wait. \
-                 Nothing new was started. Retrying with this same key picks up its \
-                 result; retrying under a new key starts a second, concurrent execution"
                     .to_string()
             }
             // The underlying error is logged server-side; a caller gets the
@@ -112,16 +96,25 @@ impl Refusal {
     }
 }
 
-/// Runs that may suspend, by the reservation they execute under. A suspended run
-/// lives in this process's memory, so only this process can attach to it.
-type AttachedRuns = Arc<Mutex<HashMap<RunId, RunId>>>;
+/// Where a live reservation owned by this coordinator stands in memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LiveState {
+    /// Reserved, not yet attached to a `RunEntry` or awaiting storage settlement.
+    Preparing,
+    /// Executing under its `RunEntry` in the current process.
+    Attached,
+    /// Terminal transition recorded in storage.
+    Settled,
+}
+
+type LiveReservations = Arc<Mutex<HashMap<RunId, watch::Sender<LiveState>>>>;
 
 pub(crate) struct Coordinator {
     units: Arc<dyn UnitOfWorkFactory>,
     generation: String,
     tasks: TaskTracker,
-    waiter_timeout: Duration,
-    attached: AttachedRuns,
+    reservation_timeout: Duration,
+    live: LiveReservations,
     last_runs: Option<Arc<dyn LastRunStaging>>,
 }
 
@@ -134,8 +127,8 @@ impl Coordinator {
             units,
             generation,
             tasks: TaskTracker::new(),
-            waiter_timeout: DEFAULT_WAITER_TIMEOUT,
-            attached: AttachedRuns::default(),
+            reservation_timeout: DEFAULT_RESERVATION_TIMEOUT,
+            live: LiveReservations::default(),
             last_runs: None,
         }
     }
@@ -205,57 +198,54 @@ impl Coordinator {
         // Registered before the first await: cancellation during commit is reconciled
         // against this identity, even when its acknowledgement never reaches us.
         let guard = self.supervise(request.clone());
-        let deadline = tokio::time::Instant::now() + self.waiter_timeout;
-        let mut waiting_for = None;
+        let deadline = tokio::time::Instant::now() + self.reservation_timeout;
         loop {
             let reserve = async {
                 PrepareRun::new(self.units.as_ref())
                     .execute(request.clone())
                     .await
             };
-            let disposition = match tokio::time::timeout_at(deadline, reserve).await {
-                Ok(disposition) => disposition,
-                Err(_) if waiting_for.is_some() => {
-                    return Reservation::Refused(Refusal::InProgress);
-                }
-                Err(_) => {
-                    return Reservation::Refused(Refusal::Unavailable(
-                        "reservation deadline exceeded".into(),
-                    ));
-                }
+            let Ok(disposition) = tokio::time::timeout(self.reservation_timeout, reserve).await
+            else {
+                return Reservation::Refused(Refusal::Unavailable(
+                    "reservation deadline exceeded".into(),
+                ));
             };
             match disposition {
                 Ok(RunDisposition::Proceed) => return Reservation::Proceed(guard),
-                Ok(RunDisposition::Wait(id)) => {
-                    // A run that may wait on the harness for minutes is answered
-                    // with its current state rather than waited for.
-                    if let Some(run_id) = self.attached_run(&id) {
-                        return Reservation::Attached(run_id);
+                Ok(RunDisposition::Wait(id)) => match self.wait_or_attach(&id, deadline).await {
+                    WaitOutcome::Attached => {
+                        guard.disarm(&self.live);
+                        return Reservation::Attached(id);
                     }
-                    waiting_for = Some(id);
+                    WaitOutcome::Retry => {}
+                    WaitOutcome::TimedOut => {
+                        guard.disarm(&self.live);
+                        return Reservation::Refused(Refusal::Unavailable(
+                            "reservation deadline exceeded".into(),
+                        ));
+                    }
+                },
+                Ok(RunDisposition::Completed(run_id)) => {
+                    guard.disarm(&self.live);
+                    return Reservation::Replay(run_id);
                 }
-                Ok(RunDisposition::Completed(run_id)) => return Reservation::Replay(run_id),
                 Err(RunFailure::Rule(RequestError::Conflict)) => {
+                    guard.disarm(&self.live);
                     return Reservation::Refused(Refusal::Conflict);
                 }
                 Err(RunFailure::Indeterminate) => {
+                    guard.disarm(&self.live);
                     return Reservation::Refused(Refusal::Indeterminate);
                 }
                 Err(RunFailure::Expired) => {
+                    guard.disarm(&self.live);
                     return Reservation::Refused(Refusal::Expired);
                 }
                 Err(error) => {
                     return Reservation::Refused(Refusal::Unavailable(error.to_string()));
                 }
             }
-            if tokio::time::Instant::now() >= deadline {
-                return Reservation::Refused(Refusal::InProgress);
-            }
-            tokio::time::sleep_until(std::cmp::min(
-                deadline,
-                tokio::time::Instant::now() + Duration::from_millis(100),
-            ))
-            .await;
         }
     }
 
@@ -264,20 +254,69 @@ impl Coordinator {
             .await
     }
 
-    fn attached_run(&self, reservation_id: &str) -> Option<RunId> {
-        lock_attached(&self.attached).get(reservation_id).cloned()
+    /// Clear a stale run attachment when the run registry already dropped the entry.
+    pub fn detach(&self, reservation_id: &str) {
+        if let Some(state) = lock_live(&self.live).get(reservation_id) {
+            state.send_if_modified(|current| {
+                if matches!(current, LiveState::Attached) {
+                    *current = LiveState::Preparing;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+    }
+
+    async fn wait_or_attach(
+        &self,
+        reservation_id: &str,
+        unattached_deadline: tokio::time::Instant,
+    ) -> WaitOutcome {
+        let rx = lock_live(&self.live)
+            .get(reservation_id)
+            .map(watch::Sender::subscribe);
+        let Some(mut rx) = rx else {
+            let now = tokio::time::Instant::now();
+            if now >= unattached_deadline {
+                return WaitOutcome::TimedOut;
+            }
+            tokio::time::sleep((unattached_deadline - now).min(Duration::from_millis(100))).await;
+            return WaitOutcome::Retry;
+        };
+        loop {
+            let current = *rx.borrow_and_update();
+            match current {
+                LiveState::Attached => return WaitOutcome::Attached,
+                LiveState::Settled => return WaitOutcome::Retry,
+                LiveState::Preparing => {}
+            }
+            if rx.changed().await.is_err() {
+                return WaitOutcome::Retry;
+            }
+        }
     }
 
     fn supervise(&self, request: IdempotentRequest) -> ReservationGuard {
         let (sender, receiver) = oneshot::channel();
         let (finished, completion) = oneshot::channel();
-        let reservation_id = request.reservation_id().to_owned();
+        let (state_tx, _) = watch::channel(LiveState::Preparing);
+        let reservation_id = request.reservation_id().clone();
+        lock_live(&self.live).insert(reservation_id.clone(), state_tx.clone());
+        let task_id = reservation_id.clone();
+        let task_state = state_tx.clone();
+        let live = self.live.clone();
         let units = self.units.clone();
         let last_runs = self.last_runs.clone();
         self.tasks.spawn(async move {
-            let (resolution, last_run) = receiver
+            let Some((resolution, last_run)) = receiver
                 .await
-                .unwrap_or((RunResolution::Indeterminate, None));
+                .unwrap_or(Some((RunResolution::Indeterminate, None)))
+            else {
+                settle_live(&live, &task_id, &task_state);
+                let _ = finished.send(());
+                return;
+            };
             let mut files = match last_runs.as_deref() {
                 Some(last_runs) => {
                     Some(LastRunFiles::before(last_runs, request.session_id()).await)
@@ -290,12 +329,21 @@ impl Coordinator {
             };
             let resolver = ResolveRun::new(units.clone());
             let resolved = resolve(&resolver, &request, &resolution, staged.as_ref()).await;
+            if resolved.is_ok() {
+                settle_live(&live, &task_id, &task_state);
+            } else {
+                // Stop routing new duplicates to the retiring run entry while
+                // fallback persistence finishes in the background.
+                let _ = task_state.send_replace(LiveState::Preparing);
+            }
             let _ = finished.send(());
             let replaced = match resolved {
                 Ok(replaced) => replaced,
                 Err(error) => {
                     tracing::warn!(?error, "idempotency finalization remains uncertain");
-                    resolve_until_recorded(&resolver, &request, &resolution).await
+                    let replaced = resolve_until_recorded(&resolver, &request, &resolution).await;
+                    settle_live(&live, &task_id, &task_state);
+                    replaced
                 }
             };
             if let Some(files) = files {
@@ -306,10 +354,16 @@ impl Coordinator {
             sender: Some(sender),
             completion: Some(completion),
             reservation_id,
-            attached: self.attached.clone(),
+            state: state_tx,
             last_run: None,
         }
     }
+}
+
+enum WaitOutcome {
+    Attached,
+    Retry,
+    TimedOut,
 }
 
 /// Record the run's end, trying twice: a failed acknowledgement may hide a
@@ -398,12 +452,23 @@ impl<'a> LastRunFiles<'a> {
     }
 }
 
-fn lock_attached(
-    attached: &Mutex<HashMap<RunId, RunId>>,
-) -> std::sync::MutexGuard<'_, HashMap<RunId, RunId>> {
+fn settle_live(live: &LiveReservations, reservation_id: &RunId, state: &watch::Sender<LiveState>) {
+    let _ = state.send_replace(LiveState::Settled);
+    let mut live = lock_live(live);
+    if live
+        .get(reservation_id)
+        .is_some_and(|current| watch::Sender::same_channel(current, state))
+    {
+        live.remove(reservation_id);
+    }
+}
+
+fn lock_live(
+    live: &Mutex<HashMap<RunId, watch::Sender<LiveState>>>,
+) -> std::sync::MutexGuard<'_, HashMap<RunId, watch::Sender<LiveState>>> {
     // A poisoned map may contain a partial update. AGENTS.md's poisoned-lock
     // exception accepts a panic instead of recovery.
-    attached.lock().expect("attached runs poisoned")
+    live.lock().expect("live reservations poisoned")
 }
 
 fn database_has_closed(error: &RunFailure) -> bool {
@@ -418,19 +483,21 @@ fn database_has_closed(error: &RunFailure) -> bool {
     )
 }
 
+type GuardSignal = Option<(RunResolution, Option<Vec<u8>>)>;
+
 pub struct ReservationGuard {
-    sender: Option<oneshot::Sender<(RunResolution, Option<Vec<u8>>)>>,
+    sender: Option<oneshot::Sender<GuardSignal>>,
     completion: Option<oneshot::Receiver<()>>,
-    reservation_id: RunId,
-    attached: AttachedRuns,
+    pub(super) reservation_id: RunId,
+    state: watch::Sender<LiveState>,
     /// The run's last-run JSON, recorded with its end.
     last_run: Option<Vec<u8>>,
 }
 impl ReservationGuard {
-    /// Name the run executing under this reservation, so a duplicate request is
-    /// answered with that run's state instead of waiting for it to finish.
-    pub fn attach_run(&self, run_id: &RunId) {
-        lock_attached(&self.attached).insert(self.reservation_id.clone(), run_id.to_owned());
+    /// Mark this reservation attached to its `RunEntry`, so a duplicate request
+    /// awaits the same live run entry as the original caller.
+    pub fn attach_run(&self) {
+        let _ = self.state.send_replace(LiveState::Attached);
     }
 
     /// What the session's last run becomes when this run ends on its own. A run
@@ -452,26 +519,22 @@ impl ReservationGuard {
     pub async fn release(self) {
         self.resolve(RunResolution::Undispatched).await;
     }
-    async fn resolve(mut self, resolution: RunResolution) {
-        self.detach();
+    pub async fn abandon(self) {
+        self.resolve(RunResolution::Indeterminate).await;
+    }
+    fn disarm(mut self, live: &LiveReservations) {
+        settle_live(live, &self.reservation_id, &self.state);
         if let Some(sender) = self.sender.take() {
-            let _ = sender.send((resolution, self.last_run.take()));
+            let _ = sender.send(None);
+        }
+    }
+    async fn resolve(mut self, resolution: RunResolution) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(Some((resolution, self.last_run.take())));
         }
         if let Some(completion) = self.completion.take() {
             let _ = completion.await;
         }
-    }
-
-    /// A settled reservation has no run to attach to: a duplicate reads its
-    /// recorded state instead.
-    fn detach(&self) {
-        lock_attached(&self.attached).remove(&self.reservation_id);
-    }
-}
-
-impl Drop for ReservationGuard {
-    fn drop(&mut self) {
-        self.detach();
     }
 }
 
@@ -746,14 +809,15 @@ mod tests {
     async fn a_duplicate_of_a_run_that_may_suspend_attaches_to_it_at_once() {
         let (_, _, coordinator) = fixture().await;
         let guard = proceed(coordinator.reserve("session", "key", "code").await);
-        guard.attach_run(&"run-1".into());
+        let expected_id = guard.reservation_id.clone();
+        guard.attach_run();
         let attached = tokio::time::timeout(
             Duration::from_secs(1),
             coordinator.reserve("session", "key", "code"),
         )
         .await
         .expect("answered without waiting for the run");
-        assert!(matches!(attached, Reservation::Attached(run) if run.as_str() == "run-1"));
+        assert!(matches!(attached, Reservation::Attached(run) if run == expected_id));
         guard.complete(output("{}")).await;
         match coordinator.reserve("session", "key", "code").await {
             Reservation::Replay(outcome) => {

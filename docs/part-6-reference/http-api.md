@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6a70d8ac374c084f3899cdc0cb53f5eaf9d5a3c9686edb399cc18df27f9c81dc"
+  contentHash: "924188f200516c115362f402858a48bd69bbefeaefaf35fa64f3b6cfbe013286"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -179,12 +179,11 @@ code again. The record of the key lasts as long as the session.
 | --- | --- | --- |
 | First use of the key | `200` | The program runs and its result is recorded |
 | Same key, same code, outcome recorded | `200` | The recorded body, replayed |
-| Same key, same code, first request still running | — | The request waits up to 300 seconds for that outcome |
+| Same key, same code, first request still running | `200` | Waits for that run to finish and returns its result |
 | Same key, same code, the run may wait on application tools | `200` | The run's next settled state: `suspended` with its pending call, or `finished` |
 | Same key, different code | `409` | `idempotency_conflict` |
 | Same key, an earlier request never recorded an outcome (the server stopped mid-run) | `409` | `idempotency_incomplete` |
 | Same key, same code, the recorded body is no longer kept | `409` | `idempotency_response_expired` |
-| Same key, the wait for the running request ran out | `503` | `idempotency_in_progress` |
 | The ledger could not be read or written | `503` | `idempotency_unavailable` |
 | Key empty, over 120 bytes, not printable ASCII, or sent twice | `400` | `idempotency_key_invalid` |
 

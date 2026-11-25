@@ -79,7 +79,9 @@ pub async fn get(
     Path(run_id): Path<String>,
 ) -> axum::response::Response {
     match state.session_manager().runs().get(&run_id) {
-        Some(entry) if !entry.durable => state_response(&entry, entry.current()),
+        Some(entry) if !entry.durable && entry.can_suspend => {
+            state_response(&entry, entry.current())
+        }
         _ => super::durable_runs::get(&state, &run_id).await,
     }
 }
@@ -139,7 +141,12 @@ pub(crate) async fn deliver(
             _ => {}
         }
     }
-    let Some(entry) = state.session_manager().runs().get(run_id) else {
+    let Some(entry) = state
+        .session_manager()
+        .runs()
+        .get(run_id)
+        .filter(|entry| entry.can_suspend)
+    else {
         return unknown_run(run_id);
     };
     let settled = match entry.resume(answers, admin) {

@@ -53,7 +53,13 @@ impl<'a> PrepareRun<'a> {
             existing.verify_fingerprint(request.fingerprint())?;
             return match existing.status() {
                 RunStatus::Queued | RunStatus::Running => {
-                    Ok(RunDisposition::Wait(existing.reservation_id().to_owned()))
+                    if existing.is_durable()
+                        || existing.owner_generation() != request.owner_generation()
+                    {
+                        Err(RunFailure::Indeterminate)
+                    } else {
+                        Ok(RunDisposition::Wait(existing.reservation_id().to_owned()))
+                    }
                 }
                 RunStatus::Completed => {
                     Ok(RunDisposition::Completed(existing.reservation_id().clone()))

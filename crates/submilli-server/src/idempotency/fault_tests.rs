@@ -369,26 +369,29 @@ async fn simultaneous_claims_dispatch_once_and_cancelled_waiters_do_not_release_
 }
 
 #[tokio::test]
-async fn waiter_deadline_does_not_authorize_another_execution() {
-    let (_, units, first) = fixture().await;
-    let second = Arc::new(Coordinator {
-        units,
-        generation: first.generation.clone(),
-        tasks: TaskTracker::new(),
-        waiter_timeout: Duration::from_millis(5),
-        attached: AttachedRuns::default(),
-        last_runs: None,
-    });
-    let guard = proceed(first.reserve("session", "key", "code").await);
-    assert!(matches!(
-        second.reserve("session", "key", "code").await,
-        Reservation::Refused(Refusal::InProgress)
-    ));
+async fn waiter_blocks_until_owner_settles_without_starting_another_execution() {
+    let (_, _, coordinator) = fixture().await;
+    let guard = proceed(coordinator.reserve("session", "key", "code").await);
+    let waiter = {
+        let coordinator = coordinator.clone();
+        tokio::spawn(async move { coordinator.reserve("session", "key", "code").await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !waiter.is_finished(),
+        "a duplicate must wait for the running owner rather than time out or start another run"
+    );
     guard.complete(output("eventual result")).await;
-    assert!(matches!(
-        second.reserve("session", "key", "code").await,
-        Reservation::Replay(_)
-    ));
+    match tokio::time::timeout(Duration::from_secs(1), waiter)
+        .await
+        .expect("waiter wakes as soon as owner settles")
+        .unwrap()
+    {
+        Reservation::Replay(outcome) => {
+            assert_eq!(saved_value(&coordinator, &outcome).await, "eventual result");
+        }
+        _ => panic!("waiter must receive the replayed outcome"),
+    }
 }
 
 #[test]
@@ -543,8 +546,8 @@ async fn database_contention_cannot_exceed_reservation_deadline() {
         units: units.clone(),
         generation: first.generation.clone(),
         tasks: TaskTracker::new(),
-        waiter_timeout: Duration::from_millis(10),
-        attached: AttachedRuns::default(),
+        reservation_timeout: Duration::from_millis(10),
+        live: LiveReservations::default(),
         last_runs: None,
     });
     let held = units.begin().await.unwrap();
@@ -621,4 +624,119 @@ async fn early_storage_failure_cannot_authorize_a_repeated_claim() {
     assert!(coordinator.claim(&"claimed".into()).await.is_err());
     assert!(coordinator.claim(&"claimed".into()).await.is_err());
     guard.finish_unkeyed().await;
+}
+
+#[tokio::test]
+async fn disarmed_attachment_cannot_clobber_reused_reservation_id_after_owner_releases() {
+    let (_, units, coordinator) = fixture().await;
+    let owner = proceed(
+        coordinator
+            .prepare(
+                "session",
+                Some("key"),
+                "code",
+                &"owner-1".into(),
+                None,
+                "session",
+            )
+            .await,
+    );
+    owner.attach_run();
+
+    let attached = coordinator
+        .prepare(
+            "session",
+            Some("key"),
+            "code",
+            &"retry-1".into(),
+            None,
+            "session",
+        )
+        .await;
+    assert!(matches!(attached, Reservation::Attached(id) if id.as_str() == "owner-1"));
+
+    owner.release().await;
+
+    let promoted = proceed(
+        coordinator
+            .prepare(
+                "session",
+                Some("key"),
+                "code",
+                &"retry-1".into(),
+                None,
+                "session",
+            )
+            .await,
+    );
+    promoted.attach_run();
+    coordinator.claim(&"retry-1".into()).await.unwrap();
+    promoted.complete(output("promoted result")).await;
+    coordinator.drain().await;
+
+    match coordinator.reserve("session", "key", "code").await {
+        Reservation::Replay(outcome) => {
+            assert_eq!(saved_value(&coordinator, &outcome).await, "promoted result");
+        }
+        other => panic!(
+            "expected replay of promoted retry, got {}",
+            match other {
+                Reservation::Proceed(_) => "proceed",
+                Reservation::Attached(_) => "attached",
+                Reservation::Refused(_) => "refused",
+                Reservation::Replay(_) => "replay",
+            }
+        ),
+    }
+    assert_eq!(
+        read_request(units.as_ref(), "session", "key")
+            .await
+            .unwrap()
+            .unwrap()
+            .status(),
+        RunStatus::Completed
+    );
+}
+
+#[tokio::test]
+async fn foreign_generation_queued_row_without_recovery_is_indeterminate_immediately() {
+    let (_, units, coordinator) = fixture().await;
+    let orphaned = IdempotentRequest::reserve(
+        "session".into(),
+        "key".into(),
+        format!("{:x}", Sha256::digest(b"code")),
+        "orphan-1".into(),
+        "dead-generation".into(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    let mut unit = units.begin().await.unwrap();
+    unit.save_run(orphaned).await.unwrap();
+    unit.commit().await.unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        coordinator.reserve("session", "key", "code"),
+    )
+    .await
+    .expect("foreign-generation orphan must not spin in wait loop");
+    assert!(matches!(
+        result,
+        Reservation::Refused(Refusal::Indeterminate)
+    ));
+    coordinator.drain().await;
+}
+
+#[tokio::test]
+async fn abandon_settles_indeterminate_before_returning() {
+    let (_, _, coordinator) = fixture().await;
+    let guard = proceed(coordinator.reserve("session", "key", "code").await);
+    guard.attach_run();
+    guard.abandon().await;
+    assert!(lock_live(&coordinator.live).is_empty());
+    assert!(matches!(
+        coordinator.reserve("session", "key", "code").await,
+        Reservation::Refused(Refusal::Indeterminate)
+    ));
+    coordinator.drain().await;
 }
