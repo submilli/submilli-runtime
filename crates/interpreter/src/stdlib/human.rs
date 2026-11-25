@@ -20,8 +20,9 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::approvals::{
-    AnswerSpec, AnswerValue, ApprovalError, Approver, Choice, MAX_ANSWER_BYTES,
+    AnswerSpec, AnswerValue, ApprovalError, Approver, Choice, MAX_ANSWER_BYTES, MAX_ANSWER_LENGTH,
     MAX_CHOICE_VALUE_BYTES, QUESTION_OPERATION, QuestionOutcome, QuestionRequest, QuestionSpec,
+    fits_length,
 };
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::effects;
@@ -80,7 +81,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 ret: alias_ref("Answer"),
                 type_predicate: None,
                 doc: doc(
-                    "/**\n * Ask a person `question` and wait for the answer: text, or what they picked from `choices`.\n *\n * The question goes to the person the run acts for (`to: \"human\"`, the default), or to an administrator (`to: \"admin\"`). The wait survives restarts and does not count as running time. It lasts until `timeout` (such as `\"10m\"`), which the host caps by its own approval timeout, its default.\n *\n * Throws a catchable `NoAnswerError` when there is no answer: `reason` is `\"declined\"` (the person said no; `message` holds what they said instead), `\"expired\"`, or `\"unanswerable\"` (this run cannot ask anyone). A question that is empty, marks a choice question `sensitive`, or breaks a bound (text 4 KiB; 1 to 20 choices with unique values; a value or label non-empty and at most 256 bytes, a description 1 KiB) throws a `TypeError`, and so does a `timeout` over 30 days.\n *\n * `sensitive: true` asks for a credential, such as a sign-in code. Only a package may ask one: from `main`, including a Function (which runs as `main`), it throws `PermissionDeniedError` whatever the policy says. Its answer is never logged.\n * @param question What to ask, and how it is answered.\n * @param options Whom to ask, and how long to wait.\n * @capability human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive }\n */",
+                    "/**\n * Ask a person `question` and wait for the answer: text, or what they picked from `choices`.\n *\n * The question goes to the person the run acts for (`to: \"human\"`, the default), or to an administrator (`to: \"admin\"`). The wait survives restarts and does not count as running time. It lasts until `timeout` (such as `\"10m\"`), which the host caps by its own approval timeout, its default.\n *\n * Throws a catchable `NoAnswerError` when there is no answer: `reason` is `\"declined\"` (the person said no; `message` holds what they said instead), `\"expired\"`, or `\"unanswerable\"` (this run cannot ask anyone). A question that is empty, marks a choice question `sensitive`, or breaks a bound (text 4 KiB; 1 to 20 choices with unique values; a value or label non-empty and at most 256 bytes, a description 1 KiB; `maxLength` a whole number from 1 to 65536; `initial` non-blank, within `maxLength`, and never on a `sensitive` question) throws a `TypeError`, and so does a `timeout` over 30 days.\n *\n * A text answer longer than `maxLength` UTF-16 code units, or any answer that does not fit the question, throws `NoAnswerError` with reason `\"unanswerable\"`.\n *\n * `sensitive: true` asks for a credential, such as a sign-in code. Only a package may ask one: from `main`, including a Function (which runs as `main`), it throws `PermissionDeniedError` whatever the policy says. Its answer is never logged.\n * @param question What to ask, and how it is answered.\n * @param options Whom to ask, and how long to wait.\n * @capability human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive }\n */",
                 ),
             },
         },
@@ -323,6 +324,11 @@ enum WrittenQuestion {
     Text {
         text: String,
         sensitive: Option<bool>,
+        initial: Option<String>,
+        /// Read as any number, so a fraction or a negative is refused by `answer_length`
+        /// with the rule, not by the reader.
+        #[serde(rename = "maxLength")]
+        max_length: Option<f64>,
     },
     Choice {
         text: String,
@@ -349,9 +355,19 @@ async fn read_question(
     val: &Val,
 ) -> wasmtime::Result<QuestionSpec> {
     let question = match read_json(caller, val, "question").await? {
-        WrittenQuestion::Text { text, sensitive } => QuestionSpec::Text {
+        WrittenQuestion::Text {
+            text,
+            sensitive,
+            initial,
+            max_length,
+        } => QuestionSpec::Text {
             text,
             sensitive: sensitive.unwrap_or(false),
+            initial,
+            max_length: max_length
+                .map(answer_length)
+                .transpose()
+                .map_err(|problem| type_error(format!("ask: {problem}")))?,
         },
         WrittenQuestion::Choice {
             sensitive: Some(_), ..
@@ -389,8 +405,14 @@ fn check_question(question: &QuestionSpec) -> Result<(), String> {
             "the question's `text` is longer than {MAX_TEXT_BYTES} bytes"
         ));
     }
-    let QuestionSpec::Choice { choices, .. } = question else {
-        return Ok(());
+    let choices = match question {
+        QuestionSpec::Text {
+            sensitive,
+            initial,
+            max_length,
+            ..
+        } => return check_initial(*sensitive, initial.as_deref(), *max_length),
+        QuestionSpec::Choice { choices, .. } => choices,
     };
     if choices.is_empty() || choices.len() > MAX_CHOICES {
         return Err(format!(
@@ -429,6 +451,42 @@ fn check_question(question: &QuestionSpec) -> Result<(), String> {
                 choice.value
             ));
         }
+    }
+    Ok(())
+}
+
+/// A written `maxLength` as a length: a whole number from 1 to [`MAX_ANSWER_LENGTH`].
+fn answer_length(written: f64) -> Result<u32, String> {
+    if written.fract() != 0.0 || !(1.0..=f64::from(MAX_ANSWER_LENGTH)).contains(&written) {
+        return Err(format!(
+            "`maxLength` must be a whole number from 1 to {MAX_ANSWER_LENGTH}"
+        ));
+    }
+    // A whole number within `1..=MAX_ANSWER_LENGTH`, so it converts exactly.
+    Ok(written as u32)
+}
+
+/// A text question's `initial` is text the person could send as is: non-blank and within
+/// the answer's bounds. A credential is never prefilled.
+fn check_initial(
+    sensitive: bool,
+    initial: Option<&str>,
+    max_length: Option<u32>,
+) -> Result<(), String> {
+    let Some(initial) = initial else {
+        return Ok(());
+    };
+    if sensitive {
+        return Err("a sensitive question cannot have an `initial` answer".into());
+    }
+    if initial.trim().is_empty() {
+        return Err("`initial` is empty".into());
+    }
+    if initial.len() > MAX_ANSWER_BYTES {
+        return Err(format!("`initial` is longer than {MAX_ANSWER_BYTES} bytes"));
+    }
+    if max_length.is_some_and(|max| !fits_length(initial, max)) {
+        return Err("`initial` is longer than the question's `maxLength`".into());
     }
     Ok(())
 }
@@ -637,6 +695,22 @@ fn insert_questions(defs: &mut PackageDeclaration) {
                     Type::Boolean,
                     true,
                     "/** The answer is a credential, such as a sign-in code: only a package may ask, and the answer is never logged or shown back. */",
+                ),
+            ),
+            (
+                "initial".to_string(),
+                property(
+                    Type::String,
+                    true,
+                    "/** Text the answer starts from, which the person may edit or send as is; never on a `sensitive` question. */",
+                ),
+            ),
+            (
+                "maxLength".to_string(),
+                property(
+                    Type::Number,
+                    true,
+                    "/** The longest answer, in UTF-16 code units as `string.length` counts them: a whole number from 1 to 65536. */",
                 ),
             ),
         ]),

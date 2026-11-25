@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ee88303ae34b02846814dbc29a20bb7edb260ec62db964daa6f208f2b106032b"
+  contentHash: "7a27c2ac5f3d5cc7e91f1f2d7b24c22f3ab36b46fad6290064d0b0fbbb7eed53"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -708,6 +708,8 @@ A question answered with text.
 | Member | Description |
 | --- | --- |
 | `readonly answer: "text"` | Answered with text. |
+| `readonly initial?: string` | Text the answer starts from, which the person may edit or send as is; never on a `sensitive` question. |
+| `readonly maxLength?: number` | The longest answer, in UTF-16 code units as `string.length` counts them: a whole number from 1 to 65536. |
 | `readonly sensitive?: boolean` | The answer is a credential, such as a sign-in code: only a package may ask, and the answer is never logged or shown back. |
 | `readonly text: string` | The question, as the person reads it. |
 

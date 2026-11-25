@@ -218,6 +218,58 @@ async fn a_choice_is_asked_and_its_answer_returned_and_the_wait_is_not_running_t
 }
 
 #[tokio::test]
+async fn a_text_questions_initial_and_max_length_reach_the_host() {
+    // Four UTF-16 units in two characters: exactly `maxLength`.
+    let person = Person::new(answered(AnswerValue::Text {
+        text: "\u{1F600}\u{1F600}".into(),
+    }));
+    let run = run(
+        None,
+        r#"
+        import { ask } from "submilli:human";
+        function main(): string {
+            const answer = ask({ text: "Nickname?", answer: "text", initial: "Dana", maxLength: 4 });
+            return answer.answer === "text" ? String(answer.text.length) : "?";
+        }
+        "#,
+        Some(person.clone()),
+        None,
+    )
+    .await;
+    assert_eq!(run.result.unwrap().as_deref(), Some("4"));
+    assert_eq!(
+        person.asked()[0].question,
+        QuestionSpec::Text {
+            text: "Nickname?".into(),
+            sensitive: false,
+            initial: Some("Dana".into()),
+            max_length: Some(4),
+        }
+    );
+}
+
+#[test]
+fn a_sensitive_question_may_bound_its_length() {
+    let question: QuestionSpec = serde_json::from_value(serde_json::json!({
+        "answer": "text", "text": "Code", "sensitive": true, "max_length": 6
+    }))
+    .unwrap();
+    assert_eq!(
+        question.check_answer(&AnswerValue::Text {
+            text: "123456".into()
+        }),
+        Ok(())
+    );
+    assert!(
+        question
+            .check_answer(&AnswerValue::Text {
+                text: "1234567".into()
+            })
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn a_replay_returns_the_recorded_answer_without_asking_again() {
     let history = Arc::new(MemoryHistory::default());
     let first = Person::new(answered(AnswerValue::Choice {
@@ -568,6 +620,16 @@ async fn out_of_bounds_questions_and_options_are_type_errors_and_nobody_is_asked
             r#"{ text: "Pick", answer: "choice", choices: [{ value: "a" }], sensitive: true } as unknown as Question"#.into(),
             "undefined".into(),
         ),
+        (r#"{ text: "Name?", answer: "text", maxLength: 0 }"#.into(), "undefined".into()),
+        (r#"{ text: "Name?", answer: "text", maxLength: -1 }"#.into(), "undefined".into()),
+        (r#"{ text: "Name?", answer: "text", maxLength: 1.5 }"#.into(), "undefined".into()),
+        (r#"{ text: "Name?", answer: "text", maxLength: 65537 }"#.into(), "undefined".into()),
+        (r#"{ text: "Name?", answer: "text", initial: "" }"#.into(), "undefined".into()),
+        (r#"{ text: "Name?", answer: "text", initial: "  " }"#.into(), "undefined".into()),
+        (r#"{ text: "Name?", answer: "text", initial: "Dana", maxLength: 3 }"#.into(), "undefined".into()),
+        (format!(r#"{{ text: "Name?", answer: "text", initial: "{}" }}"#, "x".repeat(64 * 1024 + 1)), "undefined".into()),
+        // A credential is never prefilled; refused as malformed before the main-module refusal.
+        (r#"{ text: "Code", answer: "text", sensitive: true, initial: "123" }"#.into(), "undefined".into()),
         (r#"{ text: "Go?", answer: "text" }"#.into(), r#"{ to: "everyone" } as unknown as AskOptions"#.into()),
         (r#"{ text: "Go?", answer: "text" }"#.into(), r#"{ timeout: "2592001s" }"#.into()),
         (r#"{ text: "Go?", answer: "text" }"#.into(), r#"{ timeout: "99999999999999999999s" }"#.into()),
@@ -685,6 +747,13 @@ async fn an_answer_that_does_not_fit_the_question_is_unanswerable() {
         (
             r#"{ text: "Go?", answer: "text" }"#,
             AnswerValue::Text { text: " ".into() },
+        ),
+        // Over `maxLength` in UTF-16 units: two characters, but four units.
+        (
+            r#"{ text: "Go?", answer: "text", maxLength: 3 }"#,
+            AnswerValue::Text {
+                text: "\u{1F600}\u{1F600}".into(),
+            },
         ),
         (
             r#"{ text: "Go?", answer: "text" }"#,

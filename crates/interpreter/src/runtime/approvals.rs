@@ -137,6 +137,8 @@ pub const MAX_CHOICE_VALUE_BYTES: usize = 256;
 /// The longest answer text, `other` text or decline message a host may hand back.
 /// Anything past it would make the recorded outcome unbounded.
 pub const MAX_ANSWER_BYTES: usize = 64 * 1024;
+/// The largest `max_length` a text question may set, in UTF-16 code units.
+pub const MAX_ANSWER_LENGTH: u32 = 64 * 1024;
 
 /// What a program asks a person, as `ask` received it and checked it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,7 +146,17 @@ pub const MAX_ANSWER_BYTES: usize = 64 * 1024;
 pub enum QuestionSpec {
     /// Answered with text. A `sensitive` answer is a credential such as a sign-in code:
     /// only a package may ask for one, and its value never reaches the call log.
-    Text { text: String, sensitive: bool },
+    Text {
+        text: String,
+        sensitive: bool,
+        /// Text the person starts from and may edit. Never on a sensitive question.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial: Option<String>,
+        /// The longest answer, in UTF-16 code units, as JavaScript's `length` and HTML's
+        /// `maxlength` count: 1 to [`MAX_ANSWER_LENGTH`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_length: Option<u32>,
+    },
     /// Answered by picking `choices`: one, or several when `multiple`, plus free text
     /// when `other`.
     Choice {
@@ -197,7 +209,12 @@ impl QuestionSpec {
             (Self::Text { .. }, AnswerValue::Text { text }) if text.trim().is_empty() => {
                 Err("the text is empty".into())
             }
-            (Self::Text { .. }, AnswerValue::Text { .. }) => Ok(()),
+            (Self::Text { max_length, .. }, AnswerValue::Text { text }) => match max_length {
+                Some(max) if !fits_length(text, *max) => Err(format!(
+                    "the answer is longer than the question's `maxLength` of {max}"
+                )),
+                _ => Ok(()),
+            },
             (
                 Self::Choice {
                     choices,
@@ -264,6 +281,12 @@ pub enum AnswerValue {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         other: Option<String>,
     },
+}
+
+/// Whether `text` is at most `max` UTF-16 code units long, as JavaScript's `length`
+/// counts it.
+pub fn fits_length(text: &str, max: u32) -> bool {
+    u32::try_from(text.encode_utf16().count()).is_ok_and(|length| length <= max)
 }
 
 /// An answer, with who gave it and when. The embedder names the person.
