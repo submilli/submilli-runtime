@@ -11,10 +11,11 @@ function maybe<K extends "x" | "y">(c: C | undefined, k: K): C[K] | undefined { 
 function main(): void {
   const c = new C();
   assert(typeof read(c, "get") === "function");
-  // Class method slots remain immutable in Submilli (unlike JavaScript).
-  let refused = false;
-  try { writeAny(c, "get", () => 4); } catch (error) { refused = error instanceof TypeError; }
-  assert(refused);
+  // Writing a method key creates an own property on the receiver without affecting other instances.
+  writeAny(c, "get", () => 4);
+  assert(read(c, "get")() === 4 && c.get() === 4);
+  assert(Object.hasOwn(c, "get") && !Object.hasOwn(new C(), "get"));
+  assert(new C().get() === 1);
   assert(read(c, "x") === 1 && read(c, "y") === "s");
   write(c, "x", 7);
   write(c, "y", "ok");
