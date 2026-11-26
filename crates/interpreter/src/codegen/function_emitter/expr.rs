@@ -3294,6 +3294,7 @@ fn emit_chain_operation(
     if let crate::TypedChainPart::MethodCall {
         iface,
         member: crate::Member::Named(name),
+        type_args,
         result_ty,
         span,
         ..
@@ -3308,6 +3309,7 @@ fn emit_chain_operation(
             iface,
             &name.name,
             CallArguments::Authored(args),
+            type_args,
         )?;
         emit_live_member_return_cast(emitter, ctx, result_ty)?;
         return Ok(());
@@ -3317,6 +3319,7 @@ fn emit_chain_operation(
             crate::TypedChainPart::MethodCall {
                 iface,
                 member: crate::Member::Named(name),
+                type_args,
                 args,
                 result_ty,
                 span,
@@ -3326,7 +3329,7 @@ fn emit_chain_operation(
                     .ta
                     .authored_call_arguments(*span)
                     .map_or(CallArguments::Typed(args), CallArguments::Authored);
-                emit_live_method_call(emitter, ctx, iface, &name.name, args)?;
+                emit_live_method_call(emitter, ctx, iface, &name.name, args, type_args)?;
                 emit_live_member_return_cast(emitter, ctx, result_ty)?;
                 return Ok(());
             }
@@ -3460,9 +3463,12 @@ fn emit_live_member_call(
     iface: &crate::MangledName,
     member: crate::MemberKey<'_>,
     args: CallArguments<'_>,
+    type_args: &[Type],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     match member {
-        crate::MemberKey::Named(name) => emit_live_method_call(emitter, ctx, iface, name, args),
+        crate::MemberKey::Named(name) => {
+            emit_live_method_call(emitter, ctx, iface, name, args, type_args)
+        }
         crate::MemberKey::Call => emit_live_call_signature(emitter, ctx, iface, args, None),
         crate::MemberKey::Construct => emit_live_construct_signature(emitter, ctx, iface, args),
     }
@@ -3476,10 +3482,14 @@ fn emit_live_method_call(
     iface: &crate::MangledName,
     name: &str,
     args: CallArguments<'_>,
+    type_args: &[Type],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     super::emit_const_string_by_text(emitter, ctx, name)?;
     super::emit_const_string_by_text(emitter, ctx, iface.as_str())?;
     emit_live_helper_call(emitter, ctx, "__value_member")?;
+    if !type_args.is_empty() {
+        crate::codegen::generic_binding::emit_rebind_member_token(emitter, ctx, type_args)?;
+    }
     emit_live_invoke(emitter, ctx, args)
 }
 
@@ -6903,7 +6913,7 @@ fn emit_method_call_with_receiver_on_stack(
             .and_then(|span| ctx.ta.authored_call_arguments(span))
             .map_or(CallArguments::Typed(args), CallArguments::Authored);
         cast::emit_box(emitter, ctx, recv_ty)?;
-        emit_live_member_call(emitter, ctx, iface, member, live_args)?;
+        emit_live_member_call(emitter, ctx, iface, member, live_args, type_args)?;
         return cast::emit_cast_to(emitter, ctx, call_ret_ty);
     }
     let direct_key = member.symbol(iface);
@@ -6996,7 +7006,7 @@ fn emit_method_call_with_receiver_on_stack(
             .and_then(|span| ctx.ta.authored_call_arguments(span))
             .map_or(CallArguments::Typed(args), CallArguments::Authored);
         cast::emit_box(emitter, ctx, recv_ty)?;
-        emit_live_member_call(emitter, ctx, iface, member, live_args)?;
+        emit_live_member_call(emitter, ctx, iface, member, live_args, type_args)?;
         return emit_live_member_return_cast(emitter, ctx, call_ret_ty);
     };
     // Class method: check for a shadowing own data property first (e.g. a
@@ -7547,6 +7557,7 @@ fn emit_super_prototype_to_string(
     }
     let abi = MethodSlotAbi {
         types: false,
+        has_rest: false,
         params: Vec::new(),
         ret: Some(ctx.symbols.value_type(&Type::String)?),
     };
@@ -7630,6 +7641,7 @@ fn wrapper_abi_for_call(
         |i: usize| generic_args.is_some_and(|flags| flags.get(i).is_some_and(|g| g.is_generic));
     Ok(MethodSlotAbi {
         types: false,
+        has_rest: false,
         params: args
             .iter()
             .enumerate()
@@ -7789,6 +7801,13 @@ fn emit_class_method_dispatch(
     )?;
     emitter.emit_else();
     let abi = ctx.symbols.class_method_abi(class, method).cloned();
+    if let Some(abi) = &abi
+        && abi.params.len() != evaluated.len()
+    {
+        return Err(crate::codegen::internal_failure(
+            "call ABI argument count mismatch",
+        ));
+    }
     emitter.instruction(Instruction::LocalGet(rcv_local));
     for (i, (local, arg_ty)) in evaluated.iter().enumerate() {
         emitter.instruction(Instruction::LocalGet(*local));

@@ -1472,9 +1472,6 @@ impl<'a> Inferer<'a> {
         let child_fn = substitute_typevars(&method_fn_type(&child_sig), &opaque, &self.type_limits)
             .map_err(type_limit_at(member.span))?;
         let parent_fn = method_fn_type(&parent_sig);
-        // TypeScript lets an override declare fewer parameters, as any function
-        // may. Here the override fills the inherited method's vtable slot, whose
-        // Wasm signature is fixed, so it must declare them all.
         // A generic method's slot takes its type arguments; one inherited
         // from a method without type parameters doesn't, so its override
         // would run without them.
@@ -1494,7 +1491,12 @@ impl<'a> Inferer<'a> {
             );
             return Ok(());
         }
-        if child_sig.params.len() < parent_sig.params.len() {
+        // TypeScript lets an override declare fewer parameters, as any function
+        // may. Submilli requires a non-rest override to spell at least the
+        // inherited parameter count (an override with a rest parameter accepts
+        // trailing inherited arguments there).
+        let child_has_rest = child_sig.params.last().is_some_and(|p| p.rest);
+        if !child_has_rest && child_sig.params.len() < parent_sig.params.len() {
             self.error_with_help(
                 member.span,
                 format!(

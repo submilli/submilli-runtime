@@ -291,6 +291,7 @@ impl Proof<'_> {
             Type::Function {
                 params: target_params,
                 ret: target_ret,
+                optional: target_optional,
                 has_rest: target_rest,
                 ..
             },
@@ -306,7 +307,9 @@ impl Proof<'_> {
         let params_ok = if *source_rest && !*target_rest {
             super::assignable::rest_function_accepts(
                 source_params,
+                *source_optional,
                 target_params,
+                *target_optional,
                 |passed, declared| param_comparable(self, passed, declared),
             )
         } else if *source_rest == *target_rest {

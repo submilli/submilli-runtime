@@ -41,21 +41,11 @@ use super::symbol_table::SymbolTable;
 use super::{CodegenCtx, runtime_descriptors};
 use crate::{ExprId, Type};
 
-/// Whether `ta` binds type arguments in a closure environment anywhere: a
-/// generic closure, a call or instantiation that passes type arguments to
-/// one, or a generic function read as a value. Only such a module declares
-/// the generic wrapper and its helper.
-pub(super) fn needed(
-    ta: &crate::TypedAst,
-    symbols: &SymbolTable,
-) -> Result<bool, crate::compiler_error::CompilerFailure> {
-    // A generic class method's payload closure binds them too, for a local
-    // class or an imported one.
-    Ok(symbols.has_generic_class_slot() || binds_type_arguments(ta, &[])?)
-}
-
-/// [`needed`], read from `ta` and the declarations of its dependencies
-/// alone, before the symbol table records class slots.
+/// Whether `ta` or any class in `dependencies` binds type arguments in a
+/// closure environment: a generic closure, a generic class method's payload
+/// closure, a call or instantiation that passes type arguments to one, or a
+/// generic function read as a value. Only such a module declares the generic
+/// wrapper and its helper.
 pub(super) fn binds_type_arguments(
     ta: &crate::TypedAst,
     dependencies: &[&crate::PackageDeclaration],
@@ -66,7 +56,12 @@ pub(super) fn binds_type_arguments(
             if class.methods.iter().any(|method| !method.generics.is_empty()))
     }) || dependencies
         .iter()
-        .flat_map(|declaration| declaration.types.values())
+        .flat_map(|declaration| {
+            declaration
+                .runtime_types
+                .values()
+                .chain(declaration.types.values())
+        })
         .any(|symbol| {
             matches!(&symbol.kind, crate::TypeKind::Class { methods, .. }
                 if methods.values().any(|method| !method.generics.is_empty()))
@@ -82,6 +77,10 @@ pub(super) fn binds_type_arguments(
             TypedExprKind::GenericMethodCall {
                 iface, type_args, ..
             } => !type_args.is_empty() && !crate::codegen::is_host_package(iface.as_str()),
+            TypedExprKind::OptionalChain { parts, .. } => parts.iter().any(|part| {
+                matches!(part, crate::TypedChainPart::MethodCall { iface, type_args, .. }
+                    if !type_args.is_empty() && !crate::codegen::is_host_package(iface.as_str()))
+            }),
             TypedExprKind::InstantiateFunction { .. } => true,
             TypedExprKind::FunctionRef { .. } => expr.ty.is_generic_function(),
             _ => false,
@@ -416,7 +415,9 @@ fn emit_poisoned_descriptor(
 
 /// `InstantiateFunction`: binds the type arguments once, into a copy of the
 /// closure whose environment holds them; the copy is then converted to the
-/// target type like any other function value.
+/// target type like any other function value. When `value` is an erased
+/// `__value_member` call token (`Type::Unknown`), rebinds the closure in slot 2
+/// of that token in place before `__value_invoke`.
 pub(super) fn emit_instantiation(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
@@ -436,6 +437,9 @@ pub(super) fn emit_instantiation(
         .ty
         .clone();
     super::function_emitter::expr::emit_expr(emitter, ctx, value)?;
+    if matches!(source_ty.lowered(), Type::Unknown) {
+        return emit_rebind_member_token(emitter, ctx, type_args);
+    }
     let sig = super::closures::classify(source_ty.lowered())?;
     let structure = ctx
         .symbols
@@ -470,6 +474,106 @@ pub(super) fn emit_instantiation(
     emitter.instruction(Instruction::StructNew(structure));
     let instantiated = instantiated_type(&source_ty, type_args);
     super::function_emitter::cast::emit_coerce_to_slot(emitter, ctx, &instantiated, &target_ty)
+}
+
+/// With a `__value_member` token `[receiver, key, method]` on the stack,
+/// replaces `method` (at index 2) with a copy whose generic wrapper holds the
+/// descriptors of `type_args`, leaving the token on the stack.
+pub(in crate::codegen) fn emit_rebind_member_token(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    type_args: &[Type],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if type_args.is_empty() {
+        return Ok(());
+    }
+    let intrinsics = intrinsics(ctx.symbols)?;
+    let helper = ctx
+        .symbols
+        .generic_rebind
+        .ok_or_else(|| crate::codegen::internal_failure("generic rebind helper allocated"))?;
+    let object_null = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    });
+    let raw_array_null = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.raw_array),
+    });
+    let token = emitter.add_anonymous_local(object_null)?;
+    let raw = emitter.add_anonymous_local(raw_array_null)?;
+    let method = emitter.add_anonymous_local(object_null)?;
+    let types = emitter.add_anonymous_local(types_value_type(ctx.symbols)?)?;
+
+    emitter.instruction(Instruction::LocalSet(token));
+    emitter.instruction(Instruction::LocalGet(token));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.array,
+    )));
+    emitter.emit_if(BlockType::Empty);
+    emitter.instruction(Instruction::LocalGet(token));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intrinsics.array,
+    )));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intrinsics.array,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalTee(raw));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::I32Const(2));
+    emitter.instruction(Instruction::ArrayGet(intrinsics.raw_array));
+    emitter.instruction(Instruction::LocalTee(method));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.emit_if(BlockType::Empty);
+    super::closure_coercions::emit_unwrap_adapters(emitter, ctx, method)?;
+    runtime_descriptors::environment(emitter, ctx, type_args)?;
+    emitter.instruction(Instruction::LocalSet(types));
+    for signature in ctx.symbols.closure_signatures() {
+        let Some(structure) = ctx.symbols.closure_struct_type_idx(signature) else {
+            continue;
+        };
+        emitter.instruction(Instruction::LocalGet(method));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(structure)));
+        emitter.emit_if(BlockType::Empty);
+        for field_index in 0..2 {
+            emitter.instruction(Instruction::LocalGet(method));
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: structure,
+                field_index,
+            });
+        }
+        emitter.instruction(Instruction::LocalGet(method));
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: structure,
+            field_index: 2,
+        });
+        emitter.instruction(Instruction::LocalGet(types));
+        emitter.instruction(Instruction::Call(helper.func_idx));
+        for field_index in [3, 4] {
+            emitter.instruction(Instruction::LocalGet(method));
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: structure,
+                field_index,
+            });
+        }
+        emitter.instruction(Instruction::StructNew(structure));
+        emitter.instruction(Instruction::LocalSet(method));
+        emitter.emit_end();
+    }
+    emitter.instruction(Instruction::LocalGet(raw));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::I32Const(2));
+    emitter.instruction(Instruction::LocalGet(method));
+    emitter.instruction(Instruction::ArraySet(intrinsics.raw_array));
+    emitter.emit_end();
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalGet(token));
+    Ok(())
 }
 
 /// `source`, a generic function type, with its type parameters replaced by

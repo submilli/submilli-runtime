@@ -3936,7 +3936,7 @@ impl Inferer<'_> {
             crate::DefaultValue::Null => (TypedExprKind::Null, Type::Null),
             crate::DefaultValue::Undefined => (TypedExprKind::Undefined, Type::Undefined),
             crate::DefaultValue::EmptyArray => {
-                let element_ty = match param_ty {
+                let element_ty = match param_ty.peel() {
                     Type::Array(t) => (**t).clone(),
                     _ => Type::Error,
                 };
@@ -6411,13 +6411,30 @@ impl Inferer<'_> {
             || crate::mangle::prelude("Object"),
             |(_, _, iface, _)| iface.clone(),
         );
-        // Fill defaulted params (Number/BigInt `toString(radix = 10)`) the
-        // same way a spelled-out call site would — the import is arity-N.
+        // Fill omittable params (Number/BigInt `toString(radix = 10)` or a user
+        // `toString` with optional, defaulted, or rest parameters) the same way
+        // a 0-argument call site would.
+        if let Some((ref sig, _, _, _)) = resolved
+            && !sig.params.is_empty()
+            && !crate::codegen::is_host_package(iface_mangled.as_str())
+        {
+            self.typed_ast
+                .record_authored_arguments(substitution_span, Vec::new());
+        }
         let args = resolved
             .map(|(sig, _, _, _)| {
                 sig.params
                     .iter()
-                    .filter_map(|p| p.default.as_ref().map(|d| (d.clone(), p.ty.clone())))
+                    .filter_map(|p| {
+                        let default = if p.rest {
+                            Some(crate::DefaultValue::EmptyArray)
+                        } else {
+                            p.default
+                                .clone()
+                                .or_else(|| p.optional.then_some(crate::DefaultValue::Undefined))
+                        };
+                        default.map(|d| (d, p.ty.clone()))
+                    })
                     .collect::<Vec<_>>()
                     .into_iter()
                     .map(|(default, param_ty)| {

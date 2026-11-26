@@ -28,7 +28,7 @@ use crate::codegen::closures::ClosureSig;
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::imported_classes::ImportedClassLayout;
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
-use crate::codegen::symbol_table::{FieldSetup, MethodSlotAbi, SymbolTable};
+use crate::codegen::symbol_table::{FieldSetup, MethodSlotAbi, SymbolTable, VtableThunkKey};
 use crate::codegen::{GuardedBodies, internal_failure, next_index, parameter_local, wasm_u32};
 use crate::compiler_error::CompilerFailure;
 use crate::{MangledName, TypedAst, TypedClassDecl, TypedTypeDecl};
@@ -43,23 +43,22 @@ pub(crate) const VTABLE_DEFAULT_JSON_SLOT: u32 = VTABLE_PARENT_SLOT + 1;
 /// Universal funcrefs, parent link and default-serializer marker precede methods.
 pub(crate) const VTABLE_METHOD_SLOT_BASE: u32 = VTABLE_DEFAULT_JSON_SLOT + 1;
 
-/// One method slot in a class vtable. `name` is the method name; `owner` is the
-/// most-derived class that supplies the body (the class itself for an override,
-/// else the nearest ancestor); `sig_idx` is the Wasm fn-type the slot holds
-/// (allocated by the base declarer and reused by overrides).
+/// Active method or accessor half on a class. `name` is the method name;
+/// `owner` is the most-derived class that supplies the body (the class itself
+/// for an override, else the nearest ancestor). One entry exists per distinct
+/// `(name, accessor)` in the inheritance chain.
 struct MethodSlot {
     name: String,
     owner: MangledName,
-    sig_idx: u32,
     /// Declared parameter/return types of the body backing this slot (the
     /// *owner's*). Needed to pick the closure signature for the slot's payload
     /// adapter; its body uses the recorded ABI for physical representations.
     param_tys: Vec<crate::Type>,
     argument_metadata: Option<String>,
     ret_ty: crate::Type,
-    /// Whether the slot was first declared by a generic method, so it takes a
-    /// trailing `$types` and its payload closure binds type arguments per call
-    /// (`generic_binding`). Overrides keep the originating declaration's.
+    /// Whether the slot was first declared by a generic method (or overridden
+    /// by one), so it takes a trailing `$types` and its payload closure binds
+    /// type arguments per call (`generic_binding`).
     generic: bool,
     /// Synthetic accessor half (`get <p>` / `set <p>`), as distinct from a user
     /// method whose string-literal key happens to start with `"get "` / `"set "`.
@@ -68,6 +67,33 @@ struct MethodSlot {
     /// of this accessor property, replacing the prototype descriptor so this
     /// half is absent on instances of this class.
     absent: bool,
+}
+
+/// Physical entry in a class's `$Foo_vtable` struct (after the universal
+/// header). A method allocates one slot where it originates; an override with
+/// the same [`MethodSlotAbi::same_convention`] reuses that slot, while an
+/// override that changes arity, rest packing, or `$types` appends a new slot
+/// for calls typed at the subclass and leaves inherited slots backed by
+/// adapting thunks.
+#[derive(Clone, Debug)]
+pub struct VtableSlot {
+    pub name: String,
+    pub accessor: Option<crate::AccessorKind>,
+    pub sig_idx: u32,
+    pub abi: MethodSlotAbi,
+    /// True for the single slot representing `(name, accessor)` on this class:
+    /// the signature of an own body declared here, and the slot that static
+    /// calls on this class dispatch through.
+    pub active: bool,
+}
+
+pub(crate) struct OwnSlotCandidate<'a> {
+    pub name: std::borrow::Cow<'a, str>,
+    pub accessor: Option<crate::AccessorKind>,
+    pub arity: usize,
+    pub has_rest: bool,
+    pub ret_ty: &'a crate::Type,
+    pub generic: bool,
 }
 
 struct ClassLayout {
@@ -87,8 +113,12 @@ struct ClassLayout {
     /// reads through this abstract class enforce its narrowing check and so
     /// `has_instance_guards` agrees with cross-package reconstruction.
     abstract_narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
-    /// Full method slot list (inherited prefix then own/new), in vtable order.
+    /// Active methods/accessors (inherited prefix then own/new), one per
+    /// `(name, accessor)`.
     methods: Vec<MethodSlot>,
+    /// Physical vtable entries in `$Foo_vtable` field order, populated in
+    /// [`ClassPlan::reserve_and_emit_types`].
+    vtable_slots: Vec<VtableSlot>,
     /// Methods declared on *this* class (own or override) — each gets a real body.
     own_methods: Vec<OwnMethod>,
     /// Indices into `methods` whose payload adapter *this* class emits. A slot
@@ -96,6 +126,8 @@ struct ClassLayout {
     /// order guarantees it exists); an imported owner has no adapter in this
     /// module, so one is emitted here.
     adapter_slots: Vec<usize>,
+    /// Indices into `vtable_slots` whose adapting thunk *this* class emits.
+    vtable_thunks: Vec<usize>,
     /// `this`-class's own constructor params + body. `None` body = no declared
     /// constructor (synthesize a default that just allocates + returns).
     ctor_params: Vec<crate::TypedParam>,
@@ -207,6 +239,7 @@ enum OwnMethodBody {
 #[derive(Clone)]
 struct OwnMethod {
     name: String,
+    accessor: Option<crate::AccessorKind>,
     name_span: crate::Span,
     /// The backtrace name: `C.m`, or `get C.x` / `set C.x` for an accessor.
     frame_name: String,
@@ -317,7 +350,8 @@ impl ClassPlan {
                         .map(|(m, frame, kind)| (m, frame.clone(), Some(*kind))),
                 )
                 .collect();
-            sorted_methods.sort_by(|(a, _, _), (b, _, _)| a.name.name.cmp(&b.name.name));
+            sorted_methods
+                .sort_by(|(a, _, ka), (b, _, kb)| (&a.name.name, *ka).cmp(&(&b.name.name, *kb)));
 
             let inherited: BTreeSet<String> =
                 parent_fields.iter().map(|f| f.name.clone()).collect();
@@ -396,6 +430,7 @@ impl ClassPlan {
                     slot.param_tys = param_tys;
                     slot.argument_metadata = argument_metadata;
                     slot.ret_ty = m.return_type.clone();
+                    slot.generic |= !m.generics.is_empty();
                     slot.absent = false;
                 } else {
                     methods.push(SlotDraft {
@@ -412,8 +447,9 @@ impl ClassPlan {
             }
             let mut own_methods: Vec<OwnMethod> = sorted_methods
                 .into_iter()
-                .map(|(m, frame_name, _)| OwnMethod {
+                .map(|(m, frame_name, accessor)| OwnMethod {
                     name: m.name.name.clone(),
+                    accessor,
                     name_span: m.name.span,
                     frame_name,
                     params: m.params.clone(),
@@ -471,6 +507,7 @@ impl ClassPlan {
                     };
                     own_methods.push(OwnMethod {
                         name: slot_name,
+                        accessor: Some(missing),
                         name_span: decl.name.span,
                         frame_name,
                         params,
@@ -552,7 +589,6 @@ impl ClassPlan {
                     .map(|d| MethodSlot {
                         name: d.name,
                         owner: d.owner,
-                        sig_idx: 0, // filled in reserve_types
                         param_tys: d.param_tys,
                         argument_metadata: d.argument_metadata,
                         ret_ty: d.ret_ty,
@@ -561,8 +597,10 @@ impl ClassPlan {
                         absent: d.absent,
                     })
                     .collect(),
+                vtable_slots: Vec::new(),
                 own_methods,
                 adapter_slots: Vec::new(),
+                vtable_thunks: Vec::new(),
                 ctor_params,
                 ctor_body,
                 struct_type_idx: 0,
@@ -623,6 +661,7 @@ impl ClassPlan {
     /// lockstep with the wasm-encoder type section.
     pub fn reserve_and_emit_types(
         &mut self,
+        imported: &BTreeMap<MangledName, ImportedClassLayout>,
         types: &mut TypeSection,
         next_type_idx: &mut u32,
         symbols: &mut SymbolTable,
@@ -631,78 +670,45 @@ impl ClassPlan {
         if self.classes.is_empty() {
             return Ok(());
         }
-        // 1. A standalone fn-type sig per method slot first introduced (base
-        //    method or subclass-new method); overrides reuse the parent's sig.
-        //    Each sig carries its erasure shape (derived from the originating
-        //    declaration's types) — inherited/override slots copy it with the
-        //    sig, so a call through any class in the chain sees the physical
-        //    slot's boxing needs.
-        let mut sig_by_name: BTreeMap<(MangledName, String), (u32, MethodSlotAbi)> =
-            BTreeMap::new();
-        for class in &self.classes {
-            for slot in &class.methods {
-                // Only allocate when this class is where the slot's sig originates:
-                // i.e. the method is declared here AND the parent has no such slot.
-                let parent_has = match &class.parent {
-                    Some(p) => inherited_slot_sig(&sig_by_name, symbols, p, &slot.name)?,
-                    None => None,
-                };
-                if let Some(parent_entry) = parent_has {
-                    sig_by_name.insert((class.mangled.clone(), slot.name.clone()), parent_entry);
-                    continue;
-                }
-                // Slot originates here: build its sig from the declaring method.
-                // `own_methods` includes the synthetic accessor getter/setter.
-                let method = class
-                    .own_methods
-                    .iter()
-                    .find(|m| m.name == slot.name)
-                    .ok_or_else(|| {
-                        internal_failure("a class method slot originates in a class without it")
-                    })?;
-                let mut params: Vec<ValType> = vec![ref_to(intrinsics.object)];
-                // Overrides may widen parameters beyond the ancestor's representation.
-                // Every method argument therefore crosses a nullable boxed slot.
-                params.extend(
-                    method
-                        .params
-                        .iter()
-                        .map(|_| symbols.value_type(&crate::Type::Unknown))
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
-                // Getter vtable slots always return a boxed `(ref null $Object)`
-                // so a subclass that redeclares only the setter can override the
-                // slot with an absent-getter returning `undefined`.
-                let results = if slot.accessor == Some(crate::AccessorKind::Get) {
-                    vec![symbols.value_type(&crate::Type::Unknown)?]
-                } else {
-                    symbols.slot_wasm_result(&method.return_type)?
-                };
-                let abi = MethodSlotAbi {
-                    params: params.iter().skip(1).copied().collect(),
-                    ret: results.first().copied(),
-                    types: !method.generics.is_empty(),
-                };
-                if abi.types {
-                    params.push(super::generic_binding::types_value_type(symbols)?);
-                }
-                super::check_function_parameters(
-                    || format!("the method `{}#{}`", class.name, slot.name),
-                    &params,
-                )?;
-                let sig_idx = next_index(next_type_idx)?;
-                types.ty().function(params, results);
-                sig_by_name.insert((class.mangled.clone(), slot.name.clone()), (sig_idx, abi));
-            }
-        }
-        // Stamp each slot's sig_idx (resolving inherited slots to their origin sig).
+        // 1. Resolve physical vtable slots per class (parents before children)
+        //    and emit standalone fn-type signatures whenever a method originates
+        //    or an override introduces a new calling convention.
+        let mut vtable_slots_by_class: BTreeMap<MangledName, Vec<VtableSlot>> = BTreeMap::new();
         for class in &mut self.classes {
-            for slot in &mut class.methods {
-                slot.sig_idx = sig_by_name
-                    .get(&(class.mangled.clone(), slot.name.clone()))
-                    .ok_or_else(|| internal_failure("a class method slot has no signature"))?
-                    .0;
-            }
+            let mut vtable_slots = match &class.parent {
+                Some(parent) => vtable_slots_by_class
+                    .get(parent)
+                    .cloned()
+                    .or_else(|| imported.get(parent).map(|l| l.vtable_slots.clone()))
+                    .ok_or_else(|| unavailable_parent(parent))?,
+                None => Vec::new(),
+            };
+            let mut own_candidates: Vec<OwnSlotCandidate<'_>> = class
+                .own_methods
+                .iter()
+                .map(|m| OwnSlotCandidate {
+                    name: std::borrow::Cow::Borrowed(&m.name),
+                    accessor: m.accessor,
+                    arity: m.params.len(),
+                    has_rest: m.params.last().is_some_and(|p| p.rest),
+                    ret_ty: &m.return_type,
+                    generic: !m.generics.is_empty(),
+                })
+                .collect();
+            own_candidates
+                .sort_by(|a, b| (a.name.as_ref(), a.accessor).cmp(&(b.name.as_ref(), b.accessor)));
+            let class_name = &class.name;
+            extend_vtable_slots(
+                &mut vtable_slots,
+                &own_candidates,
+                intrinsics,
+                symbols,
+                types,
+                next_type_idx,
+                |method_name| format!("the method `{class_name}#{method_name}`"),
+            )?;
+            vtable_slots_by_class.insert(class.mangled.clone(), vtable_slots.clone());
+            class.vtable_slots = vtable_slots;
         }
 
         // 2. Reserve struct + vtable type indices: one (vtable, struct) pair per
@@ -782,31 +788,30 @@ impl ClassPlan {
                 }
             }
             symbols.record_class_abstract_guard_slots(class.mangled.clone(), own_abstract_guards);
-            // Method vtable slot (universal slots + parent link precede user
-            // methods) + its sig, for every slot in the chain so a parent-typed
-            // receiver resolves too.
-            for (i, slot) in class.methods.iter().enumerate() {
-                if slot.accessor.is_none() {
-                    symbols.record_class_payload_method(class.mangled.clone(), slot.name.clone());
+            // Active vtable slot + sig + ABI for every method in the chain so a
+            // receiver typed at this class dispatches through its own convention.
+            for (i, vslot) in class.vtable_slots.iter().enumerate() {
+                if !vslot.active {
+                    continue;
+                }
+                if vslot.accessor.is_none() {
+                    symbols.record_class_payload_method(class.mangled.clone(), vslot.name.clone());
                 }
                 symbols.record_class_method_slot(
                     class.mangled.clone(),
-                    slot.name.clone(),
+                    vslot.name.clone(),
                     method_vtable_slot(i)?,
                 );
                 symbols.record_class_method_sig(
                     class.mangled.clone(),
-                    slot.name.clone(),
-                    slot.sig_idx,
+                    vslot.name.clone(),
+                    vslot.sig_idx,
                 );
-                if let Some((_, abi)) = sig_by_name.get(&(class.mangled.clone(), slot.name.clone()))
-                {
-                    symbols.record_class_method_abi(
-                        class.mangled.clone(),
-                        slot.name.clone(),
-                        abi.clone(),
-                    );
-                }
+                symbols.record_class_method_abi(
+                    class.mangled.clone(),
+                    vslot.name.clone(),
+                    vslot.abi.clone(),
+                );
             }
         }
 
@@ -877,8 +882,8 @@ impl ClassPlan {
                 mutable: false,
             },
         ];
-        for slot in &class.methods {
-            fields.push(fieldtype_ref(slot.sig_idx));
+        for vslot in &class.vtable_slots {
+            fields.push(fieldtype_ref(vslot.sig_idx));
         }
         Ok(substruct(fields, Some(supertype)))
     }
@@ -996,6 +1001,20 @@ impl ClassPlan {
                 );
             }
             class.adapter_slots = adapter_slots;
+            let mut vtable_thunks: Vec<usize> = Vec::new();
+            for (i, vslot) in class.vtable_slots.iter().enumerate() {
+                if vslot.active {
+                    continue;
+                }
+                let active = active_method_for_vtable_slot(&class.methods, vslot)?;
+                let key = vtable_thunk_key(&active.owner, vslot);
+                if symbols.class_vtable_thunk_func_idx(&key).is_none() {
+                    let idx = next_index(next_func_idx)?;
+                    symbols.record_class_vtable_thunk_func(key, idx);
+                    vtable_thunks.push(i);
+                }
+            }
+            class.vtable_thunks = vtable_thunks;
             // Retained temporarily for stable function/global numbering while
             // class field dispatch migrates to the object-fields payload.
             class.getter_func_idx = next_index(next_func_idx)?;
@@ -1033,12 +1052,9 @@ impl ClassPlan {
             functions.function(class.ctor_sig_idx);
             functions.function(class.ctor_init_sig_idx);
             for method in &class.own_methods {
-                let sig_idx = class
-                    .methods
-                    .iter()
-                    .find(|s| s.name == method.name)
-                    .ok_or_else(|| internal_failure("a class's own method has no vtable slot"))?
-                    .sig_idx;
+                let sig_idx = symbols
+                    .class_method_sig(&class.mangled, &method.name)
+                    .ok_or_else(|| internal_failure("a class's own method has no vtable slot"))?;
                 functions.function(sig_idx);
             }
             for &i in &class.adapter_slots {
@@ -1056,6 +1072,12 @@ impl ClassPlan {
                         )
                     })?;
                 functions.function(ty);
+            }
+            for &slot_index in &class.vtable_thunks {
+                let vslot = class.vtable_slots.get(slot_index).ok_or_else(|| {
+                    internal_failure("class vtable thunk refers to a missing vtable slot")
+                })?;
+                functions.function(vslot.sig_idx);
             }
             functions.function(intrinsics.field_getter);
             functions.function(intrinsics.field_setter);
@@ -1104,10 +1126,9 @@ impl ClassPlan {
                     !class.methods.iter().any(|slot| slot.name == "toJson"),
                 )),
             ];
-            for slot in &class.methods {
-                let func = symbols
-                    .class_method_func_idx(&slot.owner, &slot.name)
-                    .ok_or_else(|| internal_failure("a class method body was not allocated"))?;
+            for vslot in &class.vtable_slots {
+                let active = active_method_for_vtable_slot(&class.methods, vslot)?;
+                let func = vtable_slot_func_idx(symbols, &active.owner, vslot)?;
                 instrs.push(Instruction::RefFunc(func));
             }
             instrs.push(Instruction::StructNew(class.vtable_type_idx));
@@ -1193,6 +1214,12 @@ impl ClassPlan {
                     })?,
                     ctx,
                 )?);
+            }
+            for &slot_index in &class.vtable_thunks {
+                let vslot = class.vtable_slots.get(slot_index).ok_or_else(|| {
+                    internal_failure("class vtable thunk refers to a missing vtable slot")
+                })?;
+                code.function(&emit_vtable_slot_thunk(class, vslot, ctx)?);
             }
             // getter, then setter.
             code.function(&stub_body());
@@ -1322,14 +1349,12 @@ impl ClassPlan {
     /// the body's self param, which is why one adapter serves every subclass.
     /// Mirrors [`function_adapters::emit_bodies`].
     ///
-    /// `class` is used only for the ABI lookup; every other input comes from
-    /// the slot. That is sound because a slot's `MethodSlotAbi` is
-    /// chain-invariant — `reserve_types` propagates the declarer's verbatim,
-    /// and the one place a slot's types are rewritten (an override) rewrites
-    /// `owner` too, so an overridden slot never shares an adapter. Classes
-    /// sharing an adapter therefore necessarily share its ABI. Make a slot's
-    /// ABI class-dependent and that stops holding, with no validation error to
-    /// catch it — reuse would box against the wrong shape.
+    /// `class` is used only to look up the active [`MethodSlotAbi`]; every
+    /// other input comes from `slot`. That is sound because `slot.owner` names
+    /// the class that defined the active body: an override rewrites `slot.owner`
+    /// and sets its own convention active, while an inherited slot keeps
+    /// `slot.owner` and its active convention unchanged, so classes sharing an
+    /// adapter necessarily share the active ABI of `slot.owner`.
     fn emit_method_adapter_body(
         &self,
         class: &ClassLayout,
@@ -1435,17 +1460,15 @@ impl ClassPlan {
 
     /// Method body: bind `this` (`local.get 0 ; ref.cast (ref $Foo)` — the vtable
     /// ABI's self param is `(ref $Object)`), then run the typed body. Returns the
-    /// body's line rows with it. A method with its own type parameters is
-    /// rejected by the typechecker, so [`Self::emit_bodies`] writes an
-    /// unreachable stub in its place as defence rather than pending work.
+    /// body's line rows with it.
     ///
-    /// The function's Wasm signature is the slot's — the originating ancestor's,
-    /// which an override's own annotations may differ from in either direction:
-    /// wider, where a generic class's params/returns erase to
-    /// `(ref null $Object)`, or narrower, where the ancestor spelled a
-    /// structural type the override reaches through an interface. So each param
-    /// binds through a shadow local cast to the body's own type, and each
-    /// `return` coerces back into the slot. Byte-identical when own == origin.
+    /// The function's Wasm signature is this class's active vtable slot for the
+    /// method (reusing an ancestor's slot when calling conventions match, or a
+    /// newly appended slot whose return convention stays the originator's). An
+    /// override's declared parameter and return types may still differ from the
+    /// erased slot representation in either direction, so each param binds
+    /// through a shadow local cast to the body's own type, and each `return`
+    /// coerces back into the slot.
     fn emit_method_body(
         &self,
         class: &ClassLayout,
@@ -1919,8 +1942,10 @@ impl ClassPlan {
             // Every vtable slot funcref the vtable global stores — own bodies,
             // overrides, and inherited slots whose body lives on an ancestor
             // (possibly imported from another package).
-            for slot in &class.methods {
-                if let Some(idx) = symbols.class_method_func_idx(&slot.owner, &slot.name) {
+            for vslot in &class.vtable_slots {
+                if let Ok(active) = active_method_for_vtable_slot(&class.methods, vslot)
+                    && let Ok(idx) = vtable_slot_func_idx(symbols, &active.owner, vslot)
+                {
                     out.push(idx);
                 }
             }
@@ -2357,26 +2382,369 @@ fn unavailable_parent(parent: &MangledName) -> CompilerFailure {
     ))
 }
 
-/// The signature and ABI a slot inherits from `parent`, if the parent has the
-/// slot. An imported parent's slots live in the symbol table (recorded by
-/// `imported_classes`), not in `sig_by_name`.
-fn inherited_slot_sig(
-    sig_by_name: &BTreeMap<(MangledName, String), (u32, MethodSlotAbi)>,
+/// Extend `slots` (inherited from the parent class, if any) with `own`
+/// methods/accessors declared on a class, emitting a new standalone Wasm
+/// function type whenever a method originates here or an override changes
+/// [`MethodSlotAbi::same_convention`]. Shared by local and imported classes so
+/// both assign identical vtable layouts across package boundaries.
+pub(crate) fn extend_vtable_slots(
+    slots: &mut Vec<VtableSlot>,
+    own: &[OwnSlotCandidate<'_>],
+    intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
-    parent: &MangledName,
-    slot: &str,
-) -> Result<Option<(u32, MethodSlotAbi)>, CompilerFailure> {
-    if let Some(entry) = sig_by_name.get(&(parent.clone(), slot.to_owned())) {
-        return Ok(Some(entry.clone()));
+    types: &mut TypeSection,
+    next_type_idx: &mut u32,
+    describe_method: impl Fn(&str) -> String,
+) -> Result<(), CompilerFailure> {
+    let erased_param = symbols.value_type(&crate::Type::Unknown)?;
+    for candidate in own {
+        let name = candidate.name.as_ref();
+        let inherited = slots
+            .iter()
+            .find(|s| s.active && s.name == name && s.accessor == candidate.accessor)
+            .map(|s| (s.abi.ret, s.abi.types));
+        let abi = if let Some((origin_ret, active_types)) = inherited {
+            let abi = MethodSlotAbi {
+                params: vec![erased_param; candidate.arity],
+                has_rest: candidate.has_rest,
+                ret: origin_ret,
+                types: active_types || candidate.generic,
+            };
+            for slot in slots
+                .iter_mut()
+                .filter(|s| s.name == name && s.accessor == candidate.accessor)
+            {
+                slot.active = false;
+            }
+            if let Some(reused) = slots.iter_mut().find(|s| {
+                s.name == name && s.accessor == candidate.accessor && s.abi.same_convention(&abi)
+            }) {
+                reused.active = true;
+                continue;
+            }
+            abi
+        } else {
+            // Getter vtable slots always return a boxed `(ref null $Object)` so
+            // a subclass that redeclares only the setter can override the slot
+            // with an absent-getter returning `undefined`.
+            let results = if candidate.accessor == Some(crate::AccessorKind::Get) {
+                vec![erased_param]
+            } else {
+                symbols.slot_wasm_result(candidate.ret_ty)?
+            };
+            MethodSlotAbi {
+                params: vec![erased_param; candidate.arity],
+                has_rest: candidate.has_rest,
+                ret: results.first().copied(),
+                types: candidate.generic,
+            }
+        };
+        let sig_idx =
+            emit_method_slot_fn_type(&abi, intrinsics, symbols, types, next_type_idx, || {
+                describe_method(name)
+            })?;
+        slots.push(VtableSlot {
+            name: name.to_owned(),
+            accessor: candidate.accessor,
+            sig_idx,
+            abi,
+            active: true,
+        });
     }
-    let Some(sig) = symbols.class_method_sig(parent, slot) else {
-        return Ok(None);
+    Ok(())
+}
+
+fn emit_method_slot_fn_type(
+    abi: &MethodSlotAbi,
+    intrinsics: IntrinsicTypeIndices,
+    symbols: &SymbolTable,
+    types: &mut TypeSection,
+    next_type_idx: &mut u32,
+    describe: impl FnOnce() -> String,
+) -> Result<u32, CompilerFailure> {
+    let mut wasm_params = Vec::with_capacity(1 + abi.params.len() + usize::from(abi.types));
+    wasm_params.push(ref_to(intrinsics.object));
+    wasm_params.extend_from_slice(&abi.params);
+    if abi.types {
+        wasm_params.push(super::generic_binding::types_value_type(symbols)?);
+    }
+    super::check_function_parameters(describe, &wasm_params)?;
+    let sig_idx = next_index(next_type_idx)?;
+    types.ty().function(wasm_params, abi.ret);
+    Ok(sig_idx)
+}
+
+fn active_method_for_vtable_slot<'a>(
+    methods: &'a [MethodSlot],
+    vslot: &VtableSlot,
+) -> Result<&'a MethodSlot, CompilerFailure> {
+    methods
+        .iter()
+        .find(|m| m.name == vslot.name && m.accessor == vslot.accessor)
+        .ok_or_else(|| internal_failure("a class vtable slot has no active method entry"))
+}
+
+fn vtable_thunk_key(owner: &MangledName, vslot: &VtableSlot) -> VtableThunkKey {
+    VtableThunkKey {
+        owner: owner.clone(),
+        method: vslot.name.clone(),
+        accessor: vslot.accessor,
+        arity: vslot.abi.params.len(),
+        has_rest: vslot.abi.has_rest,
+        types: vslot.abi.types,
+    }
+}
+
+fn vtable_slot_func_idx(
+    symbols: &SymbolTable,
+    owner: &MangledName,
+    vslot: &VtableSlot,
+) -> Result<u32, CompilerFailure> {
+    if vslot.active {
+        return symbols
+            .class_method_func_idx(owner, &vslot.name)
+            .ok_or_else(|| internal_failure("a class method body was not allocated"));
+    }
+    symbols
+        .class_vtable_thunk_func_idx(&vtable_thunk_key(owner, vslot))
+        .ok_or_else(|| internal_failure("a class vtable slot thunk was not allocated"))
+}
+
+/// Adapts a call arriving through an inherited vtable slot `vslot` (typed at an
+/// ancestor's parameter list) to the active method owner's overriding body:
+/// fills omitted trailing parameters with `undefined` (triggering the override's
+/// defaults), packs or unpacks rest `$Array` arguments, and forwards `$types`.
+fn emit_vtable_slot_thunk(
+    class: &ClassLayout,
+    vslot: &VtableSlot,
+    ctx: &CodegenCtx<'_>,
+) -> Result<Function, CompilerFailure> {
+    let owner = &active_method_for_vtable_slot(&class.methods, vslot)?.owner;
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| internal_failure("intrinsic types are not declared"))?;
+    let target_func = ctx
+        .symbols
+        .class_method_func_idx(owner, &vslot.name)
+        .ok_or_else(|| internal_failure("method body func allocated or imported"))?;
+    let owner_abi = ctx
+        .symbols
+        .class_method_abi(owner, &vslot.name)
+        .ok_or_else(|| internal_failure("class method slot ABI is not registered"))?;
+    if owner_abi.ret != vslot.abi.ret {
+        return Err(internal_failure(
+            "class vtable thunk return type differs from target method",
+        ));
+    }
+    let undefined_global = ctx
+        .symbols
+        .prelude_global_idx(crate::runtime::prelude::undefined::GLOBAL_NAME)
+        .ok_or_else(|| internal_failure("undefined global is not imported"))?;
+
+    let slot_arity = vslot.abi.params.len();
+    let slot_has_rest = vslot.abi.has_rest;
+    let slot_fixed = if slot_has_rest {
+        slot_arity
+            .checked_sub(1)
+            .ok_or_else(|| internal_failure("rest vtable slot has zero parameters"))?
+    } else {
+        slot_arity
     };
-    let abi = symbols
-        .class_method_abi(parent, slot)
-        .cloned()
-        .ok_or_else(|| internal_failure("an inherited method slot has no recorded ABI"))?;
-    Ok(Some((sig, abi)))
+    let own_arity = owner_abi.params.len();
+    let own_has_rest = owner_abi.has_rest;
+    let own_fixed = if own_has_rest {
+        own_arity
+            .checked_sub(1)
+            .ok_or_else(|| internal_failure("rest class method has zero parameters"))?
+    } else {
+        own_arity
+    };
+    let array_vtable = if own_has_rest {
+        Some(
+            ctx.symbols
+                .prelude_global_idx("array_vtable")
+                .ok_or_else(|| internal_failure("array_vtable global is not imported"))?,
+        )
+    } else {
+        None
+    };
+
+    let object_ref_null = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    });
+    let raw_array_null = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.raw_array),
+    });
+
+    let first_local = wasm_u32(slot_arity)?
+        .checked_add(1 + u32::from(vslot.abi.types))
+        .ok_or_else(|| internal_failure("vtable thunk local index overflow"))?;
+    let locals = if slot_has_rest {
+        let mut decls = vec![(1, raw_array_null), (1, ValType::I32)];
+        if own_has_rest {
+            decls.push((1, raw_array_null));
+            decls.push((1, ValType::I32));
+        }
+        decls
+    } else {
+        Vec::new()
+    };
+    let mut f = Function::new(locals);
+
+    if slot_has_rest {
+        let slot_raw = first_local;
+        let slot_len = first_local + 1;
+        let rest_param = parameter_local(slot_fixed)?;
+        f.instruction(&Instruction::LocalGet(rest_param));
+        f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
+            intrinsics.array,
+        )));
+        f.instruction(&Instruction::StructGet {
+            struct_type_index: intrinsics.array,
+            field_index: 1,
+        });
+        f.instruction(&Instruction::LocalSet(slot_raw));
+        f.instruction(&Instruction::LocalGet(rest_param));
+        f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
+            intrinsics.array,
+        )));
+        f.instruction(&Instruction::StructGet {
+            struct_type_index: intrinsics.array,
+            field_index: 2,
+        });
+        f.instruction(&Instruction::LocalSet(slot_len));
+
+        if own_has_rest {
+            let out_raw = first_local + 2;
+            let out_len = first_local + 3;
+            if own_fixed <= slot_fixed {
+                let prefix = wasm_u32(slot_fixed - own_fixed)?;
+                f.instruction(&Instruction::I32Const(prefix.cast_signed()));
+                f.instruction(&Instruction::LocalGet(slot_len));
+                f.instruction(&Instruction::I32Add);
+                f.instruction(&Instruction::LocalTee(out_len));
+                f.instruction(&Instruction::ArrayNewDefault(intrinsics.raw_array));
+                f.instruction(&Instruction::LocalSet(out_raw));
+                for (dst_idx, k) in (own_fixed..slot_fixed).enumerate() {
+                    f.instruction(&Instruction::LocalGet(out_raw));
+                    f.instruction(&Instruction::RefAsNonNull);
+                    f.instruction(&Instruction::I32Const(wasm_u32(dst_idx)?.cast_signed()));
+                    f.instruction(&Instruction::LocalGet(parameter_local(k)?));
+                    f.instruction(&Instruction::ArraySet(intrinsics.raw_array));
+                }
+                f.instruction(&Instruction::LocalGet(out_raw));
+                f.instruction(&Instruction::RefAsNonNull);
+                f.instruction(&Instruction::I32Const(prefix.cast_signed()));
+                f.instruction(&Instruction::LocalGet(slot_raw));
+                f.instruction(&Instruction::RefAsNonNull);
+                f.instruction(&Instruction::I32Const(0));
+                f.instruction(&Instruction::LocalGet(slot_len));
+                f.instruction(&Instruction::ArrayCopy {
+                    array_type_index_dst: intrinsics.raw_array,
+                    array_type_index_src: intrinsics.raw_array,
+                });
+            } else {
+                let consumed = wasm_u32(own_fixed - slot_fixed)?.cast_signed();
+                f.instruction(&Instruction::LocalGet(slot_len));
+                f.instruction(&Instruction::I32Const(consumed));
+                f.instruction(&Instruction::I32GtS);
+                f.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
+                f.instruction(&Instruction::LocalGet(slot_len));
+                f.instruction(&Instruction::I32Const(consumed));
+                f.instruction(&Instruction::I32Sub);
+                f.instruction(&Instruction::Else);
+                f.instruction(&Instruction::I32Const(0));
+                f.instruction(&Instruction::End);
+                f.instruction(&Instruction::LocalTee(out_len));
+                f.instruction(&Instruction::ArrayNewDefault(intrinsics.raw_array));
+                f.instruction(&Instruction::LocalSet(out_raw));
+
+                f.instruction(&Instruction::LocalGet(out_len));
+                f.instruction(&Instruction::If(BlockType::Empty));
+                f.instruction(&Instruction::LocalGet(out_raw));
+                f.instruction(&Instruction::RefAsNonNull);
+                f.instruction(&Instruction::I32Const(0));
+                f.instruction(&Instruction::LocalGet(slot_raw));
+                f.instruction(&Instruction::RefAsNonNull);
+                f.instruction(&Instruction::I32Const(consumed));
+                f.instruction(&Instruction::LocalGet(out_len));
+                f.instruction(&Instruction::ArrayCopy {
+                    array_type_index_dst: intrinsics.raw_array,
+                    array_type_index_src: intrinsics.raw_array,
+                });
+                f.instruction(&Instruction::End);
+            }
+        }
+
+        f.instruction(&Instruction::LocalGet(0));
+        for i in 0..own_fixed {
+            if i < slot_fixed {
+                f.instruction(&Instruction::LocalGet(parameter_local(i)?));
+            } else {
+                let offset = wasm_u32(i - slot_fixed)?.cast_signed();
+                f.instruction(&Instruction::I32Const(offset));
+                f.instruction(&Instruction::LocalGet(slot_len));
+                f.instruction(&Instruction::I32LtS);
+                f.instruction(&Instruction::If(BlockType::Result(object_ref_null)));
+                f.instruction(&Instruction::LocalGet(slot_raw));
+                f.instruction(&Instruction::RefAsNonNull);
+                f.instruction(&Instruction::I32Const(offset));
+                f.instruction(&Instruction::ArrayGet(intrinsics.raw_array));
+                f.instruction(&Instruction::Else);
+                f.instruction(&Instruction::GlobalGet(undefined_global));
+                f.instruction(&Instruction::End);
+            }
+        }
+        if let Some(array_vtable) = array_vtable {
+            let out_raw = first_local + 2;
+            let out_len = first_local + 3;
+            f.instruction(&Instruction::GlobalGet(array_vtable));
+            f.instruction(&Instruction::LocalGet(out_raw));
+            f.instruction(&Instruction::RefAsNonNull);
+            f.instruction(&Instruction::LocalGet(out_len));
+            f.instruction(&Instruction::StructNew(intrinsics.array));
+        }
+    } else {
+        f.instruction(&Instruction::LocalGet(0));
+        for i in 0..own_fixed {
+            if i < slot_fixed {
+                f.instruction(&Instruction::LocalGet(parameter_local(i)?));
+            } else {
+                f.instruction(&Instruction::GlobalGet(undefined_global));
+            }
+        }
+        if let Some(array_vtable) = array_vtable {
+            let tail_count = slot_fixed.saturating_sub(own_fixed);
+            let tail_u32 = wasm_u32(tail_count)?;
+            f.instruction(&Instruction::GlobalGet(array_vtable));
+            for i in own_fixed..slot_fixed {
+                f.instruction(&Instruction::LocalGet(parameter_local(i)?));
+            }
+            f.instruction(&Instruction::ArrayNewFixed {
+                array_type_index: intrinsics.raw_array,
+                array_size: tail_u32,
+            });
+            f.instruction(&Instruction::I32Const(tail_u32.cast_signed()));
+            f.instruction(&Instruction::StructNew(intrinsics.array));
+        }
+    }
+
+    if owner_abi.types {
+        if vslot.abi.types {
+            f.instruction(&Instruction::LocalGet(parameter_local(slot_arity)?));
+        } else {
+            f.instruction(&Instruction::RefNull(HeapType::Concrete(
+                intrinsics.object_fields,
+            )));
+        }
+    }
+    f.instruction(&Instruction::Call(target_func));
+    f.instruction(&Instruction::End);
+    super::check_generated_body(&f, &vslot.name, || format!("the class `{}`", class.name))?;
+    Ok(f)
 }
 
 /// Topological order of classes by `extends` (parents before children). Classes
@@ -2946,8 +3314,10 @@ mod tests {
             abstract_fields: BTreeSet::new(),
             abstract_narrowing_checks: BTreeMap::new(),
             methods: Vec::new(),
+            vtable_slots: Vec::new(),
             own_methods: Vec::new(),
             adapter_slots: Vec::new(),
+            vtable_thunks: Vec::new(),
             ctor_params: Vec::new(),
             ctor_body: None,
             field_setup: Vec::new(),
@@ -3053,6 +3423,7 @@ mod closure_adapter_invariant_tests {
             slot.name.clone(),
             MethodSlotAbi {
                 types: false,
+                has_rest: false,
                 params: vec![],
                 ret: Some(ValType::F64),
             },

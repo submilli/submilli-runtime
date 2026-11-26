@@ -5647,3 +5647,643 @@ fn rename_class_method(ast: &mut TypedAst, class_name: &str, from: &str, to: &st
     }
     assert!(found, "expected method `{from}` on class `{class_name}`");
 }
+
+#[test]
+fn alternate_front_end_class_method_override_arities_and_rest_conventions() {
+    let source = r#"
+        class EqRestBase {
+            m(x: number): number { return x; }
+        }
+        class EqRestSub extends EqRestBase {
+            m_impl(...xs: number[]): number {
+                return xs.length * 100 + xs.reduce((a, b) => a + b, 0);
+            }
+        }
+
+        class ExpandRestBase {
+            m(x: number, y: number, ...zs: number[]): number {
+                return x + y + zs.length;
+            }
+        }
+        class ExpandRestSub extends ExpandRestBase {
+            m_impl(...all: number[]): number {
+                return all.length * 1000 + all.reduce((a, b) => a + b, 0);
+            }
+        }
+
+        class ConsumeRestBase {
+            m(...xs: number[]): number {
+                return xs.length;
+            }
+        }
+        class ConsumeRestSub extends ConsumeRestBase {
+            m_impl(x: number = 10, ...ys: number[]): number {
+                return x * 100 + ys.length * 10 + ys.reduce((a, b) => a + b, 0);
+            }
+        }
+
+        class RestToFixedBase {
+            m(...xs: number[]): number {
+                return xs.length;
+            }
+        }
+        class RestToFixedSub extends RestToFixedBase {
+            m_impl(x: number = 10, y: number = 20): number {
+                return x * 100 + y;
+            }
+        }
+
+        class FewerBase {
+            m(x: number, y: number): number {
+                return x + y;
+            }
+        }
+        class FewerSub extends FewerBase {
+            m_impl(x: number): number {
+                return x * 10;
+            }
+        }
+
+        class ReactA {
+            m(x: number): number { return x; }
+        }
+        class ReactB extends ReactA {
+            m(x: number, y: number = 10): number { return x + y; }
+        }
+        class ReactC extends ReactB {
+            m_impl(x: number): number { return x * 100; }
+        }
+
+        class GuardParent {
+            v: unknown = null;
+            setV(v: unknown): void { this.v = v; }
+        }
+        class GuardChild<T> extends GuardParent {
+            v: T;
+            constructor(v: T) { super(); this.v = v; }
+            readV(): T { return this.v; }
+        }
+        function verifyRuntimeT<T>(sample: T, candidate: unknown): T {
+            const g = new GuardChild<T>(sample);
+            g.setV(candidate);
+            return g.readV();
+        }
+
+        class GenChainA {
+            m(sample: unknown, candidate: unknown): unknown { return candidate; }
+        }
+        class GenChainB extends GenChainA {
+            m_impl<T>(sample: T, candidate: unknown): T {
+                return verifyRuntimeT<T>(sample, candidate);
+            }
+        }
+        class GenChainC extends GenChainB {
+            m(sample: unknown, candidate: unknown, bonus: number = 5): unknown {
+                return (candidate as number) + bonus;
+            }
+        }
+
+        class GChainBase {
+            id<T>(sample: T, candidate: unknown, extra?: number): T {
+                return verifyRuntimeT<T>(sample, candidate);
+            }
+            id_chain(sample: number, candidate: unknown, extra?: number): number {
+                return 0;
+            }
+        }
+        class GChainSub extends GChainBase {
+            id<T>(sample: T, candidate: unknown, extra: number = 10, tag: string = "ok"): T {
+                if (tag.length === 0 || extra !== 10) throw new Error("bad default");
+                return verifyRuntimeT<T>(sample, candidate);
+            }
+        }
+        function maybeChain(flag: boolean): GChainBase | undefined {
+            return flag ? new GChainSub() : undefined;
+        }
+
+        class StrOpt {
+            toString_impl(radix?: number): string {
+                return radix === undefined ? "opt:default" : `opt:${radix}`;
+            }
+        }
+        class StrRest {
+            toString_impl(...args: readonly number[]): string {
+                return `rest:${args.length}`;
+            }
+        }
+        class JsonSub {
+            v: number = 7;
+            toJson_impl(pretty?: boolean): string {
+                return pretty === true ? `{"v": ${this.v}}` : `{"v":${this.v}}`;
+            }
+        }
+
+        function main(): string {
+            const eq = new EqRestSub();
+            if ((eq as EqRestBase).m(7) !== 107) return "eq-base";
+            if (eq.m_impl(1, 2, 3) !== 306) return "eq-sub-3";
+            if (eq.m_impl() !== 0) return "eq-sub-0";
+
+            const ex = new ExpandRestSub();
+            if ((ex as ExpandRestBase).m(1, 2) !== 2003) return "ex-base-2";
+            if ((ex as ExpandRestBase).m(1, 2, 3, 4) !== 4010) return "ex-base-4";
+            if (ex.m_impl(5) !== 1005) return "ex-sub-1";
+
+            const cr = new ConsumeRestSub();
+            if ((cr as ConsumeRestBase).m() !== 1000) return "cr-base-0";
+            if ((cr as ConsumeRestBase).m(3) !== 300) return "cr-base-1";
+            if ((cr as ConsumeRestBase).m(3, 4, 5) !== 329) return "cr-base-3";
+            if (cr.m_impl(2, 6) !== 216) return "cr-sub-2";
+
+            const rf = new RestToFixedSub();
+            if ((rf as RestToFixedBase).m() !== 1020) return "rf-base-0";
+            if ((rf as RestToFixedBase).m(4) !== 420) return "rf-base-1";
+            if ((rf as RestToFixedBase).m(4, 5, 99) !== 405) return "rf-base-3";
+            if (rf.m_impl(7, 8) !== 708) return "rf-sub-2";
+
+            const fw = new FewerSub();
+            if ((fw as FewerBase).m(6, 99) !== 60) return "fw-base";
+            if (fw.m_impl(6) !== 60) return "fw-sub";
+
+            const rc = new ReactC();
+            if ((rc as ReactA).m(3) !== 300) return "rc-as-a";
+            if ((rc as ReactB).m(3, 99) !== 300) return "rc-as-b-2";
+            if ((rc as ReactB).m(3) !== 300) return "rc-as-b-1";
+            if (rc.m_impl(3) !== 300) return "rc-own";
+
+            const gc = new GenChainC();
+            if ((gc as GenChainA).m(0, 10) !== 15) return "gc-as-a";
+            if ((gc as GenChainB).m_impl<number>(0, 10) !== 15) return "gc-as-b";
+            if (gc.m(0, 10, 7) !== 17) return "gc-own";
+
+            const gbOnly: GenChainB = new GenChainB();
+            if (gbOnly.m_impl<number>(0, 9) !== 9) return "gb-ok";
+
+            if (maybeChain(true)?.id_chain(0, 42) !== 42) return "chain-some";
+            if (maybeChain(false)?.id_chain(0, 42) !== undefined) return "chain-none";
+            let chainThrew = false;
+            try {
+                maybeChain(true)?.id_chain(0, "bad");
+            } catch (e) {
+                chainThrew = e instanceof TypeError;
+            }
+            if (!chainThrew) return "chain-cast";
+
+            const so = new StrOpt();
+            if (String(so as unknown) !== "opt:default") return "str-opt";
+            const sr = new StrRest();
+            if (String(sr as unknown) !== "rest:0") return "str-rest";
+            const js = new JsonSub();
+            if (JSON.stringify(js) !== `{"v":7}`) return "json-sub";
+
+            return "ok";
+        }
+    "#;
+    assert_eq!(
+        run(source, |ast| {
+            for class_name in [
+                "EqRestSub",
+                "ExpandRestSub",
+                "ConsumeRestSub",
+                "RestToFixedSub",
+                "FewerSub",
+                "ReactC",
+                "GenChainB",
+            ] {
+                rename_class_method(ast, class_name, "m_impl", "m");
+            }
+            for class_name in ["StrOpt", "StrRest"] {
+                rename_class_method(ast, class_name, "toString_impl", "toString");
+            }
+            rename_class_method(ast, "JsonSub", "toJson_impl", "toJson");
+            if let Some(submilli_engine::TypedTypeDecl::Class(c)) = ast
+                .types
+                .iter_mut()
+                .find(|d| matches!(d, submilli_engine::TypedTypeDecl::Class(c) if c.name.name == "GChainBase"))
+            {
+                c.methods.retain(|m| m.name.name != "id_chain");
+            }
+            for id in ast.expr_ids().unwrap() {
+                let expr = ast.try_expr_mut(id).unwrap();
+                match &mut expr.kind {
+                    TypedExprKind::MethodCall {
+                        member: submilli_engine::Member::Named(ident),
+                        ..
+                    }
+                    | TypedExprKind::GenericMethodCall {
+                        member: submilli_engine::Member::Named(ident),
+                        ..
+                    }
+                    | TypedExprKind::FieldAccess { name: ident, .. }
+                        if ident.name == "m_impl" =>
+                    {
+                        ident.name = "m".to_string();
+                    }
+                    TypedExprKind::OptionalChain { parts, .. } => {
+                        for part in parts {
+                            if let submilli_engine::TypedChainPart::MethodCall {
+                                member: submilli_engine::Member::Named(ident),
+                                type_args,
+                                ..
+                            } = part
+                                && ident.name == "id_chain"
+                            {
+                                ident.name = "id".to_string();
+                                *type_args = vec![Type::Number];
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }),
+        "ok"
+    );
+}
+
+#[test]
+fn class_method_override_with_extra_params_across_package_boundary() {
+    let dep_pkg = submilli_engine::compile::compile_package_checked(
+        "@test/override_dep",
+        submilli_engine::ModulePath::from("lib"),
+        &[submilli_engine::compile::PackageSourceModule {
+            path: submilli_engine::ModulePath::from("lib"),
+            source: r#"
+                /** Unimported ancestor class in the dependency package. */
+                export class UnimportedBase {
+                    /**
+                     * Single-arg base method.
+                     * @param x Value.
+                     * @returns Value.
+                     */
+                    h(x: number): number { return x; }
+                }
+
+                /** Exported leaf over unimported base with extra default parameters. */
+                export class ExportedLeaf extends UnimportedBase {
+                    /**
+                     * Override with two extra defaults.
+                     * @param x First value.
+                     * @param y Second value.
+                     * @param z Third value.
+                     * @returns Sum.
+                     */
+                    h(x: number, y: number = 10, z: number = 20): number {
+                        return x + y + z;
+                    }
+                }
+
+                /** Base class with fixed-arity methods. */
+                export class A {
+                    /**
+                     * Single-arg method.
+                     * @param x Value.
+                     * @returns Value.
+                     */
+                    m(x: number): number { return x; }
+                    /**
+                     * Trailing-alphabetical method to guard slot ordering.
+                     * @param x Value.
+                     * @returns Value.
+                     */
+                    z(x: number): number { return x; }
+                }
+
+                /** Subclass adding optional/rest parameters and an earlier-alphabetical method. */
+                export class B extends A {
+                    /**
+                     * Earlier-alphabetical own method.
+                     * @returns Constant.
+                     */
+                    a(): number { return 7; }
+                    /**
+                     * Override with default parameter.
+                     * @param x Base value.
+                     * @param y Optional addend.
+                     * @returns Sum.
+                     */
+                    m(x: number, y: number = 10): number { return x + y; }
+                    /**
+                     * Override with rest parameter.
+                     * @param x Base value.
+                     * @param ys Extra values.
+                     * @returns Encoded total.
+                     */
+                    z(x: number, ...ys: number[]): number {
+                        return x * 100 + ys.length * 10 + ys.reduce((acc, v) => acc + v, 0);
+                    }
+                }
+
+                /** Subclass in producer package inheriting B's convention-changing overrides. */
+                export class D extends B {}
+
+                /** Base guard class for runtime `T` descriptor checks. */
+                export class GuardParent {
+                    v: unknown = null;
+                    /**
+                     * Sets `v`.
+                     * @param v Replacement value.
+                     */
+                    setV(v: unknown): void { this.v = v; }
+                }
+
+                /** Generic narrowed subclass enforcing `T`'s runtime descriptor. */
+                export class GuardChild<T> extends GuardParent {
+                    v: T;
+                    /**
+                     * Constructs `GuardChild`.
+                     * @param v Initial value.
+                     */
+                    constructor(v: T) { super(); this.v = v; }
+                    /**
+                     * Reads `v` with narrowing check.
+                     * @returns Guarded `T` value.
+                     */
+                    readV(): T { return this.v; }
+                }
+
+                /** Exported generic-method interface whose concrete subclass is never imported by the consumer. */
+                export interface IGBase {
+                    /**
+                     * Validates `candidate` against `T`.
+                     * @param sample Sample `T`.
+                     * @param candidate Candidate value.
+                     * @returns Checked `T`.
+                     */
+                    id<T>(sample: T, candidate: unknown): T;
+                }
+
+                /** Exported base class implementing `IGBase`. */
+                export class GBase implements IGBase {
+                    /**
+                     * Validates `candidate` against `T`.
+                     * @param sample Sample `T`.
+                     * @param candidate Candidate value.
+                     * @returns Checked `T`.
+                     */
+                    id<T>(sample: T, candidate: unknown): T {
+                        const g = new GuardChild<T>(sample);
+                        g.setV(candidate);
+                        return g.readV();
+                    }
+                }
+
+                /** Exported subclass overriding `id<T>` with an extra defaulted parameter. */
+                export class GSub extends GBase {
+                    /**
+                     * Validates `candidate` against `T` with extra defaulted tag.
+                     * @param sample Sample `T`.
+                     * @param candidate Candidate value.
+                     * @param tag Tag.
+                     * @returns Checked `T`.
+                     */
+                    id<T>(sample: T, candidate: unknown, tag: string = "ok"): T {
+                        if (tag.length === 0) throw new Error("empty tag");
+                        const g = new GuardChild<T>(sample);
+                        g.setV(candidate);
+                        return g.readV();
+                    }
+                }
+
+                /**
+                 * Factory returning a `GSub` erased to `IGBase`.
+                 * @returns Instance of `GSub` as `IGBase`.
+                 */
+                export function makeIG(): IGBase {
+                    return new GSub();
+                }
+
+                /** Interface renamed to `toString(radix?: number)` in declaration metadata to test `${x}` / `String(x)`. */
+                export interface IFmtOpt {
+                    /**
+                     * Formats with optional radix.
+                     * @param radix Optional radix.
+                     * @returns Formatted text.
+                     */
+                    fmtOpt(radix?: number): string;
+                }
+
+                class FmtOptImpl implements IFmtOpt {
+                    fmtOpt(radix?: number): string {
+                        return radix === undefined ? "opt:undef" : `opt:${radix}`;
+                    }
+                }
+
+                /**
+                 * Factory returning an `IFmtOpt` value with a runtime `toString(radix?: number)`.
+                 * @returns `IFmtOpt` instance.
+                 */
+                export function makeFmtOpt(): IFmtOpt {
+                    const inst = new FmtOptImpl();
+                    (inst as unknown as { [k: string]: unknown })["toString"] =
+                        (radix?: number): string => inst.fmtOpt(radix);
+                    return inst;
+                }
+
+                /** Interface renamed to `toString(...args: readonly number[])` in declaration metadata. */
+                export interface IFmtRest {
+                    /**
+                     * Formats with rest args.
+                     * @param args Extra numbers.
+                     * @returns Formatted text.
+                     */
+                    fmtRest(...args: readonly number[]): string;
+                }
+
+                class FmtRestImpl implements IFmtRest {
+                    fmtRest(...args: readonly number[]): string {
+                        return `rest:${args.length}`;
+                    }
+                }
+
+                /**
+                 * Factory returning an `IFmtRest` value with a runtime `toString(...args)`.
+                 * @returns `IFmtRest` instance.
+                 */
+                export function makeFmtRest(): IFmtRest {
+                    const inst = new FmtRestImpl();
+                    (inst as unknown as { [k: string]: unknown })["toString"] =
+                        (...args: readonly number[]): string => inst.fmtRest(...args);
+                    return inst;
+                }
+
+                /** Interface renamed to `toString(radix = 10)` in declaration metadata. */
+                export interface IFmtDef {
+                    /**
+                     * Formats with default radix.
+                     * @param radix Radix.
+                     * @returns Formatted text.
+                     */
+                    fmtDef(radix?: number): string;
+                }
+
+                class FmtDefImpl implements IFmtDef {
+                    fmtDef(radix: number = 20): string {
+                        return `def:${radix}`;
+                    }
+                }
+
+                /**
+                 * Factory returning an `IFmtDef` value whose runtime default `20` overrides `10`.
+                 * @returns `IFmtDef` instance.
+                 */
+                export function makeFmtDef(): IFmtDef {
+                    const inst = new FmtDefImpl();
+                    (inst as unknown as { [k: string]: unknown })["toString"] =
+                        (radix: number = 20): string => inst.fmtDef(radix);
+                    return inst;
+                }
+            "#,
+        }],
+        &[],
+    )
+    .expect("compile override_dep package");
+
+    let mut dep_decl = dep_pkg.declaration;
+    for (iface_name, old_method, with_default) in [
+        ("IFmtOpt", "fmtOpt", None),
+        ("IFmtRest", "fmtRest", None),
+        (
+            "IFmtDef",
+            "fmtDef",
+            Some(submilli_engine::DefaultValue::Number(10.0)),
+        ),
+    ] {
+        let sym = dep_decl
+            .types
+            .values_mut()
+            .find(|s| s.name == iface_name)
+            .expect("interface symbol");
+        if let submilli_engine::TypeKind::Interface { methods, .. } = &mut sym.kind {
+            let mut sig = methods.remove(old_method).expect("method sig");
+            if let Some(def) = with_default {
+                sig.params[0].default = Some(def);
+            }
+            methods.insert("toString".to_string(), sig);
+        }
+    }
+
+    let consumer_source = r#"
+        import { A, B, D, ExportedLeaf, makeFmtDef, makeFmtOpt, makeFmtRest, makeIG } from "@test/override_dep";
+
+        class LocalInherit extends B {}
+
+        class LocalOverride extends B {
+            m(x: number, y: number = 20, z: number = 30): number {
+                return super.m(x, y) + z;
+            }
+        }
+
+        interface IA {
+            m(x: number): number;
+        }
+
+        function main(): string {
+            const b = new B();
+            if ((b as A).m(1) !== 11) return "b-as-a-m";
+            if (b.m(1, 2) !== 3) return "b-m-2";
+            if (b.m(1) !== 11) return "b-m-1";
+            if ((b as A).z(2) !== 200) return "b-as-a-z";
+            if (b.z(2, 3, 4) !== 227) return "b-z-3";
+            if (b.a() !== 7) return "b-a";
+
+            const d = new D();
+            if ((d as A).m(5) !== 15) return "d-as-a-m";
+            if (d.m(5, 6) !== 11) return "d-m-2";
+
+            const li = new LocalInherit();
+            if ((li as A).m(4) !== 14) return "li-as-a-m";
+            if ((li as A).z(3) !== 300) return "li-as-a-z";
+            if (li.m(4, 5) !== 9) return "li-m-2";
+            if (li.z(3, 1, 2) !== 323) return "li-z-3";
+
+            const lo = new LocalOverride();
+            if ((lo as A).m(1) !== 51) return "lo-as-a-m";
+            if ((lo as B).m(1, 2) !== 33) return "lo-as-b-m-2";
+            if ((lo as B).m(1) !== 51) return "lo-as-b-m-1";
+            if (lo.m(1, 2, 3) !== 6) return "lo-m-3";
+
+            const iaB: IA = b;
+            const iaLo: IA = lo;
+            if (iaB.m(8) !== 18) return "ia-b";
+            if (iaLo.m(1) !== 51) return "ia-lo";
+
+            const leaf = new ExportedLeaf();
+            if (leaf.h(1) !== 31) return "leaf-1";
+            if (leaf.h(1, 2, 3) !== 6) return "leaf-3";
+
+            const ig = makeIG();
+            if (ig.id<number>(0, 42) !== 42) return "ig-id-42";
+            let igThrew = false;
+            try {
+                ig.id<number>(0, "bad");
+            } catch (e) {
+                igThrew = e instanceof TypeError;
+            }
+            if (!igThrew) return "ig-id-cast";
+
+            const fmtOpt = makeFmtOpt();
+            if (`${fmtOpt}` !== "opt:undef") return "interp-opt";
+            if (String(fmtOpt) !== "opt:undef") return "string-opt";
+
+            const fmtRest = makeFmtRest();
+            if (`${fmtRest}` !== "rest:0") return "interp-rest";
+            if (String(fmtRest) !== "rest:0") return "string-rest";
+
+            const fmtDef = makeFmtDef();
+            if (`${fmtDef}` !== "def:20") return "interp-def-override";
+            if (String(fmtDef) !== "def:20") return "string-def-override";
+
+            return "ok";
+        }
+    "#;
+
+    let output = std::thread::Builder::new()
+        .stack_size(submilli_engine::compiler_limits::COMPILER_STACK_BYTES)
+        .spawn(move || {
+            let compiled = submilli_engine::compile::compile_script_checked(
+                consumer_source,
+                "consumer.ts",
+                FileId(0),
+                &[&dep_decl],
+                &[],
+            )
+            .expect("compile consumer script");
+
+            let cfg = RuntimeConfig::default();
+            let engine = cfg.engine().unwrap();
+            let mut data = submilli_engine::runtime::StoreData::with_tempdir().unwrap();
+            data.install_type_info(compiled.type_info);
+            let mut store = cfg.store_async(&engine, data).unwrap();
+            let mut linker = wasmtime::Linker::new(&engine);
+            let dep_module = wasmtime::Module::new(&engine, &dep_pkg.wasm).unwrap();
+            pollster::block_on(async {
+                submilli_engine::runtime::install_runtime_async(&mut linker, &mut store)
+                    .await
+                    .unwrap();
+                submilli_engine::runtime::install_package_modules_async(
+                    &mut linker,
+                    &mut store,
+                    &[submilli_engine::runtime::LinkedPackageModule {
+                        module: &dep_module,
+                        declaration: &dep_decl,
+                        type_info: &dep_pkg.type_info,
+                    }],
+                )
+                .await
+                .unwrap();
+                let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+                let inst = submilli_engine::instantiate_program_async(&linker, &mut store, &module)
+                    .await
+                    .unwrap();
+                submilli_engine::dispatch_main_async(&mut store, &inst)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            })
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(output, "ok");
+}

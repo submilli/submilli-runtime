@@ -1012,6 +1012,7 @@ impl<'a> Unifier<'a> {
                     params: pa,
                     ret: ra,
                     has_rest: rest_a,
+                    optional: optional_a,
                     ..
                 },
                 Type::Function {
@@ -1023,20 +1024,23 @@ impl<'a> Unifier<'a> {
                 },
             ) => {
                 if *rest_b && !rest_a {
-                    return self.unify_rest_function(param_ty, arg_ty, pa, pb, ra, rb);
-                }
-                // A callback may also declare more parameters than the slot
-                // passes, when the extra ones are optional.
-                let fits = Type::function_arity_fits(pb.len(), pa.len(), *rest_a || *rest_b)
-                    || (!*rest_a && !*rest_b && pb.len().saturating_sub(*optional_b) <= pa.len());
-                if !fits {
-                    return Err(UnifyError::Mismatch {
-                        expected: param_ty.clone(),
-                        got: arg_ty.clone(),
-                    });
-                }
-                for (p, a) in pa.iter().zip(pb.iter()) {
-                    self.unify_callback_parameter(p, a)?;
+                    self.unify_rest_parameters(param_ty, arg_ty, pa, *optional_a, pb, *optional_b)?;
+                } else {
+                    // A callback may also declare more parameters than the slot
+                    // passes, when the extra ones are optional.
+                    let fits = Type::function_arity_fits(pb.len(), pa.len(), *rest_a || *rest_b)
+                        || (!*rest_a
+                            && !*rest_b
+                            && pb.len().saturating_sub(*optional_b) <= pa.len());
+                    if !fits {
+                        return Err(UnifyError::Mismatch {
+                            expected: param_ty.clone(),
+                            got: arg_ty.clone(),
+                        });
+                    }
+                    for (p, a) in pa.iter().zip(pb.iter()) {
+                        self.unify_callback_parameter(p, a)?;
+                    }
                 }
                 self.in_function_result(|u| u.unify(ra, rb))
             }
@@ -1591,36 +1595,42 @@ impl<'a> Unifier<'a> {
             && assignable(arg, bound, types)
     }
 
-    /// Unify a fixed-arity function type, `param_ty`, with an argument that
-    /// has a rest parameter: each fixed position against the argument's
-    /// parameter there, and each position past them against the rest
-    /// parameter's element type (see [`rest_function_accepts`]).
+    /// Unify the parameter lists of a fixed-arity function type, `param_ty`,
+    /// with an argument that has a rest parameter: each fixed position against
+    /// the argument's parameter there, and each position past them against the
+    /// rest parameter's element type (see [`rest_function_accepts`]).
     #[allow(clippy::result_large_err)]
-    fn unify_rest_function(
+    fn unify_rest_parameters(
         &mut self,
         param_ty: &Type,
         arg_ty: &Type,
         params: &[Type],
+        params_optional: usize,
         arg_params: &[Type],
-        ret: &Type,
-        arg_ret: &Type,
+        arg_optional: usize,
     ) -> Result<(), UnifyError> {
         let mut result = Ok(());
-        let fits = rest_function_accepts(arg_params, params, |passed, declared| {
-            let unified = self.in_function_parameter(|u| u.unify(passed, declared));
-            let ok = unified.is_ok();
-            if result.is_ok() {
-                result = unified;
-            }
-            ok
-        });
+        let fits = rest_function_accepts(
+            arg_params,
+            arg_optional,
+            params,
+            params_optional,
+            |passed, declared| {
+                let unified = self.in_function_parameter(|u| u.unify(passed, declared));
+                let ok = unified.is_ok();
+                if result.is_ok() {
+                    result = unified;
+                }
+                ok
+            },
+        );
         if !fits {
             return Err(result.err().unwrap_or(UnifyError::Mismatch {
                 expected: param_ty.clone(),
                 got: arg_ty.clone(),
             }));
         }
-        self.in_function_result(|u| u.unify(ret, arg_ret))
+        Ok(())
     }
 
     /// Whether `arg` is a literal type of the primitive `param`, which binds

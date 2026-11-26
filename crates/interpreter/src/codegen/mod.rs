@@ -327,6 +327,7 @@ fn declared_wrapper_abi(
     {
         return Ok(symbol_table::MethodSlotAbi {
             types: false,
+            has_rest: sig.params.last().is_some_and(|p| p.rest),
             params: imported
                 .params
                 .iter()
@@ -342,6 +343,7 @@ fn declared_wrapper_abi(
     }
     Ok(symbol_table::MethodSlotAbi {
         types: false,
+        has_rest: sig.params.last().is_some_and(|p| p.rest),
         params: sig
             .params
             .iter()
@@ -1031,7 +1033,7 @@ fn codegen_inner(
 
     // Env structs must come after box_types::emit.
     closures::emit_env_types(
-        generic_binding::needed(ta, &symbols)?,
+        generic_binding::binds_type_arguments(ta, dependencies)?,
         &closure_metas,
         &mut types,
         &mut symbols,
@@ -1061,7 +1063,13 @@ fn codegen_inner(
     // Class rec group last among types so class field slots can resolve string /
     // array / closure / box field types via `value_type`.
     let mut class_plan = classes::ClassPlan::collect(ta, &imported_class_layouts)?;
-    class_plan.reserve_and_emit_types(&mut types, &mut next_type_idx, &mut symbols, intrinsics)?;
+    class_plan.reserve_and_emit_types(
+        &imported_class_layouts,
+        &mut types,
+        &mut next_type_idx,
+        &mut symbols,
+        intrinsics,
+    )?;
     for value in &dependency_values {
         let defs = value.package;
         // Virtual-package functions (`@mcp/<server>`, `@tools`) aren't per-function

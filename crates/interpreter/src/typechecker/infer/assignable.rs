@@ -784,7 +784,9 @@ impl<'a> TypeResolver<'a> {
 /// arguments packed.
 pub(crate) fn rest_function_accepts(
     actual: &[Type],
+    actual_optional: usize,
     expected: &[Type],
+    expected_optional: usize,
     mut accepts: impl FnMut(&Type, &Type) -> bool,
 ) -> bool {
     let Some((rest, fixed)) = actual.split_last() else {
@@ -793,9 +795,11 @@ pub(crate) fn rest_function_accepts(
     let Type::Array(element) = rest.peel() else {
         return false;
     };
-    let Some(past_fixed) = expected.get(fixed.len()..) else {
+    let required_fixed = fixed.len().saturating_sub(actual_optional);
+    if expected.len().saturating_sub(expected_optional) < required_fixed {
         return false;
-    };
+    }
+    let past_fixed = expected.get(fixed.len()..).unwrap_or_default();
     actual.len() != expected.len()
         && fixed
             .iter()
@@ -1537,7 +1541,9 @@ pub(super) fn assignable_rec(
                 (None, None) => true,
             };
             let params_ok = if *rest_a && !rest_e {
-                rest_function_accepts(pa, pe, |e, a| assignable_rec(e, a, types, seen))
+                rest_function_accepts(pa, *optional_a, pe, *optional_e, |e, a| {
+                    assignable_rec(e, a, types, seen)
+                })
             } else {
                 // Trailing optional parameters may go unpassed by the caller.
                 let required = if *rest_a {

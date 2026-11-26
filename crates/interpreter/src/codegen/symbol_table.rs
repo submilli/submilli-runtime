@@ -87,6 +87,9 @@ pub struct SymbolTable {
     /// Wasm fn index of a class method's closure-ABI adapter, for the per-instance
     /// method closures placed in the object-fields payload (interface-typed dispatch).
     class_method_adapter_func_idx: BTreeMap<(MangledName, String), u32>,
+    /// Wasm fn index of an adapting thunk placed in an inherited vtable slot
+    /// whose calling convention differs from the overriding method's own.
+    class_vtable_thunk_func_idx: BTreeMap<VtableThunkKey, u32>,
     /// Vtable slot index (4 + declaration position) of a class method, for static
     /// `call_ref` dispatch; keyed for every class in the method's inheritance chain.
     class_method_slot: BTreeMap<(MangledName, String), u32>,
@@ -172,23 +175,48 @@ pub struct TopLevelFn {
 /// slot, or a Direct/Static-dispatch interface wrapper — captured where the
 /// signature is built rather than re-derived at each call site.
 ///
-/// A class slot's signature belongs to the ancestor that introduced it, and
-/// erases class types and type variables (see
-/// [`slot_value_type`](SymbolTable::slot_value_type)), so it can differ from
-/// what an overriding method declares; an interface wrapper's signature erases
+/// Each class method slot carries the erased parameter convention of the
+/// declaration introducing that physical slot (originating declaration or a
+/// convention-changing override) while preserving the originating slot's
+/// return representation (`ret`) and monotonic `$types` flag (`types`); see
+/// [`slot_value_type`](SymbolTable::slot_value_type). Interface wrappers erase
 /// the interface's type parameters the same way. Call sites coerce arguments
 /// into [`params`](Self::params) and cast [`ret`](Self::ret) back to the
-/// call-site type; an overriding body binds `params` and returns `ret`
-/// whatever its own annotations say.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// call-site type; a method body binds `params` and returns `ret` whatever its
+/// own annotations say.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MethodSlotAbi {
     /// User parameters; the leading `self` is excluded.
     pub params: Vec<ValType>,
+    /// Whether the last entry of `params` is a packed rest `$Array`.
+    pub has_rest: bool,
     /// `None` for a void slot.
     pub ret: Option<ValType>,
     /// Whether the slot takes a trailing `$types` environment after its
-    /// parameters: a class method slot first declared by a generic method,
-    /// whose overrides all share it.
+    /// parameters: a class method slot declared or overridden by a generic
+    /// method, whose descendants all keep it.
+    pub types: bool,
+}
+
+impl MethodSlotAbi {
+    /// Whether two declarations of the same class method share a vtable
+    /// calling convention (parameter count, rest packing, and `$types`).
+    pub(crate) fn same_convention(&self, other: &Self) -> bool {
+        self.params.len() == other.params.len()
+            && self.has_rest == other.has_rest
+            && self.types == other.types
+    }
+}
+
+/// Identifies a vtable-slot adapting thunk so local subclasses inheriting an
+/// override reuse one emitted function per `(owner, method, accessor, slot convention)`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct VtableThunkKey {
+    pub owner: MangledName,
+    pub method: String,
+    pub accessor: Option<crate::AccessorKind>,
+    pub arity: usize,
+    pub has_rest: bool,
     pub types: bool,
 }
 
@@ -396,6 +424,10 @@ impl SymbolTable {
         self.class_method_adapter_func_idx
             .get(&(class.clone(), method.to_string()))
             .copied()
+    }
+
+    pub(crate) fn class_vtable_thunk_func_idx(&self, key: &VtableThunkKey) -> Option<u32> {
+        self.class_vtable_thunk_func_idx.get(key).copied()
     }
 
     pub fn class_method_slot(&self, class: &MangledName, method: &str) -> Option<u32> {
@@ -658,6 +690,10 @@ impl SymbolTable {
             .insert((class, method), idx);
     }
 
+    pub(crate) fn record_class_vtable_thunk_func(&mut self, key: VtableThunkKey, idx: u32) {
+        self.class_vtable_thunk_func_idx.insert(key, idx);
+    }
+
     pub fn record_class_method_slot(&mut self, class: MangledName, method: String, slot: u32) {
         self.class_method_slot.insert((class, method), slot);
     }
@@ -695,11 +731,6 @@ impl SymbolTable {
 
     pub fn record_class_method_sig(&mut self, class: MangledName, method: String, sig: u32) {
         self.class_method_sig.insert((class, method), sig);
-    }
-
-    /// Whether any class method slot recorded so far takes type arguments.
-    pub fn has_generic_class_slot(&self) -> bool {
-        self.class_method_abi.values().any(|abi| abi.types)
     }
 
     pub fn record_class_method_abi(
