@@ -997,8 +997,16 @@ fn emit_symbol_call(
         )?;
         // A declaration may type the result by a bare reference to one of its
         // aliases, which returns in the reference's slot, where the call's own
-        // type is the alias body.
+        // type is the alias body. An overloaded function may also return a
+        // wider Wasm slot than the selected overload's return type.
         cast::emit_alias_reference_to(emitter, ctx, &target.ret, result_ty)?;
+        if !result_ty.is_void()
+            && !target.ret.is_void()
+            && cast::alias_reference_body(ctx, &target.ret)?.is_none()
+            && ctx.symbols.value_type(&target.ret)? != ctx.symbols.value_type(result_ty)?
+        {
+            cast::emit_coerce_to_slot(emitter, ctx, &target.ret, result_ty)?;
+        }
     }
     if result_ty.is_void() {
         cast::emit_box(emitter, ctx, &target.ret)?;

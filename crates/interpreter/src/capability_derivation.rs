@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use crate::stdlib::capabilities::{self, FieldNormalization};
 use crate::{
     BinOp, Diagnostic, DocCapability, DocCapabilityBindingKind, DocCapabilityLiteral, ExprId,
-    GlobalKind, MangledName, Param, Severity, Span, TypedAst, TypedExprKind, TypedStmtKind,
+    GlobalKind, MangledName, Param, Severity, Span, TypedArrayElement, TypedAst, TypedExprKind,
+    TypedObjectFieldSource, TypedObjectMember, TypedStmtKind,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,7 +75,26 @@ fn derive_filters(
                     warnings,
                 ));
             }
-            DocCapabilityBindingKind::Type { .. } => {}
+            DocCapabilityBindingKind::Type { .. } => {
+                if tag.capability == crate::stdlib::human::CAPABILITY
+                    && binding.field == "count"
+                    && let Some(&actual) = actual_args.first()
+                {
+                    let actual_span = caller_ast
+                        .try_expr(actual)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .span;
+                    if let Some(value) = human_ask_static_value(caller_ast, actual, "count")? {
+                        filters.extend(binding_filter(
+                            tag,
+                            &binding.field,
+                            value,
+                            Some(actual_span),
+                            warnings,
+                        ));
+                    }
+                }
+            }
             DocCapabilityBindingKind::Parameter { param, path, span } => {
                 let Some(param_index) = callee_params.iter().position(|p| p.name == *param) else {
                     warnings.push(warning(
@@ -94,6 +114,24 @@ fn derive_filters(
                     .try_expr(*actual)
                     .map_err(crate::typechecker::arena_failure)?
                     .span;
+                if tag.capability == crate::stdlib::human::CAPABILITY
+                    && param == "question"
+                    && matches!(
+                        path.as_slice(),
+                        [field] if matches!(field.as_str(), "answer" | "sensitive")
+                    )
+                {
+                    if let Some(value) = human_ask_static_value(caller_ast, *actual, &path[0])? {
+                        filters.extend(binding_filter(
+                            tag,
+                            &binding.field,
+                            value,
+                            Some(actual_span),
+                            warnings,
+                        ));
+                    }
+                    continue;
+                }
                 match literal_from_expr_path(caller_ast, *actual, path)? {
                     Some(value) => filters.extend(binding_filter(
                         tag,
@@ -235,6 +273,110 @@ fn unresolved_http_url_warning(span: Span, capability: &str) -> Diagnostic {
         ],
         notes: vec![],
     }
+}
+
+/// Static `human.ask` fields for either a single question object literal or a
+/// question array/tuple literal, matching the runtime context rules.
+fn human_ask_static_value(
+    ast: &TypedAst,
+    expr_id: ExprId,
+    field: &str,
+) -> Result<Option<StaticValue>, crate::compiler_error::CompilerFailure> {
+    match &ast
+        .try_expr(expr_id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    {
+        TypedExprKind::ObjectLiteral { .. } => match field {
+            "count" => Ok(Some(StaticValue::Number("1".to_string()))),
+            "answer" => literal_from_expr_path(ast, expr_id, &[field.to_string()]),
+            "sensitive" => Ok(question_literal_sensitive(ast, expr_id)?.map(StaticValue::Boolean)),
+            _ => Ok(None),
+        },
+        TypedExprKind::ArrayLiteral { elements, .. } => {
+            let mut static_elements = Vec::with_capacity(elements.len());
+            let mut has_spread = false;
+            for element in elements {
+                match element {
+                    TypedArrayElement::Value(id) => static_elements.push(*id),
+                    TypedArrayElement::Spread(_) => has_spread = true,
+                }
+            }
+            human_ask_sequence_value(ast, &static_elements, has_spread, field)
+        }
+        TypedExprKind::TupleLiteral { elements, .. } => {
+            human_ask_sequence_value(ast, elements, false, field)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn human_ask_sequence_value(
+    ast: &TypedAst,
+    elements: &[ExprId],
+    has_spread: bool,
+    field: &str,
+) -> Result<Option<StaticValue>, crate::compiler_error::CompilerFailure> {
+    if !has_spread && elements.is_empty() {
+        return Ok(None);
+    }
+    match field {
+        "count" if !has_spread => Ok(Some(StaticValue::Number(elements.len().to_string()))),
+        "answer" if !has_spread => {
+            if elements.len() == 1 {
+                literal_from_expr_path(ast, elements[0], &["answer".to_string()])
+            } else {
+                Ok(Some(StaticValue::String("form".to_string())))
+            }
+        }
+        "sensitive" => {
+            if !has_spread && elements.len() == 1 {
+                return Ok(question_literal_sensitive(ast, elements[0])?.map(StaticValue::Boolean));
+            }
+            let mut all_known_non_sensitive = !has_spread;
+            for &element in elements {
+                match question_literal_sensitive(ast, element)? {
+                    Some(true) => return Ok(Some(StaticValue::Boolean(true))),
+                    Some(false) => {}
+                    None => all_known_non_sensitive = false,
+                }
+            }
+            Ok(all_known_non_sensitive.then_some(StaticValue::Boolean(false)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Whether `expr_id` is a spread-free question object literal whose `sensitive`
+/// flag is statically known (`Some(true)` / `Some(false)`), or `None` if dynamic.
+fn question_literal_sensitive(
+    ast: &TypedAst,
+    expr_id: ExprId,
+) -> Result<Option<bool>, crate::compiler_error::CompilerFailure> {
+    let TypedExprKind::ObjectLiteral { members, fields } = &ast
+        .try_expr(expr_id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    else {
+        return Ok(None);
+    };
+    let has_spread = members
+        .iter()
+        .any(|member| !matches!(member, TypedObjectMember::Value(_)));
+    if let Some(field) = fields.iter().find(|field| field.name.name == "sensitive") {
+        return Ok(match field.source {
+            TypedObjectFieldSource::Absent(_) if !has_spread => Some(false),
+            TypedObjectFieldSource::Literal(value_expr) => {
+                match literal_from_expr(ast, value_expr)? {
+                    Some(StaticValue::Boolean(true)) => Some(true),
+                    Some(StaticValue::Boolean(false)) if !has_spread => Some(false),
+                    _ => None,
+                }
+            }
+            _ => None,
+        });
+    }
+    Ok((!has_spread).then_some(false))
 }
 
 fn literal_from_expr_path(

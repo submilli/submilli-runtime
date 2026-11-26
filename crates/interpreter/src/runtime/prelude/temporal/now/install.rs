@@ -226,6 +226,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         mangled_name: shared::prelude_key("Now", name),
         declaration_span: Span::at(crate::FileId::TEMPORAL),
         kind: ValueKind::Function {
+            overloads: Vec::new(),
             generics: Default::default(),
             params: Vec::new(),
             ret,
@@ -253,6 +254,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
                     mangled_name: shared::prelude_key("Now", "zonedDateTimeISO"),
                     declaration_span: Span::at(crate::FileId::TEMPORAL),
                     kind: ValueKind::Function {
+                        overloads: Vec::new(),
                         generics: Default::default(),
                         params: vec![Param::with_default(
                             "timeZone",

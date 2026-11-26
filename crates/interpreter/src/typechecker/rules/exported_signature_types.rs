@@ -83,22 +83,19 @@ fn run_symbols<'a>(
     for value in values {
         let mut used = BTreeMap::new();
         let (noun, usage) = match &value.kind {
-            ValueKind::Function {
-                params,
-                ret,
-                type_predicate,
-                ..
-            } => {
-                for param in params {
-                    collect_signature_named_types(package_name, &param.ty, &mut used);
-                }
-                collect_signature_named_types(package_name, ret, &mut used);
-                if let Some(predicate) = type_predicate {
-                    collect_signature_named_types(
-                        package_name,
-                        &predicate.asserted_type,
-                        &mut used,
-                    );
+            ValueKind::Function { .. } => {
+                for sig in value.kind.function_signatures().unwrap_or_default() {
+                    for param in &sig.params {
+                        collect_signature_named_types(package_name, &param.ty, &mut used);
+                    }
+                    collect_signature_named_types(package_name, &sig.ret, &mut used);
+                    if let Some(predicate) = &sig.predicate {
+                        collect_signature_named_types(
+                            package_name,
+                            &predicate.asserted_type,
+                            &mut used,
+                        );
+                    }
                 }
                 ("function", "signature")
             }

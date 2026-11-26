@@ -51,8 +51,8 @@ pub use approvals::{
     Approver, AskRule, Unasked,
 };
 pub use asks::{
-    AnswerSpec, AnswerValue, AskError, AskProvider, Choice, QUESTION_OPERATION, QuestionOutcome,
-    QuestionRequest, QuestionSpec,
+    AnswerSpec, AnswerValue, AskError, AskProvider, Choice, MAX_QUESTIONS, QUESTION_OPERATION,
+    QuestionOutcome, QuestionRequest, QuestionSpec,
 };
 pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{

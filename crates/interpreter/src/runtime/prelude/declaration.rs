@@ -346,6 +346,7 @@ fn declare_checker_builtins(defs: &mut PackageDeclaration) {
             mangled_name: crate::mangle::prelude("assert"),
             declaration_span: Span::at(FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![
                     Param::new("condition", Type::Boolean),

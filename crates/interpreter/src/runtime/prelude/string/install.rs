@@ -1386,6 +1386,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_concat"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::String)],
                 ret: Type::String,
@@ -1401,6 +1402,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_eq"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::String)],
                 ret: Type::Boolean,
@@ -1416,6 +1418,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_length"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::anon(Type::String)],
                 ret: Type::Number,
@@ -1431,6 +1434,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_index"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::Number)],
                 ret: Type::String,
@@ -1448,6 +1452,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_cmp"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::String)],
                 ret: Type::Boolean,

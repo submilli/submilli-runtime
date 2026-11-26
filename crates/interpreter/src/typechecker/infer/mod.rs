@@ -1480,6 +1480,7 @@ impl<'a> Inferer<'a> {
                 mangled_name: function.mangled_name.clone(),
                 declaration_span: function.name.span,
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: function.generics.clone(),
                     params: function
                         .params

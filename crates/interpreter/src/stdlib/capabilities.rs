@@ -532,7 +532,7 @@ const VARIABLES: &[Capability] = &[Capability {
 const HUMAN: &[Capability] = &[Capability {
     name: "human.ask",
     main_denial: None,
-    summary: "Ask a person a question and wait for the answer (a sensitive question is refused to main, including a Function, whatever the policy says)",
+    summary: "Ask a person one or more questions and wait for the answers (any sensitive question is refused to main, including a Function, whatever the policy says)",
     filter_fields: &[
         field(
             "to",
@@ -542,9 +542,18 @@ const HUMAN: &[Capability] = &[Capability {
         field(
             "answer",
             "string",
-            "How it is answered: \"text\" or \"choice\"",
+            "How it is answered: \"text\", \"choice\", or \"form\" (2+ questions)",
         ),
-        field("sensitive", "boolean", "Whether the answer is a credential"),
+        field(
+            "sensitive",
+            "boolean",
+            "Whether any answer in the call is a credential",
+        ),
+        field(
+            "count",
+            "number",
+            "Number of questions in this call (1 to 10)",
+        ),
     ],
     example_filter: "to == \"human\"",
 }];

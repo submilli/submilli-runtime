@@ -845,6 +845,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("isNaN"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("value", Type::Number)],
                 ret: Type::Boolean,
@@ -860,6 +861,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("isFinite"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("value", Type::Number)],
                 ret: Type::Boolean,

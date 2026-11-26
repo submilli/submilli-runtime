@@ -1151,6 +1151,7 @@ pub(super) fn json_module_definitions() -> PackageDeclaration {
             mangled_name: crate::mangle::host(JSON_MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::JSON),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![
                     Param::new("value", Type::Unknown),
@@ -1204,6 +1205,7 @@ fn insert_json_host_fn(defs: &mut PackageDeclaration, name: &str, params: Vec<Pa
             mangled_name: crate::mangle::host(JSON_MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::JSON),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params,
                 ret: Type::Error,

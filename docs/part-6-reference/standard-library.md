@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7a27c2ac5f3d5cc7e91f1f2d7b24c22f3ab36b46fad6290064d0b0fbbb7eed53"
+  contentHash: "f07b153e050b8b1c6dc76086a3111bd042770c2b9a119a6d2465608b6a98736e"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -25,7 +25,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:llm` | Model calls: `text`, `texts`, `call`, `batch`, `models` | `llm.call`; `fs.read` for files |
 | `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
-| `submilli:human` | `ask`: put a question to a person and wait for a text or choice answer | `human.ask` |
+| `submilli:human` | `ask`: put one or more questions to a person and wait for text or choice answers | `human.ask` |
 | `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull | `git.open`, `git.read`, `git.write`, `git.init`, `git.clone`, `git.fetch`, `git.commit` |
 | `submilli:code` | Numbered reads, search, glob, tree, anchored edits, and diffs over the program's files | `fs.read`, `fs.list`, `fs.stat`, `fs.write` |
 | `submilli:crypto` | SHA-256, SHA-512, HMAC-SHA-256, random bytes | Nothing |
@@ -625,19 +625,38 @@ Result of an HTTP call — status, headers, body, and the final URL after any re
 
 ## `submilli:human`
 
-Ask a person a question, answered with text or a choice, and wait durably for the answer.
+Ask a person one or more questions, answered with text or choices, and wait durably for the answers.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `ask(question: Question, options?: AskOptions): Answer` | `human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive }` | Ask a person `question` and wait for the answer: text, or what they picked from `choices`. |
+| `ask(question: Question, options?: AskOptions): Answer` | `human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive, count: number }` | Ask a person one `question` or an array of 1 to 10 `questions` and wait for the answers: text, or what they picked from `choices`. |
+| `ask(questions: Question[], options?: AskOptions): Answers` | `human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive, count: number }` | Ask a person one `question` or an array of 1 to 10 `questions` and wait for the answers: text, or what they picked from `choices`. |
 
 ### `Answer`
 
-What `ask` returns: a `TextAnswer` or a `ChoiceAnswer`, told apart by `answer`.
+What single-question `ask` returns: a `TextAnswer` or a `ChoiceAnswer`, told apart by `answer`.
 
 ```typescript
 type Answer = ChoiceAnswer | TextAnswer;
 ```
+
+### `AnswerValue`
+
+One answer in `Answers.answers`: a `TextAnswerValue` or a `ChoiceAnswerValue`, told apart by `answer`.
+
+```typescript
+type AnswerValue = ChoiceAnswerValue | TextAnswerValue;
+```
+
+### `Answers`
+
+What multi-question `ask` returns: `answers` in question order, plus who answered and when.
+
+| Member | Description |
+| --- | --- |
+| `readonly answeredAt: string` | When they answered: an ISO 8601 instant in UTC. |
+| `readonly answeredBy: string` | Who answered, as the host names them, such as `"user:dana"`. |
+| `readonly answers: AnswerValue[]` | One answer per question, in the same order as `questions`. |
 
 ### `AskOptions`
 
@@ -670,6 +689,16 @@ The answer to a `ChoiceQuestion`.
 | `readonly other?: string` | The person's own answer, when the question allowed `other` and they wrote one, beside or instead of a pick. |
 | `readonly selected: string[]` | The `value` of each choice picked, at most one unless the question allowed `multiple`, and none only when the person wrote `other` instead. |
 
+### `ChoiceAnswerValue`
+
+The answer value for one `ChoiceQuestion` in a multi-question `ask`.
+
+| Member | Description |
+| --- | --- |
+| `readonly answer: "choice"` | Answered by picking. |
+| `readonly other?: string` | The person's own answer, when the question allowed `other` and they wrote one, beside or instead of a pick. |
+| `readonly selected: string[]` | The `value` of each choice picked, at most one unless the question allowed `multiple`, and none only when the person wrote `other` instead. |
+
 ### `ChoiceQuestion`
 
 A question answered by picking from choices.
@@ -699,6 +728,15 @@ The answer to a `TextQuestion`.
 | `readonly answer: "text"` | Answered with text. |
 | `readonly answeredAt: string` | When they answered: an ISO 8601 instant in UTC. |
 | `readonly answeredBy: string` | Who answered, as the host names them, such as `"user:dana"`. |
+| `readonly text: string` | What the person wrote. |
+
+### `TextAnswerValue`
+
+The answer value for one `TextQuestion` in a multi-question `ask`.
+
+| Member | Description |
+| --- | --- |
+| `readonly answer: "text"` | Answered with text. |
 | `readonly text: string` | What the person wrote. |
 
 ### `TextQuestion`

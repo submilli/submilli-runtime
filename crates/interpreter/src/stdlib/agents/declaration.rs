@@ -184,6 +184,7 @@ fn insert_fn(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::AGENTS),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(generics),
                 params,
                 ret,

@@ -587,6 +587,7 @@ fn insert_generic_fn(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::LLM),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(generics),
                 params,
                 ret,

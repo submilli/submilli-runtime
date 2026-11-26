@@ -22,6 +22,8 @@ use super::durable::EffectId;
 
 /// The effect every question from `submilli:human`'s `ask` is recorded under.
 pub const QUESTION_OPERATION: &str = "human.ask";
+/// The most questions a single `ask` call may put to a person at once.
+pub const MAX_QUESTIONS: usize = 10;
 
 /// One option of a choice question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,15 +161,121 @@ impl QuestionSpec {
     }
 }
 
-/// One question waiting for a person's answer. `timeout` is the program's own bound;
-/// the embedder caps it by its approval timeout, which applies when it is absent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One or more questions waiting for a person's answers. `timeout` is the program's
+/// own bound; the embedder caps it by its approval timeout, which applies when it is
+/// absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuestionRequest {
     pub approver: Approver,
     pub caller: String,
-    pub question: QuestionSpec,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `1..=MAX_QUESTIONS` in the order the program asked them. Serializes as the
+    /// legacy single `question` field when `len() == 1` so in-flight single-question
+    /// runs keep their exact durable replay fingerprint across upgrades, and as
+    /// `questions` otherwise. Deserialization accepts either form.
+    pub questions: Vec<QuestionSpec>,
     pub timeout: Option<std::time::Duration>,
+}
+
+impl QuestionRequest {
+    /// Whether any question in this request asks for a sensitive credential.
+    pub fn any_sensitive(&self) -> bool {
+        self.questions.iter().any(QuestionSpec::is_sensitive)
+    }
+
+    /// Whether `values` answers every question in this request, in order. The problem,
+    /// in words, when not; it never quotes answer text.
+    pub fn check_answers(&self, values: &[AnswerValue]) -> Result<(), String> {
+        if values.len() != self.questions.len() {
+            return Err(format!(
+                "expected {} answer(s), got {}",
+                self.questions.len(),
+                values.len()
+            ));
+        }
+        for (index, (question, value)) in self.questions.iter().zip(values).enumerate() {
+            question.check_answer(value).map_err(|problem| {
+                if self.questions.len() == 1 {
+                    problem
+                } else {
+                    format!("question {}: {problem}", index.saturating_add(1))
+                }
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for QuestionRequest {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename = "QuestionRequest")]
+        struct SingleQuestionRequest<'a> {
+            approver: Approver,
+            caller: &'a str,
+            question: &'a QuestionSpec,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            timeout: Option<std::time::Duration>,
+        }
+        #[derive(Serialize)]
+        #[serde(rename = "QuestionRequest")]
+        struct MultiQuestionRequest<'a> {
+            approver: Approver,
+            caller: &'a str,
+            questions: &'a [QuestionSpec],
+            #[serde(skip_serializing_if = "Option::is_none")]
+            timeout: Option<std::time::Duration>,
+        }
+        if let [question] = self.questions.as_slice() {
+            SingleQuestionRequest {
+                approver: self.approver,
+                caller: &self.caller,
+                question,
+                timeout: self.timeout,
+            }
+            .serialize(serializer)
+        } else {
+            MultiQuestionRequest {
+                approver: self.approver,
+                caller: &self.caller,
+                questions: &self.questions,
+                timeout: self.timeout,
+            }
+            .serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for QuestionRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct RawQuestionRequest {
+            approver: Approver,
+            caller: String,
+            #[serde(default)]
+            questions: Option<Vec<QuestionSpec>>,
+            #[serde(default)]
+            question: Option<QuestionSpec>,
+            #[serde(default)]
+            timeout: Option<std::time::Duration>,
+        }
+        let raw = RawQuestionRequest::deserialize(deserializer)?;
+        let questions = match (raw.questions, raw.question) {
+            (Some(questions), None) => questions,
+            (None, Some(question)) => vec![question],
+            (Some(_), Some(_)) => {
+                return Err(serde::de::Error::custom(
+                    "expected either `questions` or `question`, not both",
+                ));
+            }
+            (None, None) => return Err(serde::de::Error::missing_field("questions")),
+        };
+        Ok(Self {
+            approver: raw.approver,
+            caller: raw.caller,
+            questions,
+            timeout: raw.timeout,
+        })
+    }
 }
 
 /// What the person gave, in the form the question asked for.
@@ -190,12 +298,79 @@ pub fn fits_length(text: &str, max: u32) -> bool {
     u32::try_from(text.encode_utf16().count()).is_ok_and(|length| length <= max)
 }
 
-/// An answer, with who gave it and when. The embedder names the person.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One or more answers, with who gave them and when. The embedder names the person.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnswerSpec {
-    pub value: AnswerValue,
+    /// Same length and order as [`QuestionRequest::questions`]. Serializes as the
+    /// legacy single `value` field when `len() == 1` and as `values` otherwise;
+    /// deserialization accepts either form.
+    pub values: Vec<AnswerValue>,
     pub answered_by: String,
     pub answered_at_unix_ms: u64,
+}
+
+impl Serialize for AnswerSpec {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename = "AnswerSpec")]
+        struct SingleAnswerSpec<'a> {
+            value: &'a AnswerValue,
+            answered_by: &'a str,
+            answered_at_unix_ms: u64,
+        }
+        #[derive(Serialize)]
+        #[serde(rename = "AnswerSpec")]
+        struct MultiAnswerSpec<'a> {
+            values: &'a [AnswerValue],
+            answered_by: &'a str,
+            answered_at_unix_ms: u64,
+        }
+        if let [value] = self.values.as_slice() {
+            SingleAnswerSpec {
+                value,
+                answered_by: &self.answered_by,
+                answered_at_unix_ms: self.answered_at_unix_ms,
+            }
+            .serialize(serializer)
+        } else {
+            MultiAnswerSpec {
+                values: &self.values,
+                answered_by: &self.answered_by,
+                answered_at_unix_ms: self.answered_at_unix_ms,
+            }
+            .serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AnswerSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct RawAnswerSpec {
+            #[serde(default)]
+            values: Option<Vec<AnswerValue>>,
+            #[serde(default)]
+            value: Option<AnswerValue>,
+            answered_by: String,
+            answered_at_unix_ms: u64,
+        }
+        let raw = RawAnswerSpec::deserialize(deserializer)?;
+        let values = match (raw.values, raw.value) {
+            (Some(values), None) => values,
+            (None, Some(value)) => vec![value],
+            (Some(_), Some(_)) => {
+                return Err(serde::de::Error::custom(
+                    "expected either `values` or `value`, not both",
+                ));
+            }
+            (None, None) => return Err(serde::de::Error::missing_field("values")),
+        };
+        Ok(Self {
+            values,
+            answered_by: raw.answered_by,
+            answered_at_unix_ms: raw.answered_at_unix_ms,
+        })
+    }
 }
 
 /// What became of a question. Every variant but `Answered` throws a catchable

@@ -1038,23 +1038,31 @@ impl<'a> Inferer<'a> {
         };
         Some(match &symbol.kind {
             crate::ValueKind::Let { ty, .. } | crate::ValueKind::Const { ty, .. } => ty.clone(),
-            crate::ValueKind::Function {
-                generics,
-                params,
-                ret,
-                type_predicate,
-                ..
-            } => Type::Function {
-                generics: generics.clone(),
-                params: params
-                    .iter()
-                    .map(super::expr::callable_parameter_type)
-                    .collect(),
-                ret: Box::new(ret.clone()),
-                predicate: type_predicate.clone().map(Box::new),
-                has_rest: params.last().is_some_and(|p| p.rest),
-                optional: crate::package_declaration::optional_parameter_count(params),
-            },
+            crate::ValueKind::Function { .. } => {
+                let signatures = symbol
+                    .kind
+                    .function_signatures()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|sig| Type::Function {
+                        generics: sig.generics,
+                        params: sig
+                            .params
+                            .iter()
+                            .map(super::expr::callable_parameter_type)
+                            .collect(),
+                        ret: Box::new(sig.ret),
+                        predicate: sig.predicate.map(Box::new),
+                        has_rest: sig.params.last().is_some_and(|p| p.rest),
+                        optional: crate::package_declaration::optional_parameter_count(&sig.params),
+                    })
+                    .collect::<Vec<_>>();
+                if signatures.len() == 1 {
+                    signatures.into_iter().next().unwrap()
+                } else {
+                    Type::intersection(signatures)
+                }
+            }
         })
     }
 
@@ -1338,6 +1346,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("test:ns", "searchJson"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![Param::new("query", Type::String)],
                     ret: Type::Array(Box::new(Type::interface_ref(

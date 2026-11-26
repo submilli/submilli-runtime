@@ -798,6 +798,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/util", "greet"),
                 declaration_span: Span::new(file, 0, 12).unwrap(),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: interpreter::GenericParameters::unconstrained(vec!["T".to_string()]),
                     params: vec![
                         Param::with_default(

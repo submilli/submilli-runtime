@@ -1320,6 +1320,25 @@ impl Inferer<'_> {
             if let Some(read) = self.narrowed_read(global_path) {
                 return Ok(read);
             }
+            if let ValueKind::Function { overloads, .. } = &entry.kind
+                && !overloads.is_empty()
+            {
+                self.error(
+                    span,
+                    format!(
+                        "cannot bind overloaded function `{}` to a value; \
+                         call it directly instead",
+                        ident.name,
+                    ),
+                );
+                return Ok((
+                    TypedExprKind::FunctionRef {
+                        mangled,
+                        name: ident.clone(),
+                    },
+                    Type::Error,
+                ));
+            }
             // A generic function read as a value has a generic function
             // type. A checked host call is the exception: its type gate runs
             // at the call, which a value would skip.
@@ -3215,6 +3234,29 @@ impl Inferer<'_> {
             // legacy field-access-then-call path below handles it.
         }
 
+        if let ExprKind::Identifier(ident) = &callee_kind
+            && let Some(entry) = self.lookup_top_function(&ident.name)
+            && let ValueKind::Function { overloads, .. } = &entry.kind
+            && !overloads.is_empty()
+            && let Some(candidates) = entry.kind.function_signatures()
+        {
+            let target = StaticCallTarget {
+                package: &entry.package_name.clone(),
+                symbol: &entry.symbol_name.clone(),
+                mangled: entry.mangled_name.clone(),
+            };
+            return self.infer_overloaded_function_call(
+                &ident.name,
+                ident.span,
+                target,
+                candidates,
+                type_args,
+                args,
+                expected,
+                span,
+            );
+        }
+
         // Generic dispatch — when the callee is a bare identifier
         // resolving to a generic top-level function, route to the
         // explicit-args + bidirectional + arg-walk pipeline.
@@ -4777,6 +4819,7 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let ValueKind::Function {
+            overloads,
             generics,
             params,
             ret,
@@ -4798,6 +4841,25 @@ impl Inferer<'_> {
             ));
         };
         let display = format!("{}.{}", recv_ident.name, member.name);
+        if !overloads.is_empty()
+            && let Some(candidates) = sym.kind.function_signatures()
+        {
+            let target = StaticCallTarget {
+                package: &package_name,
+                symbol: &member.name,
+                mangled: sym.mangled_name.clone(),
+            };
+            return self.infer_overloaded_function_call(
+                &display,
+                member.span,
+                target,
+                candidates,
+                type_args,
+                args,
+                expected,
+                span,
+            );
+        }
         // Generic functions take the same explicit-args + bidirectional +
         // arg-walk pipeline as bare-identifier generic calls, threaded with
         // the package-export mangled name.
@@ -19545,6 +19607,7 @@ function main(): void { if (result < 10) { } }
                 mangled_name: crate::mangle::package_symbol("test:ns", name),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: crate::GenericParameters::unconstrained(generics),
                     params,
                     ret,

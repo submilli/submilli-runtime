@@ -54,6 +54,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "escalate"),
             declaration_span: Span::at(crate::FileId::FUNCTIONS),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("reason", Type::String)],
                 ret: Type::Never,
