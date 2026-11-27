@@ -282,11 +282,11 @@ fn rewrite_operation(
                         )
                         .is_some())) =>
         {
-            rewrite_member_call(ast, id, receiver, &iface, &name.name, args)?;
+            rewrite_member_call(ast, id, receiver, &iface, &name.name, args, Vec::new())?;
         }
-        // A program's generic method on a wide receiver: read the method
-        // through the host, then call it as a closure that binds the call's
-        // type arguments.
+        // A program's generic method on a wide receiver without omitted/spread
+        // argument metadata: read the method through the host, then call it as
+        // a closure that binds the call's type arguments.
         TypedExprKind::GenericMethodCall {
             receiver,
             iface,
@@ -296,7 +296,14 @@ fn rewrite_operation(
             ..
         } if !type_args.is_empty()
             && !crate::codegen::is_host_package(iface.as_str())
-            && flow.expr_is_wide(receiver) =>
+            && flow.expr_is_wide(receiver)
+            && ast
+                .authored_call_arguments(
+                    ast.try_expr(id)
+                        .map_err(crate::codegen::arena_failure)?
+                        .span,
+                )
+                .is_none() =>
         {
             rewrite_generic_member_call(
                 ast,
@@ -309,9 +316,9 @@ fn rewrite_operation(
             )?;
         }
         // Any other generic method call on a wide receiver, or a program's
-        // call without type arguments that carries authored arguments, goes
-        // through the host's member call. (A narrow receiver's call with type
-        // arguments keeps static dispatch, which passes them.)
+        // call carrying authored arguments (omitted defaults/optionals or
+        // spreads), goes through the host's member call, rebinding `type_args`
+        // onto the resolved closure when present.
         TypedExprKind::GenericMethodCall {
             receiver,
             iface,
@@ -321,8 +328,7 @@ fn rewrite_operation(
             ..
         } if super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
-                || (type_args.is_empty()
-                    && !crate::codegen::is_host_package(iface.as_str())
+                || (!crate::codegen::is_host_package(iface.as_str())
                     && ast
                         .authored_call_arguments(
                             ast.try_expr(id)
@@ -338,6 +344,7 @@ fn rewrite_operation(
                 &iface,
                 &name.name,
                 args.into_iter().map(|arg| arg.expr).collect(),
+                type_args,
             )?;
         }
         TypedExprKind::InterfacePropertyAccess {
@@ -553,6 +560,7 @@ fn rewrite_member_call(
     iface: &crate::MangledName,
     name: &str,
     args: Vec<ExprId>,
+    type_args: Vec<Type>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let span = ast
         .try_expr(id)
@@ -567,13 +575,25 @@ fn rewrite_member_call(
         <[crate::TypedArrayElement]>::to_vec,
     );
     let lookup_args = member_arguments(ast, id, receiver, iface, name)?;
-    let member = ast
+    let mut member = ast
         .try_push_expr(crate::TypedExpr {
             kind: member_helper("member", lookup_args),
             ty: Type::Unknown,
             span,
         })
         .map_err(crate::codegen::arena_failure)?;
+    if !type_args.is_empty() {
+        member = ast
+            .try_push_expr(crate::TypedExpr {
+                kind: TypedExprKind::InstantiateFunction {
+                    value: member,
+                    type_args,
+                },
+                ty: Type::Unknown,
+                span,
+            })
+            .map_err(crate::codegen::arena_failure)?;
+    }
     let args = ast
         .try_push_expr(crate::TypedExpr {
             kind: TypedExprKind::ArrayLiteral {

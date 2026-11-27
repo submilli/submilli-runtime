@@ -15,6 +15,7 @@
 //! (exported by the producer in [`super::classes::ClassPlan::exported_funcs`]) so
 //! `new`, `super(...)`, and a local subclass's inherited vtable slots resolve.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use wasm_encoder::{
@@ -22,10 +23,12 @@ use wasm_encoder::{
     SubType, TypeSection, ValType,
 };
 
-use crate::codegen::classes::{method_vtable_slot, shadows_inherited_field};
+use crate::codegen::classes::{
+    OwnSlotCandidate, VtableSlot, extend_vtable_slots, method_vtable_slot, shadows_inherited_field,
+};
 use crate::codegen::dependency_usage::DependencyUsage;
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
-use crate::codegen::symbol_table::{MethodSlotAbi, SymbolTable};
+use crate::codegen::symbol_table::SymbolTable;
 use crate::codegen::{internal_failure, next_index, wasm_u32};
 use crate::compiler_error::CompilerFailure;
 use crate::{MangledName, Param, TypeKind, TypedAst, TypedTypeDecl};
@@ -45,8 +48,11 @@ pub struct ImportedClassLayout {
     /// Unimplemented abstract properties on this class or its ancestors.
     pub abstract_fields: std::collections::BTreeSet<String>,
     pub narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
-    /// Full vtable method slots (inherited prefix then own/override), in order.
+    /// Active methods/accessors (inherited prefix then own/override), one per
+    /// `(name, accessor)`.
     pub methods: Vec<ImportedSlot>,
+    /// Physical vtable entries in `$C_vtable` field order.
+    pub vtable_slots: Vec<VtableSlot>,
     /// The class's own constructor params, so a local subclass with an *implicit*
     /// constructor extending this class inherits its parameter signature.
     pub ctor_params: Vec<crate::TypedParam>,
@@ -185,7 +191,6 @@ pub fn reconstruct(
         let layout = reconstruct_one(
             mangled,
             class,
-            &info,
             &layouts,
             intrinsics,
             file,
@@ -443,7 +448,6 @@ fn class_info<'i, 'a>(
 fn reconstruct_one(
     mangled: &MangledName,
     class: &ClassInfo<'_>,
-    info: &BTreeMap<MangledName, ClassInfo<'_>>,
     layouts: &BTreeMap<MangledName, ImportedClassLayout>,
     intrinsics: IntrinsicTypeIndices,
     file: crate::FileId,
@@ -534,8 +538,8 @@ fn reconstruct_one(
     // sorted by name to match the producer's slot assignment.
     let methods = vtable_methods(class);
 
-    // Full vtable slots = parent's slots, then fold in own methods (override →
-    // same slot/owner-of-body, new → appended owned by this class).
+    // Active methods/accessors = parent's slots, then fold in own methods
+    // (override → same slot/owner-of-body, new → appended owned by this class).
     let mut slots: Vec<ImportedSlot> = parent_layout
         .map(|l| {
             l.methods
@@ -583,6 +587,7 @@ fn reconstruct_one(
             slot.param_tys = param_tys.clone();
             slot.argument_metadata = argument_metadata;
             slot.ret_ty = ret_ty.clone();
+            slot.generic |= generic;
             slot.absent = false;
         } else {
             slots.push(ImportedSlot {
@@ -605,7 +610,7 @@ fn reconstruct_one(
             crate::AccessorSig::Setter { name, .. } => (name.as_str(), crate::AccessorKind::Set),
         }),
     );
-    let mut cleared_own_methods: Vec<String> = Vec::new();
+    let mut cleared_own_methods: Vec<(String, crate::AccessorKind)> = Vec::new();
     for (prop, missing) in missing_halves {
         let slot_name = match missing {
             crate::AccessorKind::Get => crate::codegen::classes::accessor_getter_name(prop),
@@ -617,85 +622,81 @@ fn reconstruct_one(
         {
             slot.owner = mangled.clone();
             slot.absent = true;
-            cleared_own_methods.push(slot_name);
+            cleared_own_methods.push((slot_name, missing));
         }
     }
 
-    // 1. Method-signature fn-types for slots that *originate* on this class
-    //    (newly introduced). Overrides/inherited slots reuse the originating
-    //    ancestor's sig, looked up from the symbol table (parents come first).
-    for (name, (param_tys, ret, accessor)) in &methods {
-        let originates = class
-            .extends
-            .as_ref()
-            .and_then(|p| symbols.class_method_sig(p, name))
-            .is_none();
-        if !originates {
-            continue;
-        }
-        let mut params: Vec<ValType> = vec![ref_to(intrinsics.object)];
-        params.extend(
-            param_tys
-                .iter()
-                .map(|_| symbols.value_type(&crate::Type::Unknown))
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-        let results = if *accessor == Some(crate::AccessorKind::Get) {
-            vec![symbols.value_type(&crate::Type::Unknown)?]
-        } else {
-            symbols.slot_wasm_result(ret)?
-        };
-        let abi = MethodSlotAbi {
-            params: params.iter().skip(1).copied().collect(),
-            ret: results.first().copied(),
-            types: accessor.is_none()
-                && class
-                    .methods
-                    .get(name)
-                    .is_some_and(|sig| !sig.generics.is_empty()),
-        };
-        if abi.types {
-            params.push(super::generic_binding::types_value_type(symbols)?);
-        }
-        super::check_function_parameters(
-            || {
-                format!(
-                    "the method `{}#{name}` of package `{}`",
-                    class.name, class.package
-                )
+    // 1. Resolve physical vtable slots (inheriting from `parent_layout`) and
+    //    emit standalone fn-type sigs for originating methods and convention-
+    //    changing overrides, matching `classes::ClassPlan::reserve_and_emit_types`.
+    let mut vtable_slots: Vec<VtableSlot> = parent_layout
+        .map(|l| l.vtable_slots.clone())
+        .unwrap_or_default();
+    let mut own_candidates: Vec<OwnSlotCandidate<'_>> = class
+        .methods
+        .iter()
+        .map(|(name, sig)| OwnSlotCandidate {
+            name: Cow::Borrowed(name.as_str()),
+            accessor: None,
+            arity: sig.params.len(),
+            has_rest: sig.params.last().is_some_and(|p| p.rest),
+            ret_ty: &sig.ret,
+            generic: !sig.generics.is_empty(),
+        })
+        .chain(class.accessors.iter().map(|acc| match acc {
+            crate::AccessorSig::Getter { name, ret_ty } => OwnSlotCandidate {
+                name: Cow::Owned(crate::codegen::classes::accessor_getter_name(name)),
+                accessor: Some(crate::AccessorKind::Get),
+                arity: 0,
+                has_rest: false,
+                ret_ty,
+                generic: false,
             },
-            &params,
-        )?;
-        let sig_idx = next_index(next_type_idx)?;
-        types.ty().function(params, results);
-        symbols.record_class_method_sig(mangled.clone(), name.clone(), sig_idx);
-        symbols.record_class_method_abi(mangled.clone(), name.clone(), abi);
-    }
-    // Inherited slots: copy the originating ancestor's sig (and its erasure
-    // shape) under this class's key.
-    for slot in &slots {
-        if symbols.class_method_sig(mangled, &slot.name).is_none() {
-            let sig = match symbols.class_method_sig(&slot.owner, &slot.name) {
-                Some(sig) => sig,
-                None => ancestor_sig(info, symbols, class, &slot.name)?.ok_or_else(|| {
-                    internal_failure("an inherited method slot's signature was not reconstructed")
-                })?,
-            };
-            symbols.record_class_method_sig(mangled.clone(), slot.name.clone(), sig);
-        }
-        if symbols.class_method_abi(mangled, &slot.name).is_none()
-            && let Some(abi) = symbols
-                .class_method_abi(&slot.owner, &slot.name)
-                .cloned()
-                .or_else(|| {
-                    class
-                        .extends
-                        .as_ref()
-                        .and_then(|p| symbols.class_method_abi(p, &slot.name).cloned())
-                })
-        {
-            symbols.record_class_method_abi(mangled.clone(), slot.name.clone(), abi);
-        }
+            crate::AccessorSig::Setter { name, .. } => OwnSlotCandidate {
+                name: Cow::Owned(crate::codegen::classes::accessor_setter_name(name)),
+                accessor: Some(crate::AccessorKind::Set),
+                arity: 1,
+                has_rest: false,
+                ret_ty: &crate::Type::Void,
+                generic: false,
+            },
+        }))
+        .chain(
+            cleared_own_methods
+                .iter()
+                .map(|(name, missing)| OwnSlotCandidate {
+                    name: Cow::Borrowed(name.as_str()),
+                    accessor: Some(*missing),
+                    arity: usize::from(*missing == crate::AccessorKind::Set),
+                    has_rest: false,
+                    ret_ty: if *missing == crate::AccessorKind::Get {
+                        &crate::Type::Unknown
+                    } else {
+                        &crate::Type::Void
+                    },
+                    generic: false,
+                }),
+        )
+        .collect();
+    own_candidates
+        .sort_by(|a, b| (a.name.as_ref(), a.accessor).cmp(&(b.name.as_ref(), b.accessor)));
+    extend_vtable_slots(
+        &mut vtable_slots,
+        &own_candidates,
+        intrinsics,
+        symbols,
+        types,
+        next_type_idx,
+        |name| {
+            format!(
+                "the method `{}#{name}` of package `{}`",
+                class.name, class.package
+            )
+        },
+    )?;
+    for vslot in vtable_slots.iter().filter(|s| s.active) {
+        symbols.record_class_method_sig(mangled.clone(), vslot.name.clone(), vslot.sig_idx);
+        symbols.record_class_method_abi(mangled.clone(), vslot.name.clone(), vslot.abi.clone());
     }
 
     // 2. Reserve the (vtable, struct) pair and 3. emit the rec group.
@@ -732,11 +733,8 @@ fn reconstruct_one(
             mutable: false,
         },
     ];
-    for slot in &slots {
-        let sig = symbols
-            .class_method_sig(mangled, &slot.name)
-            .ok_or_else(|| internal_failure("an imported class method slot has no signature"))?;
-        vtable_fields.push(fieldtype_ref(sig));
+    for vslot in &vtable_slots {
+        vtable_fields.push(fieldtype_ref(vslot.sig_idx));
     }
     let vtable = substruct(vtable_fields, Some(vtable_super));
 
@@ -792,15 +790,18 @@ fn reconstruct_one(
         }
     }
     symbols.record_class_abstract_guard_slots(mangled.clone(), own_abstract_guards);
-    for (i, slot) in slots.iter().enumerate() {
+    for (i, vslot) in vtable_slots.iter().enumerate() {
+        if !vslot.active {
+            continue;
+        }
         // Native classes keep their methods in the vtable, without the mutable
         // closure payload emitted by the compiler for guest class instances.
-        if class.compiled_class && slot.accessor.is_none() {
-            symbols.record_class_payload_method(mangled.clone(), slot.name.clone());
+        if class.compiled_class && vslot.accessor.is_none() {
+            symbols.record_class_payload_method(mangled.clone(), vslot.name.clone());
         }
         symbols.record_class_method_slot(
             mangled.clone(),
-            slot.name.clone(),
+            vslot.name.clone(),
             method_vtable_slot(i)?,
         );
     }
@@ -909,7 +910,10 @@ fn reconstruct_one(
 
     // Own method bodies — reuse the slot's `((ref $Object), params...) -> ret`
     // sig. A local subclass's vtable global `ref.func`s the inherited ones.
-    for name in methods.keys().chain(cleared_own_methods.iter()) {
+    for name in methods
+        .keys()
+        .chain(cleared_own_methods.iter().map(|(name, _)| name))
+    {
         let sig = symbols
             .class_method_sig(mangled, name)
             .ok_or_else(|| internal_failure("an imported class's own method has no signature"))?;
@@ -966,32 +970,9 @@ fn reconstruct_one(
         abstract_fields,
         narrowing_checks,
         methods: slots,
+        vtable_slots,
         ctor_params: ctor_typed_params,
     })
-}
-
-/// Walk the `extends` chain to find the class that originates `method`, returning
-/// the sig recorded under it. Used only as a fallback for inherited slots.
-fn ancestor_sig(
-    info: &BTreeMap<MangledName, ClassInfo<'_>>,
-    symbols: &SymbolTable,
-    class: &ClassInfo<'_>,
-    method: &str,
-) -> Result<Option<u32>, CompilerFailure> {
-    let mut visited: BTreeSet<&MangledName> = BTreeSet::new();
-    let mut cur = class.extends.as_ref();
-    while let Some(m) = cur {
-        if !visited.insert(m) {
-            return Err(internal_failure(format!(
-                "imported class `{m}` inherits from itself"
-            )));
-        }
-        if let Some(sig) = symbols.class_method_sig(m, method) {
-            return Ok(Some(sig));
-        }
-        cur = info.get(m).and_then(|c| c.extends.as_ref());
-    }
-    Ok(None)
 }
 
 fn ref_to(idx: u32) -> ValType {

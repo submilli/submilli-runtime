@@ -330,6 +330,10 @@ impl CodegenAnalysis {
     }
 
     fn note_conversion_dispatch(&mut self) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.dependency_usage.note_member(crate::mangle::extend(
+            &crate::mangle::prelude("ObjectConstructor"),
+            "#getField",
+        ));
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
@@ -1448,7 +1452,15 @@ impl CodegenAnalysis {
             TypedExprKind::NonNullAssert { .. } => {
                 self.string_pool.intern_text(throw::NON_NULL_ASSERT_MESSAGE);
             }
-            TypedExprKind::InstantiateFunction { .. } => {}
+            TypedExprKind::InstantiateFunction { type_args, .. } => {
+                if !type_args.is_empty() {
+                    self.mentioned_closure_sigs
+                        .push(super::field_guards::signature());
+                    for ty in type_args {
+                        self.visit_type(ty)?;
+                    }
+                }
+            }
             TypedExprKind::Cast {
                 target_ty, check, ..
             } => self.note_cast(target_ty, check.as_deref())?,
@@ -1720,10 +1732,18 @@ impl CodegenAnalysis {
                     iface,
                     member,
                     args,
+                    type_args,
                     result_ty,
                     span,
                     ..
                 } => {
+                    if !type_args.is_empty() {
+                        self.mentioned_closure_sigs
+                            .push(super::field_guards::signature());
+                        for ty in type_args {
+                            self.visit_type(ty)?;
+                        }
+                    }
                     if (ta.authored_call_arguments(*span).is_some()
                         && !crate::codegen::is_host_package(iface.as_str()))
                         || (actual_receiver_ty == &Type::Unknown

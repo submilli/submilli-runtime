@@ -821,19 +821,20 @@ pub fn emit_equals(
     Ok(body)
 }
 
-fn emit_unwrap_adapters(
+pub(in crate::codegen) fn emit_unwrap_adapters(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     local: u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let object = ctx
+    let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
-        .object;
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
+    let object = intrinsics.object;
     let wrapper = ctx.symbols.closure_coercion_vtable_type()?;
     emitter.emit_block(wasm_encoder::BlockType::Empty);
     emitter.emit_loop(wasm_encoder::BlockType::Empty);
+    crate::codegen::function_emitter::expr::emit_unwrap_hybrid(emitter, intrinsics, local);
     emitter.instruction(Instruction::LocalGet(local));
     emitter.instruction(Instruction::RefIsNull);
     emitter.instruction(Instruction::BrIf(1));

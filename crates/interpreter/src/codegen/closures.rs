@@ -197,13 +197,7 @@ pub fn collect_from_dependencies<'a>(
             // the producing package.
             for sig in methods.values() {
                 for sig in sig.signatures() {
-                    if sig.generics.is_empty() {
-                        dispatched_member_sigs(
-                            sig.params.iter().map(|p| &p.ty),
-                            &sig.ret,
-                            &mut out,
-                        )?;
-                    }
+                    dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out)?;
                 }
             }
             for p in constructor {
@@ -244,17 +238,38 @@ pub fn class_member_sigs(
             walk_type(&p.ty, &mut out)?;
         }
         for method in &class.methods {
-            if method.generics.is_empty() {
-                dispatched_member_sigs(
-                    method.params.iter().map(|p| &p.ty),
-                    &method.return_type,
-                    &mut out,
-                )
-                .map_err(|error| error.with_span(method.name.span))?;
-            }
+            dispatched_member_sigs(
+                method.params.iter().map(|p| &p.ty),
+                &method.return_type,
+                &mut out,
+            )
+            .map_err(|error| error.with_span(method.name.span))?;
         }
         class_accessor_sigs(&class.accessors, &mut out)?;
         inherited_dependency_sigs(class.parent().cloned(), dependencies, &mut out)?;
+    }
+    // A generic class method in a dependency can reach a consumer behind an
+    // interface or erased value without the consumer naming its overriding
+    // subclass; register its closure shape so generic rebinding (`closure_coercions`
+    // and `generic_binding`) recognizes its runtime arity.
+    for declaration in dependencies {
+        for symbol in declaration
+            .runtime_types
+            .values()
+            .chain(declaration.types.values())
+        {
+            if let TypeKind::Class { methods, .. } = &symbol.kind {
+                for sig in methods.values().filter(|sig| !sig.generics.is_empty()) {
+                    for sig in sig.signatures() {
+                        dispatched_member_sigs(
+                            sig.params.iter().map(|p| &p.ty),
+                            &sig.ret,
+                            &mut out,
+                        )?;
+                    }
+                }
+            }
+        }
     }
     Ok(out)
 }
@@ -341,7 +356,7 @@ fn inherited_dependency_sigs(
         }
         let Some(sym) = dependencies
             .iter()
-            .flat_map(|d| d.types.values())
+            .flat_map(|d| d.runtime_types.values().chain(d.types.values()))
             .find(|t| t.mangled_name == mangled)
         else {
             return Ok(());
@@ -357,9 +372,7 @@ fn inherited_dependency_sigs(
         };
         for sig in methods.values() {
             for sig in sig.signatures() {
-                if sig.generics.is_empty() {
-                    dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, out)?;
-                }
+                dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, out)?;
             }
         }
         accessor_sigs(accessors, out)?;
