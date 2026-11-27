@@ -118,6 +118,7 @@ impl<'a> Inferer<'a> {
                 self.bind_top(
                     &name,
                     ValueKind::Function {
+                        overloads: Vec::new(),
                         generics: generic_names,
                         params: resolved_params,
                         ret: resolved_return,
@@ -824,6 +825,7 @@ impl<'a> Inferer<'a> {
             let signature = self
                 .seed_signature_parts(params, return_type.as_ref(), type_predicate.as_ref())
                 .map(|(params, ret)| ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: names,
                     params,
                     ret,

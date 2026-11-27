@@ -188,26 +188,91 @@ fn import_value_symbol(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     use wasm_encoder::{EntityType, GlobalType, ValType};
     match &value.kind {
-        ValueKind::Function { params, ret, .. } => {
+        ValueKind::Function {
+            overloads,
+            params,
+            ret,
+            ..
+        } => {
             let sig_idx = *next_type_idx;
             crate::codegen::next_index(next_type_idx)?;
+            // An overloaded function shares one Wasm import whose parameter and
+            // return slots widen to the union across every declared signature.
+            let (abi_params, abi_ret): (Vec<crate::Param>, crate::Type) = if overloads.is_empty() {
+                (params.clone(), ret.clone())
+            } else {
+                let mut all_params: Vec<&[crate::Param]> =
+                    Vec::with_capacity(1usize.saturating_add(overloads.len()));
+                all_params.push(params.as_slice());
+                all_params.extend(overloads.iter().map(|sig| sig.params.as_slice()));
+                let max_len = all_params.iter().map(|ps| ps.len()).max().unwrap_or(0);
+                let mut merged_params = Vec::with_capacity(max_len);
+                for index in 0..max_len {
+                    let mut tys = Vec::new();
+                    let mut first_param = None;
+                    let mut all_defaults_match = true;
+                    let mut shared_default: Option<&Option<crate::DefaultValue>> = None;
+                    let mut any_optional = false;
+                    for sig_params in &all_params {
+                        if let Some(param) = sig_params.get(index) {
+                            if first_param.is_none() {
+                                first_param = Some(param);
+                            }
+                            tys.push(param.ty.clone());
+                            any_optional |= param.is_omittable();
+                            match shared_default {
+                                None => shared_default = Some(&param.default),
+                                Some(prev) if *prev != param.default => {
+                                    all_defaults_match = false;
+                                }
+                                Some(_) => {}
+                            }
+                        } else {
+                            tys.push(crate::Type::Undefined);
+                            any_optional = true;
+                            all_defaults_match = false;
+                        }
+                    }
+                    let template = first_param.expect("index < max_len");
+                    let merged_ty = if tys.len() == 1 {
+                        tys.into_iter().next().unwrap()
+                    } else {
+                        crate::Type::union(tys)
+                    };
+                    merged_params.push(crate::Param {
+                        name: template.name.clone(),
+                        ty: merged_ty,
+                        default: if all_defaults_match {
+                            shared_default.and_then(Clone::clone)
+                        } else {
+                            None
+                        },
+                        optional: any_optional,
+                        rest: false,
+                    });
+                }
+                let mut ret_tys = Vec::with_capacity(1usize.saturating_add(overloads.len()));
+                ret_tys.push(ret.clone());
+                ret_tys.extend(overloads.iter().map(|sig| sig.ret.clone()));
+                (merged_params, crate::Type::union(ret_tys))
+            };
             // `submilli:json` is the last host package on the raw ABI: its host
             // fns take/return `$rawString` (codegen re-wraps at the boundary).
             // Every other host package speaks the real `$string`/`$Array` ABI,
             // so it goes through the normal `value_type` path, same as user modules.
             let raw_string_abi = defs.package_name.as_str() == crate::runtime::JSON_MODULE_NAME;
             let (mut param_types, result_types): (Vec<ValType>, Vec<ValType>) = if raw_string_abi {
-                json_host_signature(name, params, symbols, intrinsics)?
+                json_host_signature(name, &abi_params, symbols, intrinsics)?
             } else {
                 (
-                    params
+                    abi_params
                         .iter()
                         .map(|p| symbols.value_type(&p.ty))
                         .collect::<Result<_, _>>()?,
-                    if is_resultless(&defs.package_name, ret) {
+                    if is_resultless(&defs.package_name, &abi_ret) {
                         vec![]
                     } else {
-                        symbols.wasm_result(ret)?
+                        symbols.wasm_result(&abi_ret)?
                     },
                 )
             };
@@ -220,7 +285,10 @@ fn import_value_symbol(
             if is_host_package(&defs.package_name) {
                 symbols.record_host_parameter_defaults(
                     *next_func_idx,
-                    params.iter().map(|param| param.default.clone()).collect(),
+                    abi_params
+                        .iter()
+                        .map(|param| param.default.clone())
+                        .collect(),
                 );
             }
             check_function_parameters(
@@ -241,7 +309,7 @@ fn import_value_symbol(
                 value.mangled_name.as_str(),
                 EntityType::Function(sig_idx),
             );
-            if let Some(metadata) = call_arguments::metadata(params.iter().map(|param| {
+            if let Some(metadata) = call_arguments::metadata(abi_params.iter().map(|param| {
                 (
                     param
                         .default
@@ -257,8 +325,8 @@ fn import_value_symbol(
             symbols.record_imported_fn(
                 value.mangled_name.clone(),
                 *next_func_idx,
-                params.iter().map(|p| p.ty.clone()).collect(),
-                ret.clone(),
+                abi_params.iter().map(|p| p.ty.clone()).collect(),
+                abi_ret,
                 raw_string_abi,
             );
             crate::codegen::next_index(next_func_idx)?;

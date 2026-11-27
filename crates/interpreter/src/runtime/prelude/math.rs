@@ -104,6 +104,7 @@ pub(crate) fn namespace_symbol() -> NamespaceSymbol {
                 mangled_name: math_key(name),
                 declaration_span: Span::at(crate::FileId::MATH),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![Param::new("x", Type::Number)],
                     ret: Type::Number,
@@ -120,6 +121,7 @@ pub(crate) fn namespace_symbol() -> NamespaceSymbol {
             mangled_name: math_key("random"),
             declaration_span: Span::at(crate::FileId::MATH),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: Vec::new(),
                 ret: Type::Number,
@@ -148,6 +150,7 @@ pub(crate) fn namespace_symbol() -> NamespaceSymbol {
                 mangled_name: math_key(name),
                 declaration_span: Span::at(crate::FileId::MATH),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params,
                     ret: Type::Number,
@@ -165,6 +168,7 @@ pub(crate) fn namespace_symbol() -> NamespaceSymbol {
                 mangled_name: math_key(name),
                 declaration_span: Span::at(crate::FileId::MATH),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![Param::rest("values", Type::Array(Box::new(Type::Number)))],
                     ret: Type::Number,

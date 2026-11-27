@@ -144,8 +144,12 @@ async fn run_under(
 }
 
 fn answered(value: AnswerValue) -> QuestionOutcome {
+    answered_many(vec![value])
+}
+
+fn answered_many(values: Vec<AnswerValue>) -> QuestionOutcome {
     QuestionOutcome::Answered(AnswerSpec {
-        value,
+        values,
         answered_by: "user:dana".into(),
         answered_at_unix_ms: 1_795_512_600_000,
     })
@@ -184,8 +188,8 @@ async fn a_choice_is_asked_and_its_answer_returned_and_the_wait_is_not_running_t
     assert_eq!(asked[0].caller, "main");
     assert_eq!(asked[0].timeout, Some(Duration::from_secs(600)));
     assert_eq!(
-        asked[0].question,
-        QuestionSpec::Choice {
+        asked[0].questions,
+        vec![QuestionSpec::Choice {
             text: "Which account?".into(),
             choices: vec![
                 Choice {
@@ -201,7 +205,7 @@ async fn a_choice_is_asked_and_its_answer_returned_and_the_wait_is_not_running_t
             ],
             multiple: true,
             other: true,
-        }
+        }]
     );
     assert!(run.clock_paused >= Duration::from_millis(30));
     assert!(
@@ -231,13 +235,13 @@ async fn a_text_questions_initial_and_max_length_reach_the_host() {
     .await;
     assert_eq!(run.result.unwrap().as_deref(), Some("4"));
     assert_eq!(
-        person.asked()[0].question,
-        QuestionSpec::Text {
+        person.asked()[0].questions,
+        vec![QuestionSpec::Text {
             text: "Nickname?".into(),
             sensitive: false,
             initial: Some("Dana".into()),
             max_length: Some(4),
-        }
+        }]
     );
 }
 
@@ -302,7 +306,7 @@ async fn an_embedder_reads_a_recorded_question_outcome() {
     else {
         panic!("a recorded answer");
     };
-    assert_eq!(answer.value, value);
+    assert_eq!(answer.values, vec![value]);
 }
 
 const REASON: &str = r#"
@@ -467,7 +471,7 @@ async fn a_package_asks_a_sensitive_question_and_its_answer_stays_out_of_the_cal
     let run = run(Some(PACKAGE), SENSITIVE, Some(person.clone()), None).await;
     assert_eq!(run.result.unwrap().as_deref(), Some("typed 6 characters"));
     assert_eq!(person.asked()[0].caller, PACKAGE);
-    assert!(person.asked()[0].question.is_sensitive());
+    assert!(person.asked()[0].any_sensitive());
     let call = run
         .calls
         .iter()
@@ -808,12 +812,12 @@ async fn who_answered_and_when_must_be_what_a_host_can_hold() {
     let value = AnswerValue::Text { text: "yes".into() };
     for answer in [
         AnswerSpec {
-            value: value.clone(),
+            values: vec![value.clone()],
             answered_by: "x".repeat(MAX_ANSWER_BYTES + 1),
             answered_at_unix_ms: 1_795_512_600_000,
         },
         AnswerSpec {
-            value: value.clone(),
+            values: vec![value.clone()],
             answered_by: "user:dana".into(),
             answered_at_unix_ms: u64::MAX,
         },
@@ -951,7 +955,8 @@ async fn a_value_of_a_wider_type_is_asked_with_its_extra_keys_ignored() {
     )
     .await;
     assert_eq!(run.result.unwrap().as_deref(), Some("a|none"));
-    let QuestionSpec::Choice { choices, .. } = &person.asked()[0].question else {
+    let asked = person.asked();
+    let [QuestionSpec::Choice { choices, .. }] = asked[0].questions.as_slice() else {
         panic!("a choice question");
     };
     assert_eq!(choices[0].label.as_deref(), Some("A"));
@@ -970,4 +975,543 @@ fn timeouts_are_capped_at_thirty_days() {
             Err(format!("`timeout` {long:?} is longer than 30 days"))
         );
     }
+}
+
+/// Captures every capability check context it sees, allowing every call.
+struct RecordingPolicy {
+    seen: Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl RecordingPolicy {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::default(),
+        })
+    }
+
+    fn contexts(&self) -> Vec<serde_json::Value> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(cap, _)| cap == CAPABILITY)
+            .map(|(_, ctx)| ctx.clone())
+            .collect()
+    }
+}
+
+impl SecurityCheck for RecordingPolicy {
+    fn check(&self, _: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((capability.to_string(), context.clone()));
+        CheckOutcome::Allow { rule: None }
+    }
+}
+
+#[tokio::test]
+async fn multi_question_ask_returns_answers_in_order_and_redacts_sensitive_slots_in_call_log() {
+    let policy = RecordingPolicy::new();
+    let person = Person::new(answered_many(vec![
+        AnswerValue::Choice {
+            selected: vec!["ops".into()],
+            other: None,
+        },
+        AnswerValue::Text {
+            text: "481516".into(),
+        },
+    ]));
+    let source = r#"
+        import { ask } from "submilli:human";
+        function main(): string {
+            const { answers, answeredBy, answeredAt } = ask([
+                { text: "Which payout account?", answer: "choice", choices: [{ value: "ops", label: "Operations" }] },
+                { text: "Enter the 6-digit Shopify code", answer: "text", sensitive: true, maxLength: 6 },
+            ], { timeout: "30m" });
+            const [account, code] = answers;
+            const a = account.answer === "choice" ? account.selected.join(",") : "wrong";
+            const c = code.answer === "text" ? String(code.text.length) : "wrong";
+            return a + "|" + c + "|" + answeredBy + "|" + answeredAt;
+        }
+    "#;
+    let run = run_under(
+        policy.clone(),
+        Some(PACKAGE),
+        source,
+        Some(person.clone()),
+        None,
+    )
+    .await;
+    assert_eq!(
+        run.result.unwrap().as_deref(),
+        Some("ops|6|user:dana|2026-11-24T09:30:00.000Z")
+    );
+    let asked = person.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].questions.len(), 2);
+    assert!(asked[0].any_sensitive());
+    assert_eq!(asked[0].timeout, Some(Duration::from_secs(1_800)));
+
+    let contexts = policy.contexts();
+    assert_eq!(
+        contexts,
+        vec![serde_json::json!({
+            "to": "human",
+            "answer": "form",
+            "sensitive": true,
+            "count": 2,
+        })]
+    );
+
+    let call = run
+        .calls
+        .iter()
+        .find(|call| call.capability == CAPABILITY)
+        .expect("recorded ask call");
+    let response = call.response.as_ref().expect("recorded response");
+    assert_eq!(response.meta["sensitive"], true);
+    let Some(BodyCopy::Text(body)) = &response.body else {
+        panic!("mixed form keeps non-sensitive slots in body");
+    };
+    let slots: Vec<serde_json::Value> = serde_json::from_str(body).unwrap();
+    assert_eq!(slots.len(), 2);
+    assert_eq!(
+        slots[0],
+        serde_json::json!({ "answer": "choice", "selected": ["ops"] })
+    );
+    assert_eq!(slots[1], serde_json::Value::Null);
+    let everything = serde_json::to_string(&run.calls).unwrap();
+    assert!(!everything.contains("481516"), "{everything}");
+}
+
+#[tokio::test]
+async fn single_element_array_returns_answers_wrapper_with_count_one_policy_context() {
+    let policy = RecordingPolicy::new();
+    let person = Person::new(answered(AnswerValue::Text { text: "ok".into() }));
+    let source = r#"
+        import { ask, type Answers } from "submilli:human";
+        function main(): string {
+            const res: Answers = ask([{ text: "Reason?", answer: "text" }]);
+            const first = res.answers[0];
+            return String(res.answers.length) + "|" + (first.answer === "text" ? first.text : "?") + "|" + res.answeredBy;
+        }
+    "#;
+    let run = run_under(policy.clone(), None, source, Some(person), None).await;
+    assert_eq!(run.result.unwrap().as_deref(), Some("1|ok|user:dana"));
+    assert_eq!(
+        policy.contexts(),
+        vec![serde_json::json!({
+            "to": "human",
+            "answer": "text",
+            "sensitive": false,
+            "count": 1,
+        })]
+    );
+}
+
+#[tokio::test]
+async fn all_sensitive_multi_question_omits_call_log_body_and_strips_decline_message() {
+    let person = Person::new(answered_many(vec![
+        AnswerValue::Text {
+            text: "secret-a".into(),
+        },
+        AnswerValue::Text {
+            text: "secret-b".into(),
+        },
+    ]));
+    let source = r#"
+        import { ask } from "submilli:human";
+        function main(): string {
+            const res = ask([
+                { text: "Password", answer: "text", sensitive: true },
+                { text: "2FA code", answer: "text", sensitive: true },
+            ]);
+            return String(res.answers.length);
+        }
+    "#;
+    let first = run(Some(PACKAGE), source, Some(person), None).await;
+    assert_eq!(first.result.unwrap().as_deref(), Some("2"));
+    let call = first
+        .calls
+        .iter()
+        .find(|call| call.capability == CAPABILITY)
+        .unwrap();
+    let response = call.response.as_ref().unwrap();
+    assert_eq!(response.meta["sensitive"], true);
+    assert!(response.body.is_none());
+    let everything = serde_json::to_string(&first.calls).unwrap();
+    assert!(!everything.contains("secret-a") && !everything.contains("secret-b"));
+
+    let declined = Person::new(QuestionOutcome::Declined {
+        message: Some("typed-secret-by-mistake".into()),
+    });
+    let second = run(
+        Some(PACKAGE),
+        &catching(
+            r#"[{ text: "Account?", answer: "text" }, { text: "Code", answer: "text", sensitive: true }]"#,
+            "undefined",
+        ),
+        Some(declined),
+        None,
+    )
+    .await;
+    assert_eq!(
+        second.result.unwrap().as_deref(),
+        Some("no answer declined: the person declined to answer")
+    );
+}
+
+#[tokio::test]
+async fn main_is_refused_if_any_question_in_form_is_sensitive() {
+    let person = Person::new(answered_many(vec![
+        AnswerValue::Text { text: "ops".into() },
+        AnswerValue::Text {
+            text: "123456".into(),
+        },
+    ]));
+    let source = r#"
+        import { ask } from "submilli:human";
+        function main(): string {
+            try {
+                ask([
+                    { text: "Account?", answer: "text" },
+                    { text: "Enter code", answer: "text", sensitive: true },
+                ]);
+                return "asked";
+            } catch (e) {
+                if (e instanceof PermissionDeniedError) { return "denied: " + e.reason; }
+                throw e;
+            }
+        }
+    "#;
+    let run = run(None, source, Some(person.clone()), None).await;
+    assert_eq!(
+        run.result.unwrap().as_deref(),
+        Some(format!("denied: {SENSITIVE_MAIN_REFUSAL}").as_str())
+    );
+    assert!(person.asked().is_empty());
+}
+
+#[tokio::test]
+async fn empty_and_over_limit_question_arrays_throw_type_error_and_ten_succeeds() {
+    let ten: Vec<String> = (1..=MAX_QUESTIONS)
+        .map(|i| format!(r#"{{ text: "Q{i}?", answer: "text" }}"#))
+        .collect();
+    let eleven: Vec<String> = (1..=MAX_QUESTIONS + 1)
+        .map(|i| format!(r#"{{ text: "Q{i}?", answer: "text" }}"#))
+        .collect();
+    for bad in ["[]".to_string(), format!("[{}]", eleven.join(","))] {
+        let person = Person::new(QuestionOutcome::Expired);
+        let run = run(
+            None,
+            &catching(&bad, "undefined"),
+            Some(person.clone()),
+            None,
+        )
+        .await;
+        assert_eq!(run.result.unwrap().as_deref(), Some("type error"), "{bad}");
+        assert!(person.asked().is_empty());
+    }
+
+    let ten_answers: Vec<AnswerValue> = (1..=MAX_QUESTIONS)
+        .map(|i| AnswerValue::Text {
+            text: format!("a{i}"),
+        })
+        .collect();
+    let person = Person::new(answered_many(ten_answers));
+    let source = format!(
+        r#"
+        import {{ ask }} from "submilli:human";
+        function main(): string {{
+            const res = ask([{}]);
+            return String(res.answers.length);
+        }}
+        "#,
+        ten.join(",")
+    );
+    let run = run(None, &source, Some(person.clone()), None).await;
+    assert_eq!(run.result.unwrap().as_deref(), Some("10"));
+    assert_eq!(person.asked()[0].questions.len(), 10);
+}
+
+#[tokio::test]
+async fn multi_question_answer_count_and_slot_mismatches_are_unanswerable() {
+    let form = r#"[
+        { text: "Pick", answer: "choice", choices: [{ value: "a" }] },
+        { text: "Note", answer: "text", maxLength: 4 }
+    ]"#;
+    for values in [
+        vec![AnswerValue::Choice {
+            selected: vec!["a".into()],
+            other: None,
+        }],
+        vec![
+            AnswerValue::Choice {
+                selected: vec!["a".into()],
+                other: None,
+            },
+            AnswerValue::Text {
+                text: "too long".into(),
+            },
+        ],
+    ] {
+        let run = run(
+            None,
+            &catching(form, "undefined"),
+            Some(Person::new(answered_many(values.clone()))),
+            None,
+        )
+        .await;
+        let result = run.result.unwrap().unwrap_or_default();
+        assert!(
+            result.starts_with("no answer unanswerable: the host's answer does not fit"),
+            "{values:?}: {result}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn namespace_import_supports_both_ask_overloads_and_binding_is_rejected() {
+    let person = Person::new(answered_many(vec![
+        AnswerValue::Text { text: "one".into() },
+        AnswerValue::Text { text: "two".into() },
+    ]));
+    let source = r#"
+        import * as human from "submilli:human";
+        function main(): string {
+            const res = human.ask([
+                { text: "First?", answer: "text" },
+                { text: "Second?", answer: "text" },
+            ]);
+            const parts = res.answers.map((a) => (a.answer === "text" ? a.text : "?"));
+            return parts.join(",");
+        }
+    "#;
+    let run = run(None, source, Some(person), None).await;
+    assert_eq!(run.result.unwrap().as_deref(), Some("one,two"));
+
+    let err = crate::compile_script(
+        r#"
+        import { ask } from "submilli:human";
+        function main(): void {
+            const f = ask;
+            void f;
+        }
+        "#,
+        "ask.ts",
+        crate::FileId(0),
+        &[],
+        &[],
+    )
+    .expect_err("binding overloaded ask to a value is rejected");
+    assert!(
+        format!("{err:?}").contains("cannot bind overloaded function `ask` to a value"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn legacy_single_question_and_answer_match_wire_bytes_and_deserialize_for_replay() {
+    #[derive(serde::Serialize)]
+    struct LegacyQuestionRequest {
+        approver: Approver,
+        caller: String,
+        question: QuestionSpec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout: Option<Duration>,
+    }
+    #[derive(serde::Serialize)]
+    struct LegacyAnswerSpec {
+        value: AnswerValue,
+        answered_by: String,
+        answered_at_unix_ms: u64,
+    }
+    #[derive(serde::Serialize)]
+    enum LegacyQuestionOutcome {
+        Answered(LegacyAnswerSpec),
+    }
+
+    let question = QuestionSpec::Text {
+        text: "Enter code".into(),
+        sensitive: true,
+        initial: None,
+        max_length: Some(6),
+    };
+    for timeout in [None, Some(Duration::from_secs(600))] {
+        let legacy_request = LegacyQuestionRequest {
+            approver: Approver::Human,
+            caller: "@acme/shop".into(),
+            question: question.clone(),
+            timeout,
+        };
+        let new_request = QuestionRequest {
+            approver: Approver::Human,
+            caller: "@acme/shop".into(),
+            questions: vec![question.clone()],
+            timeout,
+        };
+        // Exact byte-for-byte MessagePack match guarantees identical `effects::fingerprint`
+        // for suspended single-question runs replaying across the upgrade boundary.
+        assert_eq!(
+            effects::encode(&new_request).unwrap(),
+            effects::encode(&legacy_request).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&new_request).unwrap(),
+            serde_json::to_value(&legacy_request).unwrap()
+        );
+        let decoded_request: QuestionRequest =
+            effects::decode(&effects::encode(&legacy_request).unwrap()).unwrap();
+        assert_eq!(decoded_request, new_request);
+    }
+
+    let multi_request = QuestionRequest {
+        approver: Approver::Human,
+        caller: "@acme/shop".into(),
+        questions: vec![question.clone(), question],
+        timeout: None,
+    };
+    let multi_json = serde_json::to_value(&multi_request).unwrap();
+    assert!(multi_json.get("questions").is_some());
+    assert!(multi_json.get("question").is_none());
+    let decoded_multi: QuestionRequest =
+        effects::decode(&effects::encode(&multi_request).unwrap()).unwrap();
+    assert_eq!(decoded_multi, multi_request);
+
+    let legacy_outcome = LegacyQuestionOutcome::Answered(LegacyAnswerSpec {
+        value: AnswerValue::Text {
+            text: "123456".into(),
+        },
+        answered_by: "user:dana".into(),
+        answered_at_unix_ms: 1_795_512_600_000,
+    });
+    let new_outcome = QuestionOutcome::Answered(AnswerSpec {
+        values: vec![AnswerValue::Text {
+            text: "123456".into(),
+        }],
+        answered_by: "user:dana".into(),
+        answered_at_unix_ms: 1_795_512_600_000,
+    });
+    let legacy_encoded = effects::encode(&legacy_outcome).unwrap();
+    let new_encoded = effects::encode(&new_outcome).unwrap();
+    assert_eq!(new_encoded, legacy_encoded);
+    let decoded =
+        crate::runtime::asks::recorded_question_outcome(&effects::OutcomeBytes(legacy_encoded))
+            .expect("legacy msgpack outcome decodes");
+    assert_eq!(decoded, new_outcome);
+}
+
+#[test]
+fn capability_derivation_handles_single_and_multi_question_ask() {
+    let derive = |body: &str| {
+        let source = format!(
+            "import {{ ask, type Question }} from \"submilli:human\";\n\
+             /** Run test.\n\
+              * @param qs Dynamic questions.\n\
+              */\n\
+             export function run(qs: Question[]): void {{\n\
+                 {body}\n\
+             }}\n"
+        );
+        let compiled = crate::compile_package(
+            "@acme/test",
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source: &source,
+            }],
+            &[],
+        )
+        .expect("package compiles");
+        (compiled.required_capabilities, compiled.warnings)
+    };
+
+    let (reqs, warnings) = derive(
+        r#"ask({ text: "Code", answer: "text", sensitive: true }, { to: "human" }); void qs;"#,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].capability, "human.ask");
+    assert_eq!(
+        reqs[0].filter.as_deref(),
+        Some("to == \"human\" and answer == \"text\" and sensitive == true and count == 1")
+    );
+
+    let (reqs, warnings) = derive(
+        r#"ask([{ text: "Account?", answer: "choice", choices: [{ value: "ops" }] }, { text: "Code", answer: "text", sensitive: true }], { to: "human" }); void qs;"#,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(
+        reqs[0].filter.as_deref(),
+        Some("to == \"human\" and answer == \"form\" and sensitive == true and count == 2")
+    );
+
+    let (reqs, warnings) = derive(
+        r#"ask([{ text: "One?", answer: "text" }, { text: "Two?", answer: "text" }]); void qs;"#,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        reqs[0].filter.as_deref(),
+        Some("answer == \"form\" and sensitive == false and count == 2")
+    );
+
+    let (reqs, warnings) =
+        derive(r#"ask([{ text: "Code", answer: "text", sensitive: true }]); void qs;"#);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        reqs[0].filter.as_deref(),
+        Some("answer == \"text\" and sensitive == true and count == 1")
+    );
+
+    let (reqs, warnings) = derive(r#"ask(qs);"#);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].capability, "human.ask");
+    assert_eq!(reqs[0].filter, None);
+}
+
+#[tokio::test]
+async fn multi_question_replay_returns_recorded_answers_without_asking_again() {
+    let history = Arc::new(MemoryHistory::default());
+    let source = r#"
+        import { ask } from "submilli:human";
+        function main(): string {
+            const { answers } = ask([
+                { text: "Account?", answer: "choice", choices: [{ value: "ops" }, { value: "fin" }] },
+                { text: "Note?", answer: "text" },
+            ]);
+            const [a, b] = answers;
+            return (a.answer === "choice" ? a.selected.join(",") : "?") + "|" + (b.answer === "text" ? b.text : "?");
+        }
+    "#;
+    let first = Person::new(answered_many(vec![
+        AnswerValue::Choice {
+            selected: vec!["ops".into()],
+            other: None,
+        },
+        AnswerValue::Text {
+            text: "first".into(),
+        },
+    ]));
+    let run1 = run(None, source, Some(first.clone()), Some(history.clone())).await;
+    assert_eq!(run1.result.as_ref().unwrap().as_deref(), Some("ops|first"));
+    assert_eq!(first.asked().len(), 1);
+    assert_eq!(first.recorded.lock().unwrap().len(), 1);
+
+    history.replay();
+    let second = Person::new(answered_many(vec![
+        AnswerValue::Choice {
+            selected: vec!["fin".into()],
+            other: None,
+        },
+        AnswerValue::Text {
+            text: "second".into(),
+        },
+    ]));
+    let run2 = run(None, source, Some(second.clone()), Some(history)).await;
+    assert_eq!(run1.result.unwrap(), run2.result.unwrap());
+    assert!(second.asked().is_empty());
+    assert!(second.recorded.lock().unwrap().is_empty());
 }

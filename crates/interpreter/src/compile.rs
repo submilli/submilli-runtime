@@ -1097,6 +1097,7 @@ mod importless_library_tests {
             mangled_name: package_symbol(SYNTH, name),
             declaration_span: Span::at(crate::FileId(0)),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: Vec::new(),
                 ret: ty,
@@ -1153,6 +1154,7 @@ mod importless_library_tests {
                 mangled_name: package_symbol(PIED_PIPER, "greet"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: Vec::new(),
                     ret: Type::String,
@@ -1648,6 +1650,7 @@ mod alias_reference_value_tests {
             );
         }
         let returning = |alias: &str| ValueKind::Function {
+            overloads: Vec::new(),
             generics: Default::default(),
             params: Vec::new(),
             ret: reference(alias),

@@ -150,6 +150,7 @@ fn register_tool(
             mangled_name: mangle::host(&defs.package_name, &tool.name),
             declaration_span: Span::at(interpreter::FileId::MCP),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params,
                 ret,

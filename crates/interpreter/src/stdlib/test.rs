@@ -44,6 +44,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "label"),
             declaration_span: Span::at(crate::FileId::TEST),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("description", Type::String)],
                 ret: Type::Void,
@@ -62,6 +63,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "expectException"),
             declaration_span: Span::at(crate::FileId::TEST),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![
                     Param::new(

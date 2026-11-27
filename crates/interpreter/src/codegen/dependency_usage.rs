@@ -339,11 +339,15 @@ impl DependencyUsage {
 
     fn collect_value_symbol(&mut self, value: &crate::ValueSymbol) {
         match &value.kind {
-            ValueKind::Function { params, ret, .. } => {
-                for p in params {
-                    self.collect_type(&p.ty);
+            ValueKind::Function { .. } => {
+                if let Some(signatures) = value.kind.function_signatures() {
+                    for sig in signatures {
+                        for p in &sig.params {
+                            self.collect_type(&p.ty);
+                        }
+                        self.collect_type(&sig.ret);
+                    }
                 }
-                self.collect_type(ret);
             }
             ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => {
                 self.collect_type(ty);

@@ -80,6 +80,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "encodeQuery"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("query", query_type())],
                 ret: Type::String,
@@ -97,6 +98,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "decodeQuery"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("s", Type::String)],
                 ret: query_type(),
@@ -178,6 +180,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "parse"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("url", Type::String)],
                 ret: url_ref,
@@ -199,6 +202,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "build"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![
                     Param::new("protocol", Type::String),
@@ -236,6 +240,7 @@ fn insert_string_to_string_fn(defs: &mut PackageDeclaration, name: &str, doc: &s
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("s", Type::String)],
                 ret: Type::String,

@@ -51,6 +51,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "check"),
             declaration_span: Span::at(crate::FileId::SECURITY),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 params: vec![
                     Param::new("capability", Type::String),

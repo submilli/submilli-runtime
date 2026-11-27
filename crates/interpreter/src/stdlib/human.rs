@@ -23,8 +23,8 @@ use crate::runtime::StoreData;
 use crate::runtime::approvals::Approver;
 use crate::runtime::asks::{
     AnswerSpec, AnswerValue, AskError, Choice, MAX_ANSWER_BYTES, MAX_ANSWER_LENGTH,
-    MAX_CHOICE_VALUE_BYTES, QUESTION_OPERATION, QuestionOutcome, QuestionRequest, QuestionSpec,
-    fits_length,
+    MAX_CHOICE_VALUE_BYTES, MAX_QUESTIONS, QUESTION_OPERATION, QuestionOutcome, QuestionRequest,
+    QuestionSpec, fits_length,
 };
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::effects;
@@ -37,8 +37,8 @@ use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::session::value;
 use crate::stdlib::shared::check_and_approve_call_refusing_main;
 use crate::{
-    Dispatch, PackageDeclaration, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
-    ValueSymbol,
+    Dispatch, MethodOverload, PackageDeclaration, Param, PropertySig, Span, Type, TypeKind,
+    TypeSymbol, ValueKind, ValueSymbol,
 };
 
 pub const MODULE_NAME: &str = "submilli:human";
@@ -64,6 +64,13 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_questions(&mut defs);
     insert_options(&mut defs);
     insert_answers(&mut defs);
+    let options_param = || {
+        Param::with_default(
+            "options",
+            Type::union(vec![interface_ref("AskOptions"), Type::Undefined]),
+            crate::DefaultValue::Undefined,
+        )
+    };
     defs.values.insert(
         "ask".to_string(),
         ValueSymbol {
@@ -71,19 +78,21 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "ask"),
             declaration_span: Span::at(crate::FileId::HUMAN),
             kind: ValueKind::Function {
+                overloads: vec![MethodOverload {
+                    generics: Default::default(),
+                    params: vec![
+                        Param::new("questions", Type::Array(Box::new(alias_ref("Question")))),
+                        options_param(),
+                    ],
+                    ret: interface_ref("Answers"),
+                    predicate: None,
+                }],
                 generics: Default::default(),
-                params: vec![
-                    Param::new("question", alias_ref("Question")),
-                    Param::with_default(
-                        "options",
-                        Type::union(vec![interface_ref("AskOptions"), Type::Undefined]),
-                        crate::DefaultValue::Undefined,
-                    ),
-                ],
+                params: vec![Param::new("question", alias_ref("Question")), options_param()],
                 ret: alias_ref("Answer"),
                 type_predicate: None,
                 doc: doc(
-                    "/**\n * Ask a person `question` and wait for the answer: text, or what they picked from `choices`.\n *\n * The question goes to the person the run acts for (`to: \"human\"`, the default), or to an administrator (`to: \"admin\"`). The wait survives restarts and does not count as running time. It lasts until `timeout` (such as `\"10m\"`), which the host caps by its own approval timeout, its default.\n *\n * Throws a catchable `NoAnswerError` when there is no answer: `reason` is `\"declined\"` (the person said no; `message` holds what they said instead), `\"expired\"`, or `\"unanswerable\"` (this run cannot ask anyone). A question that is empty, marks a choice question `sensitive`, or breaks a bound (text 4 KiB; 1 to 20 choices with unique values; a value or label non-empty and at most 256 bytes, a description 1 KiB; `maxLength` a whole number from 1 to 65536; `initial` non-blank, within `maxLength`, and never on a `sensitive` question) throws a `TypeError`, and so does a `timeout` over 30 days.\n *\n * A text answer longer than `maxLength` UTF-16 code units, or any answer that does not fit the question, throws `NoAnswerError` with reason `\"unanswerable\"`.\n *\n * `sensitive: true` asks for a credential, such as a sign-in code. Only a package may ask one: from `main`, including a Function (which runs as `main`), it throws `PermissionDeniedError` whatever the policy says. Its answer is never logged.\n * @param question What to ask, and how it is answered.\n * @param options Whom to ask, and how long to wait.\n * @capability human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive }\n */",
+                    "/**\n * Ask a person one `question` or an array of 1 to 10 `questions` and wait for the answers: text, or what they picked from `choices`.\n *\n * Passing a single `Question` returns one `Answer`. Passing a `Question[]` array (1 to 10 required questions) returns `Answers` with `answers` in the same order.\n *\n * The call goes to the person the run acts for (`to: \"human\"`, the default), or to an administrator (`to: \"admin\"`). The wait survives restarts and does not count as running time. It lasts until `timeout` (such as `\"10m\"`), which the host caps by its own approval timeout, its default.\n *\n * Throws a catchable `NoAnswerError` when there is no answer: `reason` is `\"declined\"` (the person said no; `message` holds what they said instead), `\"expired\"`, or `\"unanswerable\"` (this run cannot ask anyone). An empty array, more than 10 questions, a question that is empty, marks a choice question `sensitive`, or breaks a bound (text 4 KiB; 1 to 20 choices with unique values; a value or label non-empty and at most 256 bytes, a description 1 KiB; `maxLength` a whole number from 1 to 65536; `initial` non-blank, within `maxLength`, and never on a `sensitive` question) throws a `TypeError`, and so does a `timeout` over 30 days.\n *\n * A text answer longer than `maxLength` UTF-16 code units, or any answer that does not fit its question, throws `NoAnswerError` with reason `\"unanswerable\"`.\n *\n * `sensitive: true` asks for a credential, such as a sign-in code. Only a package may ask one: from `main`, including a Function (which runs as `main`), any call containing a sensitive question throws `PermissionDeniedError` whatever the policy says. Sensitive answers are never logged.\n * @param question What to ask, and how it is answered.\n * @param options Whom to ask, and how long to wait.\n * @capability human.ask { to: $options.to, answer: $question.answer, sensitive: $question.sensitive, count: number }\n */",
                 ),
             },
         },
@@ -94,8 +103,8 @@ pub fn package_declaration() -> PackageDeclaration {
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
-    // A union of object shapes, an optional object and the answer all cross the
-    // boundary as the universal `(ref null $Object)` lowering.
+    // A union of object shapes or array, an optional object, and the answer all cross
+    // the boundary as the universal `(ref null $Object)` lowering.
     let object = ValType::Ref(RefType::new(
         true,
         HeapType::ConcreteStruct(intr.object.clone()),
@@ -107,30 +116,51 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [object.clone(), object.clone()], [object]),
         |caller, params| {
             Box::pin(async move {
-                let question = read_question(caller, abi_arg(params, 0)?).await?;
+                let asked = read_questions(caller, abi_arg(params, 0)?).await?;
                 let options = read_options(caller, abi_arg(params, 1)?).await?;
-                ask(caller, question, options).await
+                ask(caller, asked, options).await
             })
         },
     )
 }
 
+struct AskedQuestions {
+    questions: Vec<QuestionSpec>,
+    /// `true` when the caller passed a `Question[]` array (even of length 1),
+    /// returning `Answers`; `false` when the caller passed one `Question`,
+    /// returning `Answer`.
+    batch: bool,
+}
+
 async fn ask(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    question: QuestionSpec,
+    asked: AskedQuestions,
     options: AskOptions,
 ) -> wasmtime::Result<Val> {
-    let sensitive = question.is_sensitive();
+    let any_sensitive = asked.questions.iter().any(QuestionSpec::is_sensitive);
+    let count = asked.questions.len();
+    let answer_kind = if count == 1 {
+        asked.questions[0].answer_kind()
+    } else {
+        "form"
+    };
     let context = serde_json::json!({
         "to": options.approver.as_str(),
-        "answer": question.answer_kind(),
-        "sensitive": sensitive,
+        "answer": answer_kind,
+        "sensitive": any_sensitive,
+        "count": count,
     });
-    let refusal = sensitive.then_some(SENSITIVE_MAIN_REFUSAL);
+    let refusal = any_sensitive.then_some(SENSITIVE_MAIN_REFUSAL);
     let (principal, ticket) =
         check_and_approve_call_refusing_main(caller, CAPABILITY, context.clone(), refusal).await?;
     record_payload(&*caller, ticket, Side::Request, || {
-        Payload::meta(context.clone()).with_owned_body(question.text().as_bytes().to_vec())
+        let body = if asked.questions.len() == 1 {
+            asked.questions[0].text().as_bytes().to_vec()
+        } else {
+            let texts: Vec<&str> = asked.questions.iter().map(QuestionSpec::text).collect();
+            serde_json::to_vec(&texts).unwrap_or_default()
+        };
+        Payload::meta(context.clone()).with_owned_body(body)
     });
     let Some(provider) = caller.data().ask_provider.clone() else {
         return Err(no_answer_error(
@@ -141,9 +171,10 @@ async fn ask(
     let request = QuestionRequest {
         approver: options.approver,
         caller: principal,
-        question,
+        questions: asked.questions,
         timeout: options.timeout,
     };
+    let questions_for_log = request.questions.clone();
     // Holds the effect's id once its outcome is recorded in this run's history:
     // not when it was replayed, and not without a history.
     let recorded = Arc::new(OnceLock::new());
@@ -167,7 +198,7 @@ async fn ask(
                 if caller.data().effects.is_some() {
                     let _ = recorded.set(effect_id);
                 }
-                Ok(fitting(&request.question, outcome))
+                Ok(fitting(&request, outcome))
             })
         }
     })
@@ -176,10 +207,16 @@ async fn ask(
         provider.recorded(effect_id);
     }
     record_payload(&*caller, ticket, Side::Response, || {
-        response_payload(&outcome, sensitive)
+        response_payload(&outcome, &questions_for_log)
     });
     match outcome {
-        QuestionOutcome::Answered(answer) => answer_value(caller, &answer),
+        QuestionOutcome::Answered(answer) => {
+            if asked.batch {
+                answers_value(caller, &answer, count)
+            } else {
+                answer_value(caller, &answer)
+            }
+        }
         QuestionOutcome::Declined { message } => {
             let message = message
                 .filter(|message| !message.trim().is_empty())
@@ -196,16 +233,16 @@ async fn ask(
     }
 }
 
-/// `outcome`, unless it is an answer that does not fit `question`: a host defect,
+/// `outcome`, unless it is an answer that does not fit `request`: a host defect,
 /// recorded as unanswerable so the program never sees a choice it did not offer, nor
-/// who answered or when beyond what a host can hold. A sensitive question's decline
-/// loses its message, which may be the credential typed in the wrong place, before the
-/// history records it; so does a decline message longer than [`MAX_ANSWER_BYTES`]. An
-/// unanswerable outcome's message is cut to that bound.
-fn fitting(question: &QuestionSpec, outcome: QuestionOutcome) -> QuestionOutcome {
+/// who answered or when beyond what a host can hold. A decline on a request with any
+/// sensitive question loses its message, which may be the credential typed in the wrong
+/// place, before the history records it; so does a decline message longer than
+/// [`MAX_ANSWER_BYTES`]. An unanswerable outcome's message is cut to that bound.
+fn fitting(request: &QuestionRequest, outcome: QuestionOutcome) -> QuestionOutcome {
     match outcome {
         QuestionOutcome::Declined { message }
-            if question.is_sensitive()
+            if request.any_sensitive()
                 || message.as_ref().is_some_and(|m| m.len() > MAX_ANSWER_BYTES) =>
         {
             QuestionOutcome::Declined { message: None }
@@ -213,7 +250,7 @@ fn fitting(question: &QuestionSpec, outcome: QuestionOutcome) -> QuestionOutcome
         QuestionOutcome::Unanswerable { message } => QuestionOutcome::Unanswerable {
             message: bounded(message),
         },
-        QuestionOutcome::Answered(answer) => match answer_problem(question, &answer) {
+        QuestionOutcome::Answered(answer) => match answer_problem(request, &answer) {
             None => QuestionOutcome::Answered(answer),
             Some(problem) => QuestionOutcome::Unanswerable {
                 message: format!("the host's answer does not fit the question: {problem}"),
@@ -224,14 +261,14 @@ fn fitting(question: &QuestionSpec, outcome: QuestionOutcome) -> QuestionOutcome
 }
 
 /// What makes the host's `answer` unusable, in words that never quote it.
-fn answer_problem(question: &QuestionSpec, answer: &AnswerSpec) -> Option<String> {
+fn answer_problem(request: &QuestionRequest, answer: &AnswerSpec) -> Option<String> {
     if answer.answered_by.len() > MAX_ANSWER_BYTES {
         return Some("who answered is longer than any answer".into());
     }
     if instant(answer.answered_at_unix_ms).is_none() {
         return Some("when it was answered is past any time a timestamp holds".into());
     }
-    question.check_answer(&answer.value).err()
+    request.check_answers(&answer.values).err()
 }
 
 /// `message`, cut at a character boundary to [`MAX_ANSWER_BYTES`].
@@ -246,19 +283,48 @@ fn bounded(mut message: String) -> String {
     message
 }
 
-/// What the call log keeps of an outcome: never a sensitive answer's value.
-fn response_payload(outcome: &QuestionOutcome, sensitive: bool) -> Payload<'static> {
+/// What the call log keeps of an outcome: never any sensitive answer's value.
+fn response_payload(outcome: &QuestionOutcome, questions: &[QuestionSpec]) -> Payload<'static> {
     match outcome {
-        QuestionOutcome::Answered(answer) if sensitive => Payload::meta(serde_json::json!({
-            "outcome": "answered",
-            "sensitive": true,
-            "answered_by": answer.answered_by,
-        })),
-        QuestionOutcome::Answered(answer) => Payload::meta(serde_json::json!({
-            "outcome": "answered",
-            "answered_by": answer.answered_by,
-        }))
-        .with_owned_body(serde_json::to_vec(&answer.value).unwrap_or_default()),
+        QuestionOutcome::Answered(answer) => {
+            let any_sensitive = questions.iter().any(QuestionSpec::is_sensitive);
+            let all_sensitive = questions.iter().all(QuestionSpec::is_sensitive);
+            let meta = if any_sensitive {
+                serde_json::json!({
+                    "outcome": "answered",
+                    "sensitive": true,
+                    "answered_by": answer.answered_by,
+                })
+            } else {
+                serde_json::json!({
+                    "outcome": "answered",
+                    "answered_by": answer.answered_by,
+                })
+            };
+            if all_sensitive {
+                Payload::meta(meta)
+            } else if questions.len() == 1 {
+                let body = answer
+                    .values
+                    .first()
+                    .and_then(|value| serde_json::to_vec(value).ok())
+                    .unwrap_or_default();
+                Payload::meta(meta).with_owned_body(body)
+            } else {
+                let slots: Vec<serde_json::Value> = questions
+                    .iter()
+                    .zip(&answer.values)
+                    .map(|(question, value)| {
+                        if question.is_sensitive() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+                        }
+                    })
+                    .collect();
+                Payload::meta(meta).with_owned_body(serde_json::to_vec(&slots).unwrap_or_default())
+            }
+        }
         QuestionOutcome::Declined { .. } => {
             Payload::meta(serde_json::json!({ "outcome": "declined" }))
         }
@@ -269,14 +335,9 @@ fn response_payload(outcome: &QuestionOutcome, sensitive: bool) -> Payload<'stat
     }
 }
 
-/// The program's `Answer`: `{ answer, text | selected, other?, answeredBy, answeredAt }`.
-/// The person has answered, so building it settles fuel rather than refusing.
-fn answer_value(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    answer: &AnswerSpec,
-) -> wasmtime::Result<Val> {
+fn answer_value_fields(value: &AnswerValue) -> serde_json::Map<String, serde_json::Value> {
     let mut fields = serde_json::Map::new();
-    match &answer.value {
+    match value {
         AnswerValue::Text { text } => {
             fields.insert("answer".into(), "text".into());
             fields.insert("text".into(), text.clone().into());
@@ -289,6 +350,22 @@ fn answer_value(
             }
         }
     }
+    fields
+}
+
+/// The program's `Answer`: `{ answer, text | selected, other?, answeredBy, answeredAt }`.
+/// The person has answered, so building it settles fuel rather than refusing.
+fn answer_value(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    answer: &AnswerSpec,
+) -> wasmtime::Result<Val> {
+    let [value] = answer.values.as_slice() else {
+        return Err(fatal_host_error(format!(
+            "{CAPABILITY}: expected 1 recorded answer, got {}",
+            answer.values.len()
+        )));
+    };
+    let mut fields = answer_value_fields(value);
     fields.insert("answeredBy".into(), answer.answered_by.clone().into());
     // `fitting` refused an answer whose time a timestamp cannot hold before it was recorded.
     let Some(answered_at) = instant(answer.answered_at_unix_ms) else {
@@ -296,6 +373,40 @@ fn answer_value(
             "{CAPABILITY}: the recorded answer's time is out of range"
         )));
     };
+    fields.insert("answeredAt".into(), iso(answered_at).into());
+    let units: Vec<u16> = serde_json::Value::Object(fields)
+        .to_string()
+        .encode_utf16()
+        .collect();
+    fuel::settle_result(caller, |caller| value::deserialize(caller, &units))
+}
+
+/// The program's `Answers`: `{ answers: AnswerValue[], answeredBy, answeredAt }`.
+/// The person has answered, so building it settles fuel rather than refusing.
+fn answers_value(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    answer: &AnswerSpec,
+    expected_count: usize,
+) -> wasmtime::Result<Val> {
+    if answer.values.len() != expected_count {
+        return Err(fatal_host_error(format!(
+            "{CAPABILITY}: expected {expected_count} recorded answer(s), got {}",
+            answer.values.len()
+        )));
+    }
+    let Some(answered_at) = instant(answer.answered_at_unix_ms) else {
+        return Err(fatal_host_error(format!(
+            "{CAPABILITY}: the recorded answer's time is out of range"
+        )));
+    };
+    let answers: Vec<serde_json::Value> = answer
+        .values
+        .iter()
+        .map(|value| serde_json::Value::Object(answer_value_fields(value)))
+        .collect();
+    let mut fields = serde_json::Map::new();
+    fields.insert("answers".into(), serde_json::Value::Array(answers));
+    fields.insert("answeredBy".into(), answer.answered_by.clone().into());
     fields.insert("answeredAt".into(), iso(answered_at).into());
     let units: Vec<u16> = serde_json::Value::Object(fields)
         .to_string()
@@ -352,11 +463,53 @@ struct AskOptions {
     timeout: Option<Duration>,
 }
 
-async fn read_question(
+async fn read_questions(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
-) -> wasmtime::Result<QuestionSpec> {
-    let question = match read_json(caller, val, "question").await? {
+) -> wasmtime::Result<AskedQuestions> {
+    let raw: serde_json::Value = read_json(caller, val, "question").await?;
+    match raw {
+        serde_json::Value::Array(items) => {
+            if items.is_empty() {
+                return Err(type_error("ask: `questions` must not be empty"));
+            }
+            if items.len() > MAX_QUESTIONS {
+                return Err(type_error(format!(
+                    "ask: at most {MAX_QUESTIONS} questions may be asked at once, not {}",
+                    items.len()
+                )));
+            }
+            let mut questions = Vec::with_capacity(items.len());
+            for (index, item) in items.into_iter().enumerate() {
+                let written: WrittenQuestion = serde_json::from_value(item).map_err(|error| {
+                    type_error(format!(
+                        "ask: invalid question {}: {error}",
+                        index.saturating_add(1)
+                    ))
+                })?;
+                questions.push(parse_written_question(written)?);
+            }
+            Ok(AskedQuestions {
+                questions,
+                batch: true,
+            })
+        }
+        serde_json::Value::Object(_) => {
+            let written: WrittenQuestion = serde_json::from_value(raw)
+                .map_err(|error| type_error(format!("ask: invalid question: {error}")))?;
+            Ok(AskedQuestions {
+                questions: vec![parse_written_question(written)?],
+                batch: false,
+            })
+        }
+        _ => Err(type_error(
+            "ask: invalid question: expected a question object or array of questions",
+        )),
+    }
+}
+
+fn parse_written_question(written: WrittenQuestion) -> wasmtime::Result<QuestionSpec> {
+    let question = match written {
         WrittenQuestion::Text {
             text,
             sensitive,
@@ -819,6 +972,57 @@ fn insert_answers(defs: &mut PackageDeclaration) {
     };
     insert_interface(
         defs,
+        "TextAnswerValue",
+        BTreeMap::from([
+            (
+                "answer".to_string(),
+                property(literal("text"), false, "/** Answered with text. */"),
+            ),
+            (
+                "text".to_string(),
+                property(Type::String, false, "/** What the person wrote. */"),
+            ),
+        ]),
+        "/** The answer value for one `TextQuestion` in a multi-question `ask`. */",
+    );
+    insert_interface(
+        defs,
+        "ChoiceAnswerValue",
+        BTreeMap::from([
+            (
+                "answer".to_string(),
+                property(literal("choice"), false, "/** Answered by picking. */"),
+            ),
+            (
+                "selected".to_string(),
+                property(
+                    Type::Array(Box::new(Type::String)),
+                    false,
+                    "/** The `value` of each choice picked, at most one unless the question allowed `multiple`, and none only when the person wrote `other` instead. */",
+                ),
+            ),
+            (
+                "other".to_string(),
+                property(
+                    Type::String,
+                    true,
+                    "/** The person's own answer, when the question allowed `other` and they wrote one, beside or instead of a pick. */",
+                ),
+            ),
+        ]),
+        "/** The answer value for one `ChoiceQuestion` in a multi-question `ask`. */",
+    );
+    insert_alias(
+        defs,
+        "AnswerValue",
+        Type::union(vec![
+            interface_ref("TextAnswerValue"),
+            interface_ref("ChoiceAnswerValue"),
+        ]),
+        "/** One answer in `Answers.answers`: a `TextAnswerValue` or a `ChoiceAnswerValue`, told apart by `answer`. */",
+    );
+    insert_interface(
+        defs,
         "TextAnswer",
         BTreeMap::from([
             (
@@ -870,7 +1074,24 @@ fn insert_answers(defs: &mut PackageDeclaration) {
             interface_ref("TextAnswer"),
             interface_ref("ChoiceAnswer"),
         ]),
-        "/** What `ask` returns: a `TextAnswer` or a `ChoiceAnswer`, told apart by `answer`. */",
+        "/** What single-question `ask` returns: a `TextAnswer` or a `ChoiceAnswer`, told apart by `answer`. */",
+    );
+    insert_interface(
+        defs,
+        "Answers",
+        BTreeMap::from([
+            (
+                "answers".to_string(),
+                property(
+                    Type::Array(Box::new(alias_ref("AnswerValue"))),
+                    false,
+                    "/** One answer per question, in the same order as `questions`. */",
+                ),
+            ),
+            ("answeredBy".to_string(), answered_by()),
+            ("answeredAt".to_string(), answered_at()),
+        ]),
+        "/** What multi-question `ask` returns: `answers` in question order, plus who answered and when. */",
     );
 }
 

@@ -580,8 +580,7 @@ fn walk_namespace<'a>(head: &str, head_ns: &'a NamespaceSymbol, rest: &[&str]) -
             if tail.is_empty() {
                 let sym = &ns.values[&canonical];
                 let mut body = String::new();
-                push_doc(&mut body, value_doc(&sym.kind), "");
-                render_value(&mut body, &canonical, &sym.kind, "");
+                render_value_with_doc(&mut body, &canonical, &sym.kind, "", DocAudience::Author);
                 return found_in(&chain, &body);
             }
             // A value is a leaf: it has no members to walk into.
@@ -645,8 +644,7 @@ fn resolve_type_member(
 /// (`Temporal.InstantConstructor`) that binding carries.
 fn render_namespace_member(out: &mut String, ns: &NamespaceSymbol, canonical: &str) {
     if let Some(sym) = ns.values.get(canonical) {
-        push_doc(out, value_doc(&sym.kind), "");
-        render_value(out, canonical, &sym.kind, "");
+        render_value_with_doc(out, canonical, &sym.kind, "", DocAudience::Author);
     }
     if let Some(sym) = ns.types.get(canonical) {
         push_doc(out, type_doc(&sym.kind), "");
@@ -1117,7 +1115,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:git" => "Capability-controlled Git repositories in the VFS, with HTTPS remotes.",
         "submilli:http" => "Outbound HTTP requests, and downloads into the filesystem.",
         "submilli:human" => {
-            "Ask a person a question, answered with text or a choice, and wait durably for the answer."
+            "Ask a person one or more questions, answered with text or choices, and wait durably for the answers."
         }
         "submilli:llm" => {
             "Gated model calls: text/texts for text, call<T>/batch<T> for checked values, and models() to discover them."
@@ -1164,8 +1162,7 @@ pub fn render_declarations_for(defs: &PackageDeclaration, audience: DocAudience)
     let defs = defs.as_ref();
     let mut out = String::new();
     for (name, sym) in &defs.values {
-        push_doc_for(&mut out, value_doc(&sym.kind), "", audience);
-        render_value(&mut out, name, &sym.kind, "");
+        render_value_with_doc(&mut out, name, &sym.kind, "", audience);
     }
     for (name, sym) in &defs.types {
         push_doc_for(&mut out, type_doc(&sym.kind), "", audience);
@@ -1204,8 +1201,7 @@ pub fn render_selected_declarations(defs: &PackageDeclaration) -> String {
                 let _ = writeln!(out, "\n{indent}namespace {name} {{");
                 let inner = format!("{indent}  ");
                 for (name, value) in &ns.values {
-                    push_doc_for(&mut out, value_doc(&value.kind), &inner, DocAudience::Agent);
-                    render_value(&mut out, name, &value.kind, &inner);
+                    render_value_with_doc(&mut out, name, &value.kind, &inner, DocAudience::Agent);
                 }
                 for (name, symbol) in &ns.types {
                     push_doc_for(&mut out, type_doc(&symbol.kind), &inner, DocAudience::Agent);
@@ -1830,25 +1826,17 @@ fn render_ts_value(
     };
     let decl_export_prefix = if reserved_export { "" } else { export_prefix };
     match kind {
-        ValueKind::Function {
-            generics,
-            params,
-            ret,
-            type_predicate,
-            ..
-        } => {
-            let ret = ts_return_type(
-                params,
-                ret,
-                type_predicate.as_ref(),
-                value_doc(kind).as_ref(),
-            );
-            let _ = writeln!(
-                out,
-                "{indent}{decl_export_prefix}function {declared_name}{}({}): {ret};",
-                ts_generics(generics),
-                ts_params_str(params, value_doc(kind).as_ref())
-            );
+        ValueKind::Function { .. } => {
+            let doc = value_doc(kind).as_ref();
+            for sig in kind.function_signatures().unwrap_or_default() {
+                let ret = ts_return_type(&sig.params, &sig.ret, sig.predicate.as_ref(), doc);
+                let _ = writeln!(
+                    out,
+                    "{indent}{decl_export_prefix}function {declared_name}{}({}): {ret};",
+                    ts_generics(&sig.generics),
+                    ts_params_str(&sig.params, doc)
+                );
+            }
         }
         ValueKind::Let { ty, .. } => {
             let _ = writeln!(
@@ -2672,33 +2660,44 @@ fn is_ts_reserved_word(name: &str) -> bool {
     )
 }
 
-fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
+fn render_value_with_doc(
+    out: &mut String,
+    name: &str,
+    kind: &ValueKind,
+    indent: &str,
+    audience: DocAudience,
+) {
     match kind {
-        ValueKind::Function {
-            generics,
-            params,
-            ret,
-            type_predicate,
-            ..
-        } => {
-            let doc = value_doc(kind).as_ref();
-            let ret = type_predicate
-                .as_ref()
-                .and_then(|predicate| {
-                    render_type_predicate(params, predicate, doc, ToString::to_string)
-                })
-                .unwrap_or_else(|| ret.to_string());
-            let _ = writeln!(
-                out,
-                "{indent}function {name}{}({}): {ret};\n",
-                generics_str(generics),
-                params_str(params, doc)
-            );
+        ValueKind::Function { .. } => {
+            let doc = value_doc(kind);
+            for sig in kind.function_signatures().unwrap_or_default() {
+                push_doc_for(out, doc, indent, audience);
+                let ret = sig
+                    .predicate
+                    .as_ref()
+                    .and_then(|predicate| {
+                        render_type_predicate(
+                            &sig.params,
+                            predicate,
+                            doc.as_ref(),
+                            ToString::to_string,
+                        )
+                    })
+                    .unwrap_or_else(|| sig.ret.to_string());
+                let _ = writeln!(
+                    out,
+                    "{indent}function {name}{}({}): {ret};\n",
+                    generics_str(&sig.generics),
+                    params_str(&sig.params, doc.as_ref())
+                );
+            }
         }
         ValueKind::Let { ty, .. } => {
+            push_doc_for(out, value_doc(kind), indent, audience);
             let _ = writeln!(out, "{indent}let {name}: {ty};\n");
         }
         ValueKind::Const { ty, .. } => {
+            push_doc_for(out, value_doc(kind), indent, audience);
             let _ = writeln!(out, "{indent}const {name}: {ty};\n");
         }
     }
@@ -2923,8 +2922,7 @@ fn render_namespace(out: &mut String, name: &str, ns: &NamespaceSymbol, indent: 
     let _ = writeln!(out, "{indent}namespace {name} {{");
     let inner = format!("{indent}  ");
     for (vname, sym) in &ns.values {
-        push_doc(out, value_doc(&sym.kind), &inner);
-        render_value(out, vname, &sym.kind, &inner);
+        render_value_with_doc(out, vname, &sym.kind, &inner, DocAudience::Author);
     }
     for (tname, sym) in &ns.types {
         // The namespace's own values already bind each `XConstructor` to `X`,

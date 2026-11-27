@@ -70,6 +70,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "download"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![
                     Param::new("url", Type::String),
@@ -96,6 +97,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "request"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![
                     Param::new("method", Type::String),
@@ -158,6 +160,7 @@ fn insert_verb_fn(defs: &mut PackageDeclaration, verb: &str, has_body: bool) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, verb),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params,
                 ret: response_type(),

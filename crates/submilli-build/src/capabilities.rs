@@ -287,6 +287,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@stripe/sdk", "charge"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![
                         Param::new("amount", Type::Number),
@@ -334,6 +335,7 @@ mod tests {
                     mangled_name: mangle::package_symbol("@jina/reader", func),
                     declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                     kind: ValueKind::Function {
+                        overloads: Vec::new(),
                         generics: Default::default(),
                         params: vec![
                             Param::new("host", Type::String),
@@ -382,6 +384,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/sdk", "getIssue"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![Param::new("id", id_alias)],
                     ret: Type::Void,
@@ -408,6 +411,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/mail", "send"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![Param::new("input", Type::Unknown)],
                     ret: Type::Void,
@@ -448,6 +452,7 @@ mod tests {
                     mangled_name: mangle::package_symbol("@jina/reader", func),
                     declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                     kind: ValueKind::Function {
+                        overloads: Vec::new(),
                         generics: Default::default(),
                         params: vec![
                             Param::new("host", Type::String),

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a87a09c60a856a4aee7fcaeae6514f462f2718881757bf77d161525343b4e075"
+  contentHash: "ea059a0d6e1fb1cedbe84ab348ab8ea2022efb9009b7a77c897895836c3b89eb"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -197,7 +197,8 @@ out, and a condition on a missing field is false.
 - **Session state:** `session.list` is checked with `prefix`, and each key it
   would return as `session.read`. A refused key is left out.
 - **Questions to a person:** `human.ask` is checked with `to` (`"human"` or
-  `"admin"`), `answer` (`"text"` or `"choice"`), and `sensitive`. A
+  `"admin"`), `answer` (`"text"`, `"choice"`, or `"form"` when asking two or
+  more questions), `sensitive`, and `count` (1 to 10). Any call containing a
   sensitive question, which asks for a credential, is refused to `main`,
   including a Function (which runs as `main`), regardless of policy, as
   `secrets.get` is.
@@ -264,7 +265,7 @@ read checks the requested alias name and grants no access to its target name.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
-| `human.ask` | `to: string`, `answer: string`, `sensitive: boolean` | Ask a person a question and wait for the answer (a sensitive question is refused to main, including a Function, whatever the policy says) | `to == "human"` |
+| `human.ask` | `to: string`, `answer: string`, `sensitive: boolean`, `count: number` | Ask a person one or more questions and wait for the answers (any sensitive question is refused to main, including a Function, whatever the policy says) | `to == "human"` |
 
 ### `submilli:llm`
 

@@ -2922,6 +2922,7 @@ export function unchecked(): void { get("https://example.com"); }
                 mangled_name: crate::mangle::package_symbol("@mcp/issues", "create"),
                 declaration_span: Span::at(crate::FileId::MCP),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![Param::new("title", Type::String)],
                     ret: Type::Unknown,

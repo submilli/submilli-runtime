@@ -124,6 +124,7 @@ impl PackageDeclaration {
                     mangled_name: f.mangled_name.clone(),
                     declaration_span: f.name.span,
                     kind: ValueKind::Function {
+                        overloads: Vec::new(),
                         generics: f.generics.clone(),
                         params: f.params.iter().map(param_from_typed).collect(),
                         ret: f.return_type.clone(),
@@ -400,12 +401,25 @@ fn symbol_named<'a>(
 fn value_types(value: &ValueSymbol, visit: &mut dyn FnMut(&Type)) {
     match &value.kind {
         ValueKind::Function {
+            overloads,
             generics,
             params,
             ret,
             type_predicate,
             doc: _,
         } => {
+            for signature in overloads {
+                signature
+                    .generics
+                    .constraints
+                    .values()
+                    .for_each(&mut *visit);
+                signature.params.iter().for_each(|param| visit(&param.ty));
+                visit(&signature.ret);
+                if let Some(predicate) = &signature.predicate {
+                    visit(&predicate.asserted_type);
+                }
+            }
             generics.constraints.values().for_each(&mut *visit);
             params.iter().for_each(|param| visit(&param.ty));
             visit(ret);
@@ -619,11 +633,21 @@ impl PackageShapeCollector {
     fn collect_value(&mut self, value: &ValueSymbol) {
         match &value.kind {
             ValueKind::Function {
+                overloads,
                 params,
                 ret,
                 type_predicate,
                 ..
             } => {
+                for signature in overloads {
+                    for param in &signature.params {
+                        self.collect_type(&param.ty);
+                    }
+                    self.collect_type(&signature.ret);
+                    if let Some(predicate) = &signature.predicate {
+                        self.collect_type(&predicate.asserted_type);
+                    }
+                }
                 for param in params {
                     self.collect_type(&param.ty);
                 }
@@ -965,8 +989,13 @@ pub enum EnumVariantValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ValueKind {
     Function {
+        /// Additional callable signatures, in overload-resolution order after the
+        /// primary signature. Kept flat so metadata cannot nest overload sets.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        overloads: Vec<MethodOverload>,
         /// Names appear inside `params`/`ret` as `Type::Var(name)`, resolved per call site by `TypeParamSubstitution`.
         generics: GenericParameters,
         params: Vec<Param>,
@@ -986,6 +1015,32 @@ pub enum ValueKind {
         ty: Type,
         doc: Option<crate::DocComment>,
     },
+}
+
+impl ValueKind {
+    /// Every callable signature of a function value, primary first then overloads.
+    pub fn function_signatures(&self) -> Option<Vec<MethodOverload>> {
+        let Self::Function {
+            overloads,
+            generics,
+            params,
+            ret,
+            type_predicate,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let mut signatures = Vec::with_capacity(1usize.saturating_add(overloads.len()));
+        signatures.push(MethodOverload {
+            generics: generics.clone(),
+            params: params.clone(),
+            ret: ret.clone(),
+            predicate: type_predicate.clone(),
+        });
+        signatures.extend(overloads.iter().cloned());
+        Some(signatures)
+    }
 }
 
 /// Ordered type parameter names and their optional upper bounds. Keeping the
@@ -1262,8 +1317,8 @@ pub struct MethodSig {
     pub doc: Option<crate::DocComment>,
 }
 
-/// One additional signature of an overloaded method. Optionality and member
-/// documentation belong to the method, not to an individual signature.
+/// One additional signature of an overloaded function or method. Optionality and
+/// documentation belong to the symbol, not to an individual signature.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MethodOverload {
     pub generics: GenericParameters,

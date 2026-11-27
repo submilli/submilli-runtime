@@ -65,6 +65,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "report"),
             declaration_span: Span::at(crate::FileId::COST),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::new("entry", entry)],
                 ret: Type::Void,

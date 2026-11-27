@@ -1718,6 +1718,7 @@ pub(super) fn declare_direct_fn(
             mangled_name,
             declaration_span: DiagSpan::at(crate::FileId::TEMPORAL),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params,
                 ret,
@@ -4166,6 +4167,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "instant"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: Vec::new(),
                 ret: temporal_instant_ref(),
@@ -4183,6 +4185,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "timeZoneId"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: Vec::new(),
                 ret: Type::String,
@@ -4200,6 +4203,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "zonedDateTimeISO"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::with_default(
                     "tz",
@@ -4222,6 +4226,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 mangled_name: crate::mangle::extend(&now_prefix, name),
                 declaration_span: Span::at(FileId::PRELUDE),
                 kind: ValueKind::Function {
+                    overloads: Vec::new(),
                     generics: Default::default(),
                     params: vec![Param::with_default(
                         "tz",
@@ -4257,6 +4262,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "zonedDateTime"),
             declaration_span: Span::at(FileId::PRELUDE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params: vec![Param::with_default(
                     "tz",

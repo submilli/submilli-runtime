@@ -198,6 +198,7 @@ fn insert(defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret: Ty
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(FileId::CODE),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params,
                 ret,

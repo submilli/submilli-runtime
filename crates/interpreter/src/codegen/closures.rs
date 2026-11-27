@@ -38,7 +38,7 @@ use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::SymbolTable;
 use crate::{
     CapturedVar, ClosureBody, Dispatch, ExprId, Shape, Type, TypeKind, TypedAst, TypedParam,
-    ValueKind, ValueSymbol,
+    ValueSymbol,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -101,13 +101,15 @@ pub fn collect_from_dependencies<'a>(
 ) -> Result<Vec<ClosureSig>, crate::compiler_error::CompilerFailure> {
     let mut out: Vec<ClosureSig> = Vec::new();
     for value_sym in values {
-        let ValueKind::Function { params, ret, .. } = &value_sym.kind else {
+        let Some(signatures) = value_sym.kind.function_signatures() else {
             continue;
         };
-        for p in params {
-            walk_type(&p.ty, &mut out)?;
+        for sig in signatures {
+            for p in &sig.params {
+                walk_type(&p.ty, &mut out)?;
+            }
+            walk_type(&sig.ret, &mut out)?;
         }
-        walk_type(ret, &mut out)?;
     }
     for shape in shapes {
         match shape {

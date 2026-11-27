@@ -2161,6 +2161,7 @@ fn insert_number_function(
             mangled_name: crate::mangle::host(NUMBER_MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::NUMBER),
             kind: ValueKind::Function {
+                overloads: Vec::new(),
                 generics: Default::default(),
                 params,
                 ret,
