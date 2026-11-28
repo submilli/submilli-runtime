@@ -85,7 +85,7 @@ fn sources(snapshot: &Snapshot, options: &Value, mode: &str) -> Result<(Source, 
     match mode {
         "working" => Ok((index(snapshot)?, working(snapshot)?)),
         "staged" => {
-            let head = if snapshot.repo.head()?.is_unborn() {
+            let head = if super::operations::head_is_unborn(snapshot)? {
                 Source::empty()
             } else {
                 tree(snapshot, "HEAD")?

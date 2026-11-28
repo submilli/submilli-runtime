@@ -367,7 +367,7 @@ impl<'a> BoundedWalk<'a> {
     fn start(snapshot: &'a Snapshot, head: gix::ObjectId) -> Result<Self> {
         snapshot.check_cancelled()?;
         snapshot.record_algorithm_fuel(crate::runtime::fuel::SYSCALL.cost(1))?;
-        let shallow_path = snapshot.repo.shallow_file();
+        let shallow_path = snapshot.repo.shallow_file()?;
         match std::fs::metadata(&shallow_path) {
             Ok(metadata) => {
                 if metadata.len() > snapshot.max_bytes {
@@ -690,7 +690,7 @@ mod tests {
             &[gix::ObjectId::null(gix::hash::Kind::Sha1)],
             "shallow",
         );
-        std::fs::write(snapshot.repo.shallow_file(), format!("{head}\n")).unwrap();
+        std::fs::write(snapshot.repo.shallow_file().unwrap(), format!("{head}\n")).unwrap();
         let mut walk = Ancestors::new(&snapshot, head).unwrap();
         assert_eq!(walk.next().unwrap().unwrap().id, head);
         assert!(walk.next().unwrap().is_none());

@@ -44,7 +44,7 @@ pub(super) fn remotes(snapshot: &Snapshot) -> Result<Value> {
 }
 
 pub fn head_entries(snapshot: &Snapshot) -> Result<Entries> {
-    let tree = if snapshot.repo.head()?.is_unborn() {
+    let tree = if head_is_unborn(snapshot)? {
         gix::ObjectId::empty_tree(gix::hash::Kind::Sha1)
     } else {
         super::history::resolve_commit(snapshot, "HEAD")?
@@ -283,8 +283,8 @@ fn without_absent(mut value: Value) -> Value {
 }
 
 pub fn current_branch(snapshot: &Snapshot) -> Result<Option<String>> {
-    let head = snapshot.repo.head()?;
-    let Some(name) = head.referent_name() else {
+    let head = snapshot.repo.find_reference("HEAD")?;
+    let gix::refs::TargetRef::Symbolic(name) = head.target() else {
         return Ok(None);
     };
     snapshot.validate_reference_spelling(name.as_bstr().to_str()?)?;
@@ -293,12 +293,25 @@ pub fn current_branch(snapshot: &Snapshot) -> Result<Option<String>> {
         .to_str()?
         .strip_prefix("refs/heads/")
         .ok_or_else(|| wasmtime::Error::msg("git: HEAD must target a local branch"))?;
-    if !head.is_unborn() && snapshot.repo.find_reference(name)?.try_id().is_none() {
+    if let Some(target) = snapshot.repo.try_find_reference(name)?
+        && target.try_id().is_none()
+    {
         bail!(
             "git: symbolic local branch aliases are unsupported; select a direct branch with native Git"
         );
     }
     Ok(Some(branch.to_owned()))
+}
+
+/// Whether `HEAD` is a direct symbolic reference whose target does not yet exist.
+/// Checks a single hop rather than calling `repo.head()`, which follows multi-hop
+/// symbolic chains and would treat a dangling alias as unborn.
+pub(super) fn head_is_unborn(snapshot: &Snapshot) -> Result<bool> {
+    let head = snapshot.repo.find_reference("HEAD")?;
+    let gix::refs::TargetRef::Symbolic(name) = head.target() else {
+        return Ok(false);
+    };
+    Ok(snapshot.repo.try_find_reference(name)?.is_none())
 }
 
 pub(super) fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
@@ -314,7 +327,7 @@ pub(super) fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
     }
     let mut commits = Vec::new();
     // An explicit ref must resolve even when HEAD is an unborn branch.
-    let head = if snapshot.repo.head()?.is_unborn() {
+    let head = if head_is_unborn(snapshot)? {
         None
     } else {
         Some(super::history::resolve_commit(snapshot, "HEAD")?.id)
@@ -344,7 +357,13 @@ pub(super) fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
         snapshot.check_cancelled()?;
         let commit = super::object::commit(snapshot, *id, snapshot.max_bytes)?;
         let decoded = commit.decode()?;
-        commits.push(json!({"id":commit.id.to_string(),"message":decoded.message.to_str_lossy(),"authorName":decoded.author()?.name.to_str_lossy(),"authorEmail":decoded.author()?.email.to_str_lossy()}));
+        let author = decoded.author()?;
+        commits.push(json!({
+            "id": commit.id.to_string(),
+            "message": decoded.message.to_str_lossy(),
+            "authorName": author.name.to_str_lossy(),
+            "authorEmail": author.email.to_str_lossy(),
+        }));
     }
     let next = if more {
         Some(
@@ -908,7 +927,7 @@ pub fn commit(
         email: identity.email.clone().into(),
         time: gix::date::Time::now_utc(),
     };
-    let parents = if snapshot.repo.head()?.is_unborn() {
+    let parents = if head_is_unborn(snapshot)? {
         None
     } else {
         Some(super::history::resolve_commit(snapshot, "HEAD")?.id)
@@ -1124,7 +1143,7 @@ impl IgnoreBudget {
             source,
             Some(std::path::Path::new("")),
             Default::default(),
-        );
+        )?;
         Ok(())
     }
 }

@@ -1598,7 +1598,11 @@ async fn failed_remote_conversion_can_exhaust_fuel_after_worker_settlement() {
         data.http_client = http.clone();
         errors.push(run_source_fuel(source, data, fuel).await.unwrap_err());
     }
-    assert!(errors[0].to_string().contains("IO error"), "{}", errors[0]);
+    assert!(
+        errors[0].to_string().contains("Transport handshake failed"),
+        "{}",
+        errors[0]
+    );
     // Exception construction is outside the effect and uses normal fuel checks.
     assert_eq!(
         errors[1].downcast_ref::<wasmtime::Trap>(),
