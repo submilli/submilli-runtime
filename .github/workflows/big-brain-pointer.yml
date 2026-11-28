@@ -1,0 +1,10 @@
+name: Big Brain pointer
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    uses: submilli/.github/.github/workflows/big-brain-pointer.yml@main
