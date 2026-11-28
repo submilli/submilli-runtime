@@ -325,6 +325,31 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             doc: crate::doc(FileId::GIT, "/** Fetch and fast-forward the current branch under git.fetch. Divergence and dirty worktrees are refused.\n * @capability git.fetch { path: string, remoteName: $remote, remote: string, branch: string }\n */"),
         },
     );
+    methods.insert(
+        "push".into(),
+        MethodSig { overloads: Vec::new(),
+            optional: false,
+            generics: Default::default(),
+            params: vec![
+                default_string("remote", "origin"),
+                default_string("branch", ""),
+            ],
+            ret: with_optional(
+                object(
+                    &[
+                        ("branch", Type::String),
+                        ("current", Type::String),
+                        ("upToDate", Type::Boolean),
+                    ],
+                    false,
+                ),
+                "previous",
+                Type::String,
+            ),
+            predicate: None,
+            doc: crate::doc(FileId::GIT, "/** Push a local branch to an HTTPS remote under git.push. Empty branch pushes the current branch; detached HEAD and non-fast-forward updates are refused. Authentication uses host-only GIT_TOKEN when needed.\n * @capability git.push { path: string, remoteName: $remote, remote: string, branch: string }\n */"),
+        },
+    );
     defs.types.insert(
         "Repository".into(),
         TypeSymbol {

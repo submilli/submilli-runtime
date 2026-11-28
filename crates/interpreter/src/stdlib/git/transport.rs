@@ -5,7 +5,10 @@ use base64::Engine;
 use gix::protocol::transport::client::blocking_io::http;
 use serde_json::json;
 use std::io::{self, BufRead, Cursor, Read, Seek, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use wasmtime::{Result, bail};
 
 pub fn validate_url(value: &str) -> Result<()> {
@@ -77,21 +80,14 @@ fn fetch_inner(
         .repo
         .remote_at_without_url_rewrite(url.as_str())?
         .with_fetch_tags(gix::remote::fetch::Tags::None);
-    let http = Client {
-        job: job.clone(),
-        url: url.clone(),
-        spool_dir: Arc::new(snapshot.spool()?),
-        spool_quota: snapshot.staged_quota()?,
-        limits: snapshot.transfer(),
-        objects: Arc::new(snapshot.thread_safe_objects()?),
-    };
-    let transport = http::Transport::new_http(
-        http,
-        gix::url::parse(url.as_bytes())?,
-        // Keep the validated wire grammar fixed: V1 with sideband pack data.
-        gix::protocol::transport::Protocol::V1,
-        false,
-    );
+    let transport = http_transport(
+        snapshot,
+        job,
+        url,
+        ClientService::UploadPack {
+            objects: Arc::new(snapshot.thread_safe_objects()?),
+        },
+    )?;
     let connection = remote
         .to_connection_with_transport(transport)
         .with_credentials(|_| Ok(None));
@@ -305,18 +301,395 @@ pub fn pull(
     Ok(json!({"previous":old.to_string(),"current":next.to_string()}))
 }
 
+/// Headroom reserved inside `snapshot.max_bytes` for the pkt-line ref-update
+/// command header and flush so gix hits `ResourceExhaustion` (`MemoryLimit`)
+/// cleanly before `RequestWriter::write` trips `job.max_bytes`.
+const PUSH_COMMAND_HEADER_HEADROOM: u64 = 65_536;
+
+pub fn push(
+    snapshot: &Snapshot,
+    job: &Job,
+    remote_name: &str,
+    requested_branch: &str,
+) -> Result<serde_json::Value> {
+    push_inner(snapshot, job, remote_name, requested_branch).map_err(classify_push_failure)
+}
+
+#[allow(clippy::result_large_err)] // Gix fixes the credentials callback error type.
+fn push_inner(
+    snapshot: &Snapshot,
+    job: &Job,
+    remote_name: &str,
+    requested_branch: &str,
+) -> Result<serde_json::Value> {
+    let branch = if requested_branch.is_empty() {
+        operations::current_branch(snapshot)?
+            .ok_or_else(|| wasmtime::Error::msg("git.push: detached HEAD"))?
+    } else {
+        requested_branch.to_owned()
+    };
+    super::storage::validate_branch(&branch)?;
+    let remotes = snapshot.remotes()?;
+    let url = remotes
+        .get(remote_name)
+        .ok_or_else(|| wasmtime::Error::msg("git.push: remote not found"))?;
+    let canonical = canonical_url(url)?;
+    job.check(
+        "git.push",
+        json!({"path": job.path, "remote": canonical, "remoteName": remote_name, "branch": branch}),
+    )?;
+
+    let local_ref_name = format!("refs/heads/{branch}");
+    snapshot.validate_reference_spelling(&local_ref_name)?;
+    let Some(local_ref) = snapshot.repo.try_find_reference(&local_ref_name)? else {
+        bail!("git.push: local branch '{branch}' does not exist");
+    };
+    let Some(local_oid) = local_ref.try_id() else {
+        bail!(
+            "git: symbolic local branch aliases are unsupported; select a direct branch with native Git"
+        );
+    };
+    if snapshot.repo.find_header(local_oid)?.kind() != gix::objs::Kind::Commit {
+        bail!("git.push: local branch '{branch}' does not point to a commit");
+    }
+    super::object::commit(snapshot, local_oid.detach(), snapshot.max_bytes)?;
+
+    let tracking_ref = format!("refs/remotes/{remote_name}/{branch}");
+    snapshot.validate_reference_updates(std::slice::from_ref(&tracking_ref))?;
+    check_tracking_ref_conflicts(snapshot, &tracking_ref)?;
+
+    let remote = snapshot.repo.remote_at_without_url_rewrite(url.as_str())?;
+    let transfer = snapshot.transfer();
+    let transport = http_transport(snapshot, job, url, ClientService::ReceivePack)?;
+    let connection = remote
+        .to_connection_with_transport(transport)
+        .with_credentials(|_| Ok(None));
+
+    // Explicit non-forced refspec (`+` is never emitted).
+    let refspec = gix::refspec::parse(
+        format!("{local_ref_name}:{local_ref_name}")
+            .as_bytes()
+            .into(),
+        gix::refspec::parse::Operation::Push,
+    )?
+    .to_owned();
+    let max_pack_bytes = snapshot
+        .max_bytes
+        .saturating_sub(PUSH_COMMAND_HEADER_HEADROOM)
+        .max(1);
+    let options = gix::remote::push::Options {
+        extra_refspecs: vec![refspec],
+        handshake_parameters: Vec::new(),
+        limits: gix::remote::push::Limits {
+            max_objects: Some(transfer.pack.max_records),
+            max_object_bytes: Some(snapshot.max_bytes),
+            max_pack_bytes: Some(max_pack_bytes),
+        },
+    };
+    let prepared = connection
+        .prepare_push(gix::progress::Discard, options, &job.cancelled)
+        .inspect_err(|error| {
+            if matches!(
+                error.dominant_class(),
+                Some(gix::error::Class::ResourceExhaustion(_))
+            ) {
+                snapshot.meter.elements(transfer.pack.max_records as u64);
+                snapshot.meter.parse(max_pack_bytes);
+            }
+        })?;
+    if let Some(refs) = prepared.handshake().refs.as_deref() {
+        snapshot.meter.elements(refs.len() as u64);
+    }
+    if let Some(rejected) = prepared
+        .updates()
+        .iter()
+        .find(|update| update.plan == gix::remote::push::UpdatePlan::RejectedNonFastForward)
+    {
+        // Meter the commit walk when the remote tip exists locally so repeated
+        // catch-loops over diverged branches cannot burn unmetered CPU.
+        if snapshot.repo.has_object(rejected.old) {
+            let _ = super::history::is_ancestor(snapshot, rejected.old, rejected.new)?;
+        }
+        bail!(
+            "git.push: remote branch '{branch}' has diverged; non-fast-forward push is not supported"
+        );
+    }
+    if let Some(actionable) = prepared
+        .updates()
+        .iter()
+        .find(|update| update.plan != gix::remote::push::UpdatePlan::UpToDate)
+        && !gix::protocol::push::Capabilities::negotiate(&prepared.handshake().capabilities)
+            .report_status
+    {
+        if !actionable.old.is_null() && snapshot.repo.has_object(actionable.old) {
+            let _ = super::history::is_ancestor(snapshot, actionable.old, actionable.new)?;
+        }
+        bail!("git.push: remote does not support report-status");
+    }
+
+    let outcome = prepared
+        .with_before_send(|summary| {
+            snapshot.meter.elements(summary.num_objects as u64);
+            snapshot.meter.parse(summary.inflated_bytes);
+            snapshot.meter.hash(summary.pack_bytes);
+            snapshot.meter.io(summary.pack_bytes);
+            if snapshot.meter.is_exhausted() {
+                return Err(gix::Error::from(gix::error::cancelled(
+                    "git: out of fuel before push",
+                )));
+            }
+            if job.cancelled.load(Ordering::Relaxed) {
+                return Err(gix::Error::from(gix::error::cancelled(
+                    "git: operation cancelled",
+                )));
+            }
+            job.algorithm_fuel.before_effect();
+            Ok(())
+        })
+        .send(gix::progress::Discard, &job.cancelled)
+        .map_err(|error| {
+            if matches!(
+                error.dominant_class(),
+                Some(gix::error::Class::ResourceExhaustion(_))
+            ) {
+                snapshot.meter.parse(max_pack_bytes);
+            }
+            redact_push_failure(error.into())
+        })?;
+
+    let update = outcome
+        .updates
+        .first()
+        .ok_or_else(|| wasmtime::Error::msg("git.push: missing planned reference update"))?;
+    let previous = (!update.old.is_null()).then(|| update.old.to_string());
+    let current = update.new.to_string();
+
+    let up_to_date = match &outcome.status {
+        gix::remote::push::Status::UpToDate => true,
+        gix::remote::push::Status::Sent { response, .. } => {
+            verify_push_response(&outcome.handshake, response, &local_ref_name, &branch)?;
+            false
+        }
+    };
+
+    snapshot.invalidate_reference_cache()?;
+    snapshot.repo.reference(
+        tracking_ref,
+        update.new,
+        gix::refs::transaction::PreviousValue::Any,
+        "push: update remote-tracking branch",
+    )?;
+
+    Ok(operations::without_absent(json!({
+        "branch": branch,
+        "previous": previous,
+        "current": current,
+        "upToDate": up_to_date,
+    })))
+}
+
+/// Rejects directory/file conflicts for `tracking_ref` against existing loose
+/// and packed remote-tracking references before any network request is sent.
+fn check_tracking_ref_conflicts(snapshot: &Snapshot, tracking_ref: &str) -> Result<()> {
+    snapshot.meter_packed_references()?;
+    // Check every strict ancestor of `tracking_ref` below `refs/` (including
+    // `refs/remotes`, `refs/remotes/<remote>`, and any slash segments).
+    let mut search_from = "refs/".len();
+    while let Some(offset) = tracking_ref
+        .get(search_from..)
+        .and_then(|rest| rest.find('/'))
+    {
+        let slash = search_from + offset;
+        let ancestor = &tracking_ref[..slash];
+        snapshot.meter.syscalls(1);
+        if snapshot.repo.try_find_reference(ancestor)?.is_some() {
+            bail!(
+                "git.push: cannot update remote-tracking branch '{tracking_ref}' because '{ancestor}' already exists"
+            );
+        }
+        search_from = slash + 1;
+    }
+    // Check for descendant refs under `tracking_ref/` (loose or packed).
+    let child_prefix = format!("{tracking_ref}/");
+    snapshot.meter.syscalls(1);
+    if snapshot
+        .repo
+        .references()?
+        .prefixed(child_prefix.as_bytes())?
+        .next()
+        .is_some()
+    {
+        bail!(
+            "git.push: cannot update remote-tracking branch '{tracking_ref}' because refs exist under '{child_prefix}'"
+        );
+    }
+    // Also reject an existing loose directory at `.git/{tracking_ref}` (e.g. empty directory).
+    snapshot.meter.syscalls(1);
+    match snapshot
+        .dir
+        .symlink_metadata(format!(".git/{tracking_ref}"))
+    {
+        Ok(meta) if meta.is_dir() => {
+            bail!(
+                "git.push: cannot update remote-tracking branch '{tracking_ref}' because a directory exists at that path"
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+fn verify_push_response(
+    handshake: &gix::protocol::Handshake,
+    response: &gix::protocol::push::Response,
+    remote_ref_name: &str,
+    branch: &str,
+) -> Result<()> {
+    if response.sideband_error.is_some() {
+        bail!("git.push: remote rejected push");
+    }
+    if !response.unpack_ok {
+        bail!("git.push: remote failed to unpack pushed objects");
+    }
+    let negotiated = gix::protocol::push::Capabilities::negotiate(&handshake.capabilities);
+    if !negotiated.report_status {
+        bail!("git.push: remote does not support report-status");
+    }
+    if let Some(gix::protocol::push::RefStatus::Rejected { reason, .. }) =
+        response.ref_statuses.iter().find(|status| !status.is_ok())
+    {
+        let reason_lower = String::from_utf8_lossy(reason).to_ascii_lowercase();
+        if reason_lower.contains("non-fast-forward") || reason_lower.contains("fetch first") {
+            bail!("git.push: remote rejected non-fast-forward update to branch '{branch}'");
+        }
+        bail!("git.push: remote rejected update to branch '{branch}'");
+    }
+    let accepted = response
+        .ref_statuses
+        .iter()
+        .any(|status| status.is_ok() && status.ref_name() == remote_ref_name.as_bytes());
+    if !accepted {
+        bail!("git.push: remote did not report status for branch '{branch}'");
+    }
+    Ok(())
+}
+
+fn classify_push_failure(error: wasmtime::Error) -> wasmtime::Error {
+    known_push_failure(&error).unwrap_or(error)
+}
+
+fn redact_push_failure(error: wasmtime::Error) -> wasmtime::Error {
+    known_push_failure(&error).unwrap_or_else(|| {
+        wasmtime::Error::msg("git.push: push failed while sending repository data")
+    })
+}
+
+fn known_push_failure(error: &wasmtime::Error) -> Option<wasmtime::Error> {
+    if let Some(message) = http_setup_failure(error) {
+        return Some(crate::runtime::host::fatal_host_error(message));
+    }
+    if let Some(limit) = own_limit(error) {
+        return Some(limit);
+    }
+    if let Some(mapped) = gix_push_limit_or_cancel(error) {
+        return Some(mapped);
+    }
+    client_message(error).map(|message| wasmtime::Error::msg(message.to_owned()))
+}
+
+fn gix_push_limit_or_cancel(error: &wasmtime::Error) -> Option<wasmtime::Error> {
+    find_cause(error, |cause| {
+        let gix_error = cause.downcast_ref::<gix::Error>()?;
+        match gix_error.dominant_class() {
+            Some(gix::error::Class::ResourceExhaustion(_)) => {
+                Some(super::storage::memory_limit("push pack"))
+            }
+            Some(gix::error::Class::Cancelled) => {
+                Some(wasmtime::Error::msg("git: operation cancelled"))
+            }
+            _ => None,
+        }
+    })
+}
+
+fn client_message(error: &wasmtime::Error) -> Option<&str> {
+    find_cause(error, |cause| {
+        cause
+            .downcast_ref::<ClientMessage>()
+            .map(|msg| msg.0.as_str())
+    })
+}
+
+fn http_transport(
+    snapshot: &Snapshot,
+    job: &Job,
+    url: &str,
+    service: ClientService,
+) -> Result<http::Transport<Client>> {
+    let http = Client {
+        job: job.clone(),
+        url: url.to_owned(),
+        service,
+        authenticated: Arc::new(AtomicBool::new(false)),
+        spool_dir: Arc::new(snapshot.spool()?),
+        spool_quota: snapshot.staged_quota()?,
+        limits: snapshot.transfer(),
+    };
+    Ok(http::Transport::new_http(
+        http,
+        gix::url::parse(url.as_bytes())?,
+        // Keep the validated wire grammar fixed: V1 with sideband framing.
+        gix::protocol::transport::Protocol::V1,
+        false,
+    ))
+}
+
+/// A safe diagnostic generated by our own HTTP client (never remote body text or secrets).
+#[derive(Debug)]
+struct ClientMessage(String);
+
+impl std::fmt::Display for ClientMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ClientMessage {}
+
+#[derive(Clone)]
+enum ClientService {
+    UploadPack {
+        /// The objects the repository has, which a fetched delta may name as its base.
+        objects: Arc<gix::odb::Store>,
+    },
+    ReceivePack,
+}
+
+impl ClientService {
+    fn wire_service(&self) -> gix::protocol::transport::Service {
+        match self {
+            Self::UploadPack { .. } => gix::protocol::transport::Service::UploadPack,
+            Self::ReceivePack => gix::protocol::transport::Service::ReceivePack,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Client {
     job: Job,
     url: String,
+    service: ClientService,
+    /// Set once a `401` retry succeeds in this operation so a follow-up `POST`
+    /// sends credentials on the first attempt instead of transmitting a pack twice.
+    authenticated: Arc<AtomicBool>,
     /// Where responses are written as they arrive: a directory in the stage.
     spool_dir: Arc<cap_std::fs::Dir>,
     /// The size limit the spooled responses count against.
     spool_quota: super::stage::StagedQuota,
     /// What every response may hold, and what it may make gix hold in memory.
     limits: Transfer,
-    /// The objects the repository has, which a fetched delta may name as its base.
-    objects: Arc<gix::odb::Store>,
 }
 
 /// The limits on a fetch's responses.
@@ -371,53 +744,38 @@ struct Response {
 }
 
 impl Client {
-    fn response(&self, request: &HttpRequest) -> io::Result<Response> {
-        self.job.check_cancelled().map_err(io_error)?;
+    fn response(&self, request: &mut HttpRequest) -> io::Result<Response> {
+        self.job.check_cancelled().map_err(client_io_error)?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut spool = self.spool_writer()?;
-        self.job.algorithm_fuel.before_effect();
-        let mut response = self
-            .wait(
+        // For receive-pack, GET discovery has no external side effect, so keep the fuel
+        // ceiling active through pack generation and switch to forgiveness before POST.
+        if matches!(self.service, ClientService::UploadPack { .. }) || request.method != "GET" {
+            self.job.algorithm_fuel.before_effect();
+        }
+        let pre_authenticated = self.authenticated.load(Ordering::Relaxed);
+        let mut response = if pre_authenticated {
+            self.send_authenticated(request, deadline, &mut spool)?
+        } else {
+            self.wait(
                 deadline,
                 self.job.http.send_without_redirects_to(request, &mut spool),
             )?
-            .map_err(|error| transport_error(error, &spool, http_error))?;
+            .map_err(|error| transport_error(error, &spool, http_error))?
+        };
         if !same_url(&response.final_url, &request.url) {
-            return Err(io_error("git: redirects are unsupported"));
+            return Err(client_io_error("git: redirects are unsupported"));
         }
-        if response.status == 401 {
-            let username =
-                self.job.config.username.as_deref().ok_or_else(|| {
-                    io_error("git: configure git.username for authenticated access")
-                })?;
-            let token = self
-                .wait(deadline, self.job.secrets.get("GIT_TOKEN"))?
-                .map_err(|_| io_error("git: token resolution failed"))?
-                .ok_or_else(|| io_error("git: declare GIT_TOKEN for private repositories"))?;
-            let encoded =
-                base64::engine::general_purpose::STANDARD.encode(format!("{username}:{token}"));
-            let mut authenticated = request.clone();
-            authenticated
-                .headers
-                .push(("Authorization".into(), format!("Basic {encoded}")));
-            self.job.check_cancelled().map_err(io_error)?;
+        if response.status == 401 && !pre_authenticated {
             spool = self.spool_writer()?;
-            response = self
-                .wait(
-                    deadline,
-                    self.job
-                        .http
-                        .send_without_redirects_to(&authenticated, &mut spool),
-                )?
-                .map_err(|error| {
-                    transport_error(error, &spool, |error| match error {
-                        HttpError::Internal(_) => http_error(error),
-                        _ => io_error("git: authenticated request failed"),
-                    })
-                })?;
+            response = self.send_authenticated(request, deadline, &mut spool)?;
+            if same_url(&response.final_url, &request.url) && (200..300).contains(&response.status)
+            {
+                self.authenticated.store(true, Ordering::Relaxed);
+            }
         }
         if !same_url(&response.final_url, &request.url) || !(200..300).contains(&response.status) {
-            return Err(io_error(format!(
+            return Err(client_io_error(format!(
                 "git: HTTPS request failed with status {}",
                 response.status
             )));
@@ -425,27 +783,88 @@ impl Client {
         let mut body = spool.file;
         // Checked from disk as a stream, then handed to gix from the start.
         body.seek(io::SeekFrom::Start(0))?;
-        // Read back twice, by the check and by gix, which hashes a pack whole.
+        // Read back twice, by the check and by gix, which hashes a fetched pack whole.
         let spooled = body.metadata()?.len();
         self.job.meter.io(spooled.saturating_mul(2));
-        if request.method != "GET" {
-            self.job.meter.hash(spooled);
+        match (&self.service, request.method.as_str()) {
+            (_, "GET") => {
+                super::pack_limits::validate_advertisement(
+                    &mut io::BufReader::new(&mut body),
+                    self.limits.pack,
+                    &self.job.cancelled,
+                )?;
+            }
+            (ClientService::ReceivePack, _) => {
+                let expect_sideband =
+                    super::pack_limits::receive_pack_requested_sideband(&request.body);
+                super::pack_limits::validate_receive_pack_response(
+                    &mut io::BufReader::new(&mut body),
+                    expect_sideband,
+                    self.limits.pack,
+                    &self.job.cancelled,
+                )?;
+            }
+            (ClientService::UploadPack { objects }, _) => {
+                self.job.meter.hash(spooled);
+                let objects = objects.to_handle_arc();
+                super::pack_limits::validate_upload_pack_response(
+                    &mut io::BufReader::new(&mut body),
+                    self.limits.pack,
+                    &|id| gix::odb::pack::Find::contains(&objects, id),
+                    &self.job.meter,
+                    &self.job.cancelled,
+                )?;
+            }
         }
-        let objects = self.objects.to_handle_arc();
-        super::pack_limits::validate(
-            &mut io::BufReader::new(&mut body),
-            request.method == "GET",
-            self.limits.pack,
-            &|id| gix::odb::pack::Find::contains(&objects, id),
-            &self.job.meter,
-            &self.job.cancelled,
-        )?;
         body.seek(io::SeekFrom::Start(0))?;
-        self.job.check_cancelled().map_err(io_error)?;
+        self.job.check_cancelled().map_err(client_io_error)?;
         Ok(Response {
             headers: response.headers,
             body,
         })
+    }
+
+    /// Attaches `Basic` credentials in place (avoiding cloning `request.body`),
+    /// executes the authenticated request with identical redaction on failure,
+    /// and strips the credential header before returning.
+    fn send_authenticated(
+        &self,
+        request: &mut HttpRequest,
+        deadline: tokio::time::Instant,
+        spool: &mut SpoolWriter,
+    ) -> io::Result<crate::stdlib::http::transport::HttpResponse> {
+        let username = self.job.config.username.as_deref().ok_or_else(|| {
+            client_io_error("git: configure git.username for authenticated access")
+        })?;
+        let token = self
+            .wait(deadline, self.job.secrets.get("GIT_TOKEN"))?
+            .map_err(|_| client_io_error("git: token resolution failed"))?
+            .ok_or_else(|| client_io_error("git: declare GIT_TOKEN for private repositories"))?;
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{token}"));
+        request
+            .headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+        request
+            .headers
+            .push(("Authorization".into(), format!("Basic {encoded}")));
+        let result = (|| {
+            self.job.check_cancelled().map_err(client_io_error)?;
+            self.wait(
+                deadline,
+                self.job.http.send_without_redirects_to(request, spool),
+            )?
+            .map_err(|error| {
+                transport_error(error, spool, |error| match error {
+                    HttpError::Internal(_) => http_error(error),
+                    _ => client_io_error("git: authenticated request failed"),
+                })
+            })
+        })();
+        request
+            .headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+        result
     }
 
     /// A new file in the spool, for one response's body.
@@ -483,12 +902,16 @@ impl Client {
         url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> io::Result<Arc<Mutex<Pending>>> {
-        // Gix may request only the smart-HTTP endpoints of this exact repository.
+        // Gix may request only the smart-HTTP endpoints for this exact repository and service.
         let base = self.url.trim_end_matches('/');
-        if !same_url(url, &format!("{base}/info/refs?service=git-upload-pack"))
-            && !same_url(url, &format!("{base}/git-upload-pack"))
-        {
-            return Err(io_error("git: unexpected transport endpoint"));
+        let service = self.service.wire_service().as_str();
+        let expected = match method {
+            "GET" => format!("{base}/info/refs?service={service}"),
+            "POST" => format!("{base}/{service}"),
+            _ => return Err(client_io_error("git: unexpected transport method")),
+        };
+        if !same_url(url, &expected) {
+            return Err(client_io_error("git: unexpected transport endpoint"));
         }
         let headers = headers
             .into_iter()
@@ -550,10 +973,10 @@ fn check_wait(
     deadline: tokio::time::Instant,
 ) -> io::Result<()> {
     if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err(io_error("git: operation cancelled"));
+        return Err(client_io_error("git: operation cancelled"));
     }
     if tokio::time::Instant::now() >= deadline {
-        return Err(io_error("git: operation timed out"));
+        return Err(client_io_error("git: operation timed out"));
     }
     Ok(())
 }
@@ -643,7 +1066,8 @@ impl ResponseReader {
                 return Err(io_error("git: request body is still open"));
             }
             if pending.response.is_none() {
-                pending.response = Some(pending.client.response(&pending.request)?);
+                let client = pending.client.clone();
+                pending.response = Some(client.response(&mut pending.request)?);
             }
             let response = pending
                 .response
@@ -694,7 +1118,7 @@ impl Write for RequestWriter {
         if pending.request.body.len().saturating_add(bytes.len())
             > pending.client.job.max_bytes as usize
         {
-            return Err(io_error("git: request exceeds transfer limit"));
+            return Err(client_io_error("git: request exceeds transfer limit"));
         }
         pending.request.body.extend_from_slice(bytes);
         Ok(bytes.len())
@@ -763,6 +1187,10 @@ impl http::Http for Client {
 }
 fn io_error(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(error.to_string())
+}
+
+fn client_io_error(error: impl std::fmt::Display) -> io::Error {
+    io::Error::other(ClientMessage(error.to_string()))
 }
 
 fn same_url(left: &str, right: &str) -> bool {
@@ -937,9 +1365,12 @@ mod tests {
         )
         .unwrap();
         Client {
+            service: ClientService::UploadPack {
+                objects: Arc::new(objects),
+            },
+            authenticated: Arc::new(AtomicBool::new(false)),
             spool_dir: Arc::new(spool_dir),
             spool_quota: Default::default(),
-            objects: Arc::new(objects),
             limits: Transfer {
                 max_transfer_bytes: 4096,
                 pack: crate::stdlib::git::pack_limits::Limits {
@@ -986,8 +1417,8 @@ mod tests {
                     Vec::<String>::new(),
                 )
                 .unwrap();
-            let request = pending.lock().unwrap().request.clone();
-            client.response(&request)
+            let mut request = pending.lock().unwrap().request.clone();
+            client.response(&mut request)
         })
     }
 
@@ -1119,5 +1550,79 @@ mod tests {
             ));
         }
         assert!(!same_url("invalid", "invalid"));
+    }
+
+    #[test]
+    fn verify_push_response_checks_sideband_contradictions_and_report_status() {
+        let caps_with_report = gix::protocol::transport::client::Capabilities::from_bytes(
+            b"\0report-status side-band-64k",
+        )
+        .unwrap()
+        .0;
+        let caps_without_report =
+            gix::protocol::transport::client::Capabilities::from_bytes(b"\0side-band-64k")
+                .unwrap()
+                .0;
+        let handshake = gix::protocol::Handshake {
+            server_protocol_version: gix::protocol::transport::Protocol::V1,
+            capabilities: caps_with_report,
+            refs: None,
+            v1_shallow_updates: None,
+        };
+
+        // Pure sideband channel-3 error takes precedence over `!unpack_ok`.
+        let sideband_err = gix::protocol::push::Response {
+            unpack_ok: false,
+            unpack_message: Some("fatal".into()),
+            ref_statuses: Vec::new(),
+            remote_messages: Vec::new(),
+            sideband_error: Some("fatal".into()),
+        };
+        let err =
+            verify_push_response(&handshake, &sideband_err, "refs/heads/main", "main").unwrap_err();
+        assert_eq!(err.to_string(), "git.push: remote rejected push");
+
+        // Contradictory `[Ok, Rejected]` is rejected.
+        let contradictory = gix::protocol::push::Response {
+            unpack_ok: true,
+            unpack_message: None,
+            ref_statuses: vec![
+                gix::protocol::push::RefStatus::Ok {
+                    ref_name: "refs/heads/main".into(),
+                },
+                gix::protocol::push::RefStatus::Rejected {
+                    ref_name: "refs/heads/main".into(),
+                    reason: "non-fast-forward".into(),
+                },
+            ],
+            remote_messages: Vec::new(),
+            sideband_error: None,
+        };
+        let err = verify_push_response(&handshake, &contradictory, "refs/heads/main", "main")
+            .unwrap_err();
+        assert!(err.to_string().contains("non-fast-forward"), "{err}");
+
+        // Missing `report-status` capability is rejected.
+        let no_report = gix::protocol::Handshake {
+            server_protocol_version: gix::protocol::transport::Protocol::V1,
+            capabilities: caps_without_report,
+            refs: None,
+            v1_shallow_updates: None,
+        };
+        let empty_ok = gix::protocol::push::Response {
+            unpack_ok: true,
+            unpack_message: None,
+            ref_statuses: Vec::new(),
+            remote_messages: Vec::new(),
+            sideband_error: None,
+        };
+        let err =
+            verify_push_response(&no_report, &empty_ok, "refs/heads/main", "main").unwrap_err();
+        assert!(err.to_string().contains("report-status"), "{err}");
+
+        // Missing target ref status line is rejected.
+        let err =
+            verify_push_response(&handshake, &empty_ok, "refs/heads/main", "main").unwrap_err();
+        assert!(err.to_string().contains("did not report status"), "{err}");
     }
 }

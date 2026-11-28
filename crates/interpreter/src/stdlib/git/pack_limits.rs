@@ -26,24 +26,27 @@ pub(super) struct Limits {
 /// are dropped as they are read.
 const MAX_CONTROL_RECORDS: usize = 1_000_000;
 
-/// Checks one response read from `body`. `local` says whether the repository
-/// already has an object: a delta in the pack may name one as its base.
-/// Each entry's work is counted on `meter` as it goes: this check's share
-/// before the entry is inflated, so the fuel ceiling can stop the check part
-/// way; gix's once it inflates as declared; a delta's result once its chain
-/// is within limits. A fetch that fails later still pays for what it did.
-pub(super) fn validate(
+/// Maximum status bytes buffered for a `POST /git-receive-pack` `report-status`
+/// response. `Repository.push` updates a single branch, so legitimate status
+/// output is tiny while bounding this protects `gix-protocol::push::send_pack`
+/// from buffering an adversarial multi-megabyte status reply in memory.
+const MAX_RECEIVE_PACK_STATUS_BYTES: u64 = 1024 * 1024;
+
+/// Checks a `POST /git-upload-pack` response read from `body`. `local` says
+/// whether the repository already has an object: a delta in the pack may name
+/// one as its base. Each entry's work is counted on `meter` as it goes: this
+/// check's share before the entry is inflated, so the fuel ceiling can stop the
+/// check part way; gix's once it inflates as declared; a delta's result once
+/// its chain is within limits. A fetch that fails later still pays for what it
+/// did.
+pub(super) fn validate_upload_pack_response(
     body: &mut dyn BufRead,
-    advertisement: bool,
     limits: Limits,
     local: &dyn Fn(&gix::oid) -> bool,
     meter: &Meter,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
     check_cancelled(cancelled)?;
-    if advertisement {
-        return validate_advertisement(body, limits, cancelled);
-    }
     let mut start = [0u8; 4];
     let read = read_up_to(body, &mut start)?;
     if read == 0 {
@@ -85,11 +88,12 @@ pub(super) fn validate(
     Ok(())
 }
 
-fn validate_advertisement(
+pub(super) fn validate_advertisement(
     body: &mut dyn BufRead,
     limits: Limits,
     cancelled: &AtomicBool,
 ) -> io::Result<()> {
+    check_cancelled(cancelled)?;
     let mut records = 0;
     while let Some(payload) = packet(body)? {
         check_cancelled(cancelled)?;
@@ -102,6 +106,105 @@ fn validate_advertisement(
         }
     }
     Ok(())
+}
+
+/// Validates a `POST /git-receive-pack` response: V1 pkt-line framing matching
+/// the negotiated sideband mode (`expect_sideband`), bounding outer record
+/// counts (including empty channel-1 packets), inner `report-status` record
+/// counts, and total status bytes that `gix-protocol::push::send_pack` will
+/// retain in memory.
+pub(super) fn validate_receive_pack_response(
+    body: &mut dyn BufRead,
+    expect_sideband: bool,
+    limits: Limits,
+    cancelled: &AtomicBool,
+) -> io::Result<()> {
+    check_cancelled(cancelled)?;
+    let max_status_bytes = limits.max_object_bytes.min(MAX_RECEIVE_PACK_STATUS_BYTES);
+    let mut data_records = 0usize;
+    let mut status_bytes = 0u64;
+    let mut outer_records = 0usize;
+    let mut sideband_channel1 = Vec::new();
+    while let Some(payload) = packet(body)? {
+        check_cancelled(cancelled)?;
+        outer_records += 1;
+        if outer_records > MAX_CONTROL_RECORDS {
+            return Err(invalid("protocol record limit exceeded"));
+        }
+        if payload.is_empty() {
+            continue;
+        }
+        if expect_sideband {
+            match payload.first() {
+                Some(2 | 3) => {}
+                Some(1) => {
+                    let chunk = &payload[1..];
+                    status_bytes = status_bytes.saturating_add(chunk.len() as u64);
+                    if status_bytes > max_status_bytes {
+                        return Err(super::storage::memory_limit_io("receive-pack response"));
+                    }
+                    sideband_channel1.extend_from_slice(chunk);
+                }
+                _ => return Err(invalid("unexpected receive-pack response record")),
+            }
+        } else if receive_pack_status_line(&payload) {
+            data_records += 1;
+            if data_records > limits.max_records {
+                return Err(invalid("protocol record limit exceeded"));
+            }
+            status_bytes = status_bytes.saturating_add(payload.len() as u64);
+            if status_bytes > max_status_bytes {
+                return Err(super::storage::memory_limit_io("receive-pack response"));
+            }
+        } else {
+            return Err(invalid("unexpected receive-pack response record"));
+        }
+    }
+    if expect_sideband && !sideband_channel1.is_empty() {
+        let mut inner = io::Cursor::new(sideband_channel1);
+        let mut inner_records = 0usize;
+        let mut inner_flushes = 0usize;
+        while let Some(payload) = packet(&mut inner)? {
+            check_cancelled(cancelled)?;
+            if payload.is_empty() {
+                inner_flushes += 1;
+                if inner_flushes > MAX_CONTROL_RECORDS {
+                    return Err(invalid("protocol record limit exceeded"));
+                }
+                continue;
+            }
+            if !receive_pack_status_line(&payload) {
+                return Err(invalid("unexpected receive-pack status line"));
+            }
+            inner_records += 1;
+            if inner_records > limits.max_records {
+                return Err(invalid("protocol record limit exceeded"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Inspects the first pkt-line of a `POST /git-receive-pack` request body to
+/// determine whether the client requested `side-band-64k` or `side-band`.
+pub(super) fn receive_pack_requested_sideband(request_body: &[u8]) -> bool {
+    let Ok(Some(first_line)) = packet(&mut io::Cursor::new(request_body)) else {
+        return false;
+    };
+    let Some(nul) = first_line.iter().position(|&b| b == 0) else {
+        return false;
+    };
+    let caps = first_line[nul + 1..]
+        .strip_suffix(b"\n")
+        .unwrap_or(&first_line[nul + 1..]);
+    caps.split(|&b| b == b' ')
+        .any(|cap| cap == b"side-band-64k" || cap == b"side-band")
+}
+
+fn receive_pack_status_line(payload: &[u8]) -> bool {
+    [b"unpack ".as_slice(), b"ok ", b"ng ", b"ERR "]
+        .iter()
+        .any(|prefix| payload.starts_with(prefix))
 }
 
 /// Reads one pkt-line: `Some(payload)`, an empty payload for a flush, or
@@ -481,18 +584,23 @@ mod tests {
     use super::*;
 
     fn validate(body: &[u8], advertisement: bool, budget: u64) -> io::Result<()> {
-        super::validate(
-            &mut io::Cursor::new(body),
-            advertisement,
-            Limits {
-                max_records: (budget / 512).clamp(1, 10_000) as usize,
-                max_object_bytes: budget,
-                max_chain_bytes: budget,
-            },
-            &|_| true,
-            &Meter::default(),
-            &AtomicBool::new(false),
-        )
+        let limits = Limits {
+            max_records: (budget / 512).clamp(1, 10_000) as usize,
+            max_object_bytes: budget,
+            max_chain_bytes: budget,
+        };
+        let cancelled = AtomicBool::new(false);
+        if advertisement {
+            super::validate_advertisement(&mut io::Cursor::new(body), limits, &cancelled)
+        } else {
+            super::validate_upload_pack_response(
+                &mut io::Cursor::new(body),
+                limits,
+                &|_| true,
+                &Meter::default(),
+                &cancelled,
+            )
+        }
     }
 
     const BUDGET: u64 = 1024 * 1024;
@@ -574,9 +682,8 @@ mod tests {
             max_chain_bytes: BUDGET,
         };
         let check = |body: &[u8], local: bool| {
-            super::validate(
+            super::validate_upload_pack_response(
                 &mut io::Cursor::new(body),
-                false,
                 limits,
                 &|_| local,
                 &Meter::default(),
@@ -601,9 +708,8 @@ mod tests {
         let pack = complete_pack(&[compressed_entry(Header::Blob, &contents)]);
         assert!(pack.len() < 2_000, "{}", pack.len());
         let meter = Meter::default();
-        super::validate(
+        super::validate_upload_pack_response(
             &mut io::Cursor::new(&pack),
-            false,
             Limits {
                 max_records: 16,
                 max_object_bytes: BUDGET,
@@ -645,9 +751,8 @@ mod tests {
         }
         let pack = complete_pack(&entries);
         let meter = Meter::default();
-        super::validate(
+        super::validate_upload_pack_response(
             &mut io::Cursor::new(&pack),
-            false,
             Limits {
                 max_records: 64,
                 max_object_bytes: BUDGET,
@@ -688,9 +793,8 @@ mod tests {
             crate::runtime::fuel::PARSE.cost(1_000) + crate::runtime::fuel::HASH.cost(1_000),
             Some(std::sync::Arc::clone(&cancelled)),
         );
-        let error = super::validate(
+        let error = super::validate_upload_pack_response(
             &mut io::Cursor::new(&pack),
-            false,
             Limits {
                 max_records: 16,
                 max_object_bytes: BUDGET,
@@ -716,9 +820,8 @@ mod tests {
             crate::runtime::fuel::PARSE.cost(400_000) + crate::runtime::fuel::HASH.cost(400_000),
             Some(std::sync::Arc::clone(&cancelled)),
         );
-        let error = super::validate(
+        let error = super::validate_upload_pack_response(
             &mut io::Cursor::new(&pack),
-            false,
             Limits {
                 max_records: 16,
                 max_object_bytes: BUDGET,
@@ -764,9 +867,8 @@ mod tests {
             assert!(validate(&complete_pack(&[entry]), false, BUDGET).is_err());
         }
         assert!(
-            super::validate(
+            super::validate_upload_pack_response(
                 &mut io::Cursor::new(complete_pack(&[])),
-                false,
                 Limits {
                     max_records: 1,
                     max_object_bytes: BUDGET,
@@ -778,6 +880,130 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_receive_pack_response_framing_and_bounds() {
+        let limits = Limits {
+            max_records: 4,
+            max_object_bytes: 512,
+            max_chain_bytes: 512,
+        };
+        let cancelled = AtomicBool::new(false);
+        // Sideband channel 1 carrying report-status split across two packets, plus channel 2 progress and flush.
+        let inner = [
+            packet_line(b"unpack ok\n"),
+            packet_line(b"ok refs/heads/main\n"),
+            b"0000".to_vec(),
+        ]
+        .concat();
+        let (part1, part2) = inner.split_at(10);
+        let valid_sideband = [
+            packet_line(&[&[2], b"remote: done\n".as_slice()].concat()),
+            sideband(part1),
+            sideband(part2),
+            b"0000".to_vec(),
+        ]
+        .concat();
+        validate_receive_pack_response(
+            &mut io::Cursor::new(&valid_sideband),
+            true,
+            limits,
+            &cancelled,
+        )
+        .unwrap();
+
+        // Plain report-status without sideband.
+        validate_receive_pack_response(&mut io::Cursor::new(&inner), false, limits, &cancelled)
+            .unwrap();
+
+        // Sideband mode rejects plain lines outside channel 1.
+        assert!(
+            validate_receive_pack_response(&mut io::Cursor::new(&inner), true, limits, &cancelled)
+                .is_err()
+        );
+
+        // Non-sideband mode rejects sideband channels (preventing raw_lines bypass via 0x02/0x03).
+        let spoofed_channel2 = packet_line(&[&[2u8][..], &vec![b'x'; 600][..]].concat());
+        assert!(
+            validate_receive_pack_response(
+                &mut io::Cursor::new(&spoofed_channel2),
+                false,
+                limits,
+                &cancelled,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_receive_pack_response(
+                &mut io::Cursor::new(&valid_sideband),
+                false,
+                limits,
+                &cancelled,
+            )
+            .is_err()
+        );
+
+        // Unexpected line is rejected.
+        let unexpected = packet_line(b"PACK\x00\x00\x00\x02");
+        assert!(
+            validate_receive_pack_response(
+                &mut io::Cursor::new(&unexpected),
+                false,
+                limits,
+                &cancelled,
+            )
+            .is_err()
+        );
+
+        // Plain lines exceeding max_records are rejected.
+        let too_many_plain: Vec<u8> = (0..5)
+            .flat_map(|_| packet_line(b"ok refs/heads/main\n"))
+            .collect();
+        assert!(
+            validate_receive_pack_response(
+                &mut io::Cursor::new(&too_many_plain),
+                false,
+                limits,
+                &cancelled,
+            )
+            .is_err()
+        );
+
+        // Inner channel-1 pkt-lines smuggled inside a single packet exceeding max_records are rejected.
+        let smuggled_inner: Vec<u8> = (0..5).flat_map(|_| packet_line(b"ok a\n")).collect();
+        let smuggled = [sideband(&smuggled_inner), b"0000".to_vec()].concat();
+        assert!(
+            validate_receive_pack_response(
+                &mut io::Cursor::new(&smuggled),
+                true,
+                limits,
+                &cancelled,
+            )
+            .is_err()
+        );
+
+        // Oversized status payload is rejected with a memory limit error.
+        let huge_line = [b"ok ".as_slice(), &vec![b'a'; 600], b"\n".as_slice()].concat();
+        let huge_sideband = [sideband(&packet_line(&huge_line)), b"0000".to_vec()].concat();
+        let err = validate_receive_pack_response(
+            &mut io::Cursor::new(&huge_sideband),
+            true,
+            limits,
+            &cancelled,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("receive-pack response"), "{err}");
+
+        // Request-header sideband detection.
+        let with_sb = packet_line(
+            b"0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/heads/main\0report-status side-band-64k\n",
+        );
+        let without_sb = packet_line(
+            b"0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/heads/main\0report-status\n",
+        );
+        assert!(receive_pack_requested_sideband(&with_sb));
+        assert!(!receive_pack_requested_sideband(&without_sb));
     }
 
     #[test]

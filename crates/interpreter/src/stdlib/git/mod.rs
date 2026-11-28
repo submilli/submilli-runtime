@@ -328,6 +328,15 @@ fn pull(vfs: &Vfs, job: &Job, arguments: FetchArguments) -> Result<Value> {
     Ok(result)
 }
 
+fn push(vfs: &Vfs, job: &Job, arguments: PushArguments) -> Result<Value> {
+    let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
+    let result = transport::push(&snapshot, job, &arguments.remote, &arguments.branch)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(result)
+}
+
 #[derive(Serialize)]
 struct ShowArguments {
     revision: String,
@@ -360,6 +369,11 @@ struct RemoteArguments {
 }
 #[derive(Serialize)]
 struct FetchArguments {
+    remote: String,
+    branch: String,
+}
+#[derive(Serialize)]
+struct PushArguments {
     remote: String,
     branch: String,
 }
@@ -605,10 +619,12 @@ impl WorkingBudget {
 
     /// What `op` may count while it works: the reservation divided by what
     /// it was measured to hold per byte counted. A diff holds its patch two
-    /// or three times over as it is built and encoded; everything else
-    /// holds at most about three times what it counts.
+    /// or three times over as it is built and encoded; a push holds the
+    /// generated pack, the buffered HTTP request body, and the client's copy
+    /// simultaneously; everything else holds at most about three times what it
+    /// counts.
     fn max_bytes(&self, op: &str) -> u64 {
-        let ratio = if op == "diff" { 8 } else { 4 };
+        let ratio = if matches!(op, "diff" | "push") { 8 } else { 4 };
         (self.bytes.saturating_sub(MIN_WORKING_BYTES / 4) / ratio).min(storage::MAX_WORKING_BYTES)
     }
 }

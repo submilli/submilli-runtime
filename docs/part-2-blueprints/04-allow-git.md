@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ce94c8422f10cce79a7030a9d552c446f1a862935b3fb402581e3f527b5c2edd"
+  contentHash: "49e42576d304292aea83dbb4818b947631d81b842ce1d7f3250690a7a6c3b899"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -104,11 +104,12 @@ class Repository {
   diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string };
   fetch(remote?: string, branch?: string): { branches: string[] };
   pull(remote?: string, branch?: string): { current: string; previous: string };
+  push(remote?: string, branch?: string): { branch: string; current: string; previous?: string; upToDate: boolean };
   …
 }
 ```
 
-Git has seven capabilities:
+Git has eight capabilities:
 
 ```sh
 submilli blueprint capability list submilli:git
@@ -134,6 +135,9 @@ submilli:git
   git.fetch — Fetch or pull HTTPS remote branches into an existing repository
       fields: path: string, remoteName: string, remote: string, branch: string
       example filter: path == "/repo" and remote == "https://github.com/pied-piper/project.git"
+  git.push — Push a local branch to an HTTPS remote (fast-forward and new branches only)
+      fields: path: string, remoteName: string, remote: string, branch: string
+      example filter: path == "/repo" and remote == "https://github.com/pied-piper/project.git" and branch == "main"
   git.commit — Commit staged changes with blueprint identity
       fields: path: string, branch: string
       example filter: path == "/repo" and branch == "main"

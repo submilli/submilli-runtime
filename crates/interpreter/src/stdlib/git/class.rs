@@ -20,7 +20,7 @@ struct RepositoryClass {
 }
 
 // Class vtable slots follow the declaration's sorted method names.
-const METHODS: [&str; 15] = [
+const METHODS: [&str; 16] = [
     "add",
     "addRemote",
     "branches",
@@ -31,6 +31,7 @@ const METHODS: [&str; 15] = [
     "log",
     "ls",
     "pull",
+    "push",
     "remotes",
     "setRemoteUrl",
     "show",

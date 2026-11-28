@@ -1725,6 +1725,8 @@ Other counted work:
 
 **Fetch** (`transport.rs`, `pack_limits.rs`): each response is written to the stage's spool, `IO(N)` as received; it is read back by the check and by gix, and hashed whole by gix, `IO(2N) + HASH(N)`, for every response but the reference listing. The check counts each entry as it goes, so the ceiling stops it part way and a fetch that fails later still pays: an entry of `raw` inflated bytes is inflated by the check and by gix, `PARSE(2 raw)`, and a whole object hashed by both, `HASH(2 raw)`, the check's half before the entry is inflated and gix's once it inflates as declared; for a delta, once its chain is within limits, gix builds and hashes the object it describes, `PARSE(result) + HASH(result)`; for a base a thin pack takes from the repository, gix reads, writes and hashes it, `PARSE(base) + HASH(base)` at the size the delta declares. The pack written: `SYSCALL(8) + IO(pack) + ELEM(objects)`. `N` = spooled bytes.
 
+**Push** (`transport.rs`, `pack_limits.rs`): ref discovery (`GET /info/refs?service=git-receive-pack`) is spooled and validated before any effect (`IO(3N)`), and advertised refs are counted (`ELEM(refs)`). Pack generation is bounded by the working budget and charged in `with_before_send` before `POST /git-receive-pack`: `ELEM(objects) + PARSE(inflated) + HASH(pack) + IO(pack)`. A locally rejected non-fast-forward update meters ancestry through `history::is_ancestor` when the remote tip exists locally, and an oversized pack failure charges `PARSE(max_pack_bytes)` so catch-loops cannot spin for free. If the fuel ceiling is exceeded, the push aborts before sending any bytes to the remote; otherwise `before_effect()` switches the meter to forgiveness before the `POST`, and the bounded `report-status` response (`IO(3N)`), remote-tracking ref update (`PUB`), and guest result marshalling (`fuel::settle_result`) are settled without discarding the push result.
+
 | Function | Formula (meter, beyond `CALL + PARSE(len(args))` before and the result's `PARSE` after) | Notes |
 |---|---|---|
 | `submilli:git#Repository#constructor`, `constructor_init`, `static#open` | `O` | `remotes` parses `config` too. |
@@ -1744,6 +1746,7 @@ Other counted work:
 | `submilli:git#Repository#addRemote`, `setRemoteUrl` | `O + S + PUB` | Only `config` moves. |
 | `submilli:git#Repository#fetch` | `O + S` + the pre-flight history walk + references listed + **Fetch** + `PUB` | |
 | `submilli:git#Repository#pull` | `fetch` + the ancestry walk + `switchBranch`'s checkout | Fast-forward only. |
+| `submilli:git#Repository#push` | `O + S` + local branch resolution + **Push** + `PUB` | Fast-forward and new branches only; aborts before `POST` if fuel runs out during pack build. |
 
 **Known gaps, accepted:**
 

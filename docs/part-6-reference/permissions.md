@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ea059a0d6e1fb1cedbe84ab348ab8ea2022efb9009b7a77c897895836c3b89eb"
+  contentHash: "ad384c86245661e86e64ff5cbf84eda54d9dda8a07dafe73e3f6ef10973b8939"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -166,7 +166,7 @@ out, and a condition on a missing field is false.
 | --- | --- | --- |
 | `path`, `from`, `to`, `vfs_path` | `fs.*`, `git.*`, `http.download` | The absolute path, resolved against the working directory, with `.` and `..` resolved (`/notes/../secrets.txt` is `/secrets.txt`) |
 | `host` | `http.*` | The host without port or trailing dot (`https://api.example.com./` is `api.example.com`) |
-| `remote` | `git.clone`, `git.fetch` | The full HTTPS URL, host in lowercase, default port removed (`https://GitHub.com:443/pied-piper/./project.git` is `https://github.com/pied-piper/project.git`) |
+| `remote` | `git.clone`, `git.fetch`, `git.push` | The full HTTPS URL, host in lowercase, default port removed (`https://GitHub.com:443/pied-piper/./project.git` is `https://github.com/pied-piper/project.git`) |
 
 ### Checks some operations make
 
@@ -181,10 +181,12 @@ out, and a condition on a missing field is false.
   `git.clone` and `git.fetch` are checked with the branch the call names,
   then once for each branch fetched. A call that names none is checked
   with `branch` set to `""`, so a rule testing `branch` matches only calls
-  that name it. `git.clone` needs no `git.init`, `git.open`, or `fs.*`
-  rule. `git.init`, `git.clone`, `git.fetch`, and `git.commit` stay
+  that name it. `git.push` resolves the current branch when none is named
+  and checks `path`, `remoteName`, `remote`, and `branch` before any
+  network request or token lookup. `git.clone` needs no `git.init`, `git.open`, or `fs.*`
+  rule. `git.init`, `git.clone`, `git.fetch`, `git.push`, and `git.commit` stay
   separate from `git.open`, `git.read`, and `git.write`: an older grant of
-  only those four does not open, inspect, stage, branch, or configure
+  only those capabilities does not open, inspect, stage, branch, or configure
   remotes. Add `git.open`, `git.read`, and `git.write` for the repository
   path when upgrading a Blueprint or package that does.
 - **HTTP redirects:** each redirect is checked before it is sent, with the
@@ -245,6 +247,7 @@ read checks the requested alias name and grants no access to its target name.
 | `git.init` | `path: string` | Create a local repository and its VFS directory | `path == "/repo"` |
 | `git.clone` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Clone an HTTPS repository into a VFS directory | `path == "/repo" and remote == "https://github.com/pied-piper/project.git"` |
 | `git.fetch` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Fetch or pull HTTPS remote branches into an existing repository | `path == "/repo" and remote == "https://github.com/pied-piper/project.git"` |
+| `git.push` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Push a local branch to an HTTPS remote (fast-forward and new branches only) | `path == "/repo" and remote == "https://github.com/pied-piper/project.git" and branch == "main"` |
 | `git.commit` | `path: string`, `branch: string` | Commit staged changes with Blueprint identity | `path == "/repo" and branch == "main"` |
 
 ### `submilli:http`

@@ -147,31 +147,75 @@ fn seed_repository(dir: &Path, shape: Shape) {
     native(dir, &["gc", "-q", "--aggressive"]);
 }
 
-/// Serves `repo` over smart HTTP by running native `git upload-pack`.
-struct UploadPack {
+/// Serves `repo` over smart HTTP by running native `git upload-pack` / `git receive-pack`.
+struct GitSmartHttp {
     repo: std::path::PathBuf,
+    require_auth: bool,
+}
+
+impl GitSmartHttp {
+    fn new(repo: std::path::PathBuf) -> Self {
+        Self {
+            repo,
+            require_auth: false,
+        }
+    }
+
+    fn authenticated(repo: std::path::PathBuf) -> Self {
+        Self {
+            repo,
+            require_auth: true,
+        }
+    }
 }
 
 #[async_trait::async_trait]
-impl HttpClient for UploadPack {
+impl HttpClient for GitSmartHttp {
     async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
         panic!("Git must not use a redirect-following transport")
     }
 
-    /// Streams `upload-pack`'s output, so the server holds none of it: the
-    /// measurement is of Git alone.
+    /// Streams `upload-pack` / `receive-pack` output, so the server holds none of it:
+    /// the measurement is of Git alone.
     async fn send_without_redirects_to(
         &self,
         request: &HttpRequest,
         body: &mut (dyn std::io::Write + Send),
     ) -> Result<HttpResponse, HttpError> {
         use std::io::Write;
+        if self.require_auth
+            && !request
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        {
+            return Ok(HttpResponse {
+                status: 401,
+                status_text: "Unauthorized".into(),
+                headers: vec![("www-authenticate".into(), "Basic realm=git".into())],
+                body: Vec::new(),
+                final_url: request.url.clone(),
+            });
+        }
+        let is_receive = request.url.contains("git-receive-pack");
+        let (service, subcmd, advertise_prefix) = if is_receive {
+            (
+                "git-receive-pack",
+                "receive-pack",
+                b"001f# service=git-receive-pack\n0000".as_slice(),
+            )
+        } else {
+            (
+                "git-upload-pack",
+                "upload-pack",
+                b"001e# service=git-upload-pack\n0000".as_slice(),
+            )
+        };
         if request.method == "GET" {
-            body.write_all(b"001e# service=git-upload-pack\n0000")
-                .expect("write body");
+            body.write_all(advertise_prefix).expect("write body");
             body.write_all(&native(
                 &self.repo,
-                &["upload-pack", "--stateless-rpc", "--advertise-refs", "."],
+                &[subcmd, "--stateless-rpc", "--advertise-refs", "."],
             ))
             .expect("write body");
             return Ok(HttpResponse {
@@ -179,7 +223,7 @@ impl HttpClient for UploadPack {
                 status_text: "OK".into(),
                 headers: vec![(
                     "content-type".into(),
-                    "application/x-git-upload-pack-advertisement".into(),
+                    format!("application/x-{service}-advertisement"),
                 )],
                 body: Vec::new(),
                 final_url: request.url.clone(),
@@ -188,11 +232,11 @@ impl HttpClient for UploadPack {
         let mut child = std::process::Command::new("git")
             .arg("-C")
             .arg(&self.repo)
-            .args(["upload-pack", "--stateless-rpc", "."])
+            .args([subcmd, "--stateless-rpc", "."])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
-            .expect("spawn upload-pack");
+            .expect("spawn git smart-http service");
         child
             .stdin
             .take()
@@ -202,19 +246,19 @@ impl HttpClient for UploadPack {
         let mut stdout = child.stdout.take().expect("stdout");
         let mut chunk = [0u8; 16 * 1024];
         loop {
-            let read = std::io::Read::read(&mut stdout, &mut chunk).expect("read upload-pack");
+            let read = std::io::Read::read(&mut stdout, &mut chunk).expect("read service stdout");
             if read == 0 {
                 break;
             }
             body.write_all(&chunk[..read]).expect("write body");
         }
-        assert!(child.wait().expect("upload-pack").success());
+        assert!(child.wait().expect("git service").success());
         Ok(HttpResponse {
             status: 200,
             status_text: "OK".into(),
             headers: vec![(
                 "content-type".into(),
-                "application/x-git-upload-pack-result".into(),
+                format!("application/x-{service}-result"),
             )],
             body: Vec::new(),
             final_url: request.url.clone(),
@@ -461,9 +505,7 @@ fn measure_operation(operation: &Operation, shape: Shape, cap: u64) -> Result<Me
             (operation.prepare)(&repo);
         },
         |data| {
-            data.http_client = Arc::new(UploadPack {
-                repo: upstream_path.clone(),
-            });
+            data.http_client = Arc::new(GitSmartHttp::new(upstream_path.clone()));
         },
     )
 }
@@ -566,9 +608,7 @@ fn clone_and_work(files: &[(String, usize)]) -> Result<Measured, String> {
         DEFAULT_CAP,
         |_| {},
         |data| {
-            data.http_client = Arc::new(UploadPack {
-                repo: upstream_path,
-            });
+            data.http_client = Arc::new(GitSmartHttp::new(upstream_path));
         },
     )
 }
@@ -611,6 +651,114 @@ fn a_file_larger_than_git_may_hold_is_refused_clearly() {
     assert!((measured.peak as u64) < measured.charged, "{measured:?}");
     let error = clone_and_work(&[("large".into(), 12_000_000)])
         .expect_err("a 12 MB file needs more than Git has under 50 MB");
+    assert!(error.contains("raise max_execution_memory"), "{error}");
+}
+
+/// Pushing a committed branch (including an authenticated push near the pack
+/// ceiling) stays within its memory reservation and refuses an oversized pack
+/// cleanly before transmitting it.
+#[test]
+fn push_stays_within_memory_budget_and_refuses_oversized_pack() {
+    struct StaticToken;
+    impl submilli_engine::runtime::SecretProvider for StaticToken {
+        fn get<'a>(
+            &'a self,
+            name: &'a str,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<String>, String>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                assert_eq!(name, "GIT_TOKEN");
+                Ok(Some("push-token".into()))
+            })
+        }
+    }
+
+    if !nightly_only_requested() {
+        eprintln!("Git push memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let upstream = tempfile::tempdir().expect("upstream");
+    native(upstream.path(), &["init", "-q", "--bare", "-b", "main"]);
+    native(upstream.path(), &["config", "http.receivepack", "true"]);
+    let upstream_path = upstream.path().to_path_buf();
+
+    // Near the ~4.5 MiB push budget under DEFAULT_CAP (50 MiB, ratio = 8), authenticated.
+    let measured = measure(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            const repo = Repository.open("/repo");
+            const res = repo.push("origin", "main");
+            assert(!res.upToDate, "pushed new branch");
+        }"#,
+        DEFAULT_CAP,
+        |root| {
+            let repo = root.join("repo");
+            seed_files(&repo, &[("payload.bin".into(), 3_500_000)]);
+            native(
+                &repo,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://example.com/upstream.git",
+                ],
+            );
+        },
+        |data| {
+            data.http_client = Arc::new(GitSmartHttp::authenticated(upstream_path.clone()));
+            data.secret_provider = Arc::new(StaticToken);
+            if let Some(git) = &mut data.git {
+                git.username = Some("agent".into());
+            }
+        },
+    )
+    .expect("3.5 MB authenticated push fits under default memory limit");
+    assert!(
+        (measured.peak as u64) < measured.charged,
+        "{measured:?}: Git push used more than it was charged"
+    );
+
+    // A 6 MB uncompressible payload exceeds the push pack limit under DEFAULT_CAP (50 MiB, ratio = 8 -> ~4.5 MiB).
+    let oversized_upstream = tempfile::tempdir().expect("oversized upstream");
+    native(
+        oversized_upstream.path(),
+        &["init", "-q", "--bare", "-b", "main"],
+    );
+    native(
+        oversized_upstream.path(),
+        &["config", "http.receivepack", "true"],
+    );
+    let oversized_path = oversized_upstream.path().to_path_buf();
+    let error = measure(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            Repository.open("/repo").push("origin", "main");
+        }"#,
+        DEFAULT_CAP,
+        |root| {
+            let repo = root.join("repo");
+            seed_files(&repo, &[("huge.bin".into(), 6_000_000)]);
+            native(
+                &repo,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://example.com/upstream.git",
+                ],
+            );
+        },
+        |data| {
+            data.http_client = Arc::new(GitSmartHttp::new(oversized_path));
+        },
+    )
+    .expect_err("6 MB push exceeds memory budget");
     assert!(error.contains("raise max_execution_memory"), "{error}");
 }
 
