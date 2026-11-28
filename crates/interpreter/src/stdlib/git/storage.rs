@@ -341,7 +341,7 @@ impl Snapshot {
         self.meter.syscalls(3);
         self.meter.elements(state.entries().len() as u64);
         gix::index::File::from_state(state, stage.metadata_path("index"))
-            .write(Default::default())?;
+            .write(Default::default(), Default::default())?;
         Ok(())
     }
 
@@ -840,7 +840,7 @@ fn open_in_place(git_dir: &Path, max_bytes: u64) -> Result<gix::Repository> {
         git_dir,
         gix::open::Options::isolated()
             .open_path_as_is(true)
-            .with(gix::sec::Trust::Reduced)
+            .with_enforced_trust(gix::sec::Trust::Reduced)
             .filter_config_section(|meta| {
                 !matches!(
                     meta.source,

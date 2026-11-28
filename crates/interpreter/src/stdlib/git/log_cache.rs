@@ -49,7 +49,7 @@ impl Cache {
         snapshot.check_cancelled()?;
         snapshot.record_algorithm_fuel(fuel::SYSCALL.cost(2))?;
         let identity = FileIdentity::of(&snapshot.dir.dir_metadata()?)?;
-        let shallow_path = snapshot.repo.shallow_file();
+        let shallow_path = snapshot.repo.shallow_file()?;
         match std::fs::metadata(&shallow_path) {
             Ok(metadata) => {
                 if metadata.len() > snapshot.max_bytes {

@@ -297,6 +297,41 @@ async fn commit_rejects_symbolic_branch_alias_and_nonbranch_head() {
     }
 }
 
+#[tokio::test]
+async fn dangling_multi_hop_head_alias_is_not_treated_as_unborn() {
+    let root = repository();
+    native(
+        root.path(),
+        &["symbolic-ref", "refs/heads/alias", "refs/heads/missing"],
+    );
+    native(root.path(), &["symbolic-ref", "HEAD", "refs/heads/alias"]);
+    let vfs = Vfs::external(root.path().to_owned()).unwrap();
+    assert!(
+        worker::run(&vfs, &job(&vfs, "log"), "log", &[json!({})]).is_err(),
+        "log must fail on a dangling symbolic branch alias"
+    );
+    assert!(
+        worker::run(
+            &vfs,
+            &job(&vfs, "diff"),
+            "diff",
+            &[json!({"mode": "staged"})]
+        )
+        .is_err(),
+        "staged diff must fail on a dangling symbolic branch alias"
+    );
+    assert!(
+        worker::run(
+            &vfs,
+            &job(&vfs, "switchBranch"),
+            "switchBranch",
+            &[json!("main")]
+        )
+        .is_err(),
+        "switchBranch must fail when HEAD targets a dangling symbolic alias"
+    );
+}
+
 struct OnlyAliasBranch;
 
 impl crate::runtime::SecurityCheck for OnlyAliasBranch {
@@ -1020,7 +1055,7 @@ fn a_switch_renames_a_file_that_differs_only_in_case() {
 fn shallow_is_staged_and_published() {
     let root = repository();
     let state = snapshot(root.path());
-    let shallow = state.repo.shallow_file();
+    let shallow = state.repo.shallow_file().unwrap();
     assert!(
         !shallow.starts_with(root.path().join(".git")),
         "{shallow:?} is in .git"
@@ -1030,14 +1065,14 @@ fn shallow_is_staged_and_published() {
     drop(state);
     assert!(!root.path().join(".git/shallow").exists());
     let state = snapshot(root.path());
-    std::fs::write(state.repo.shallow_file(), &head).unwrap();
+    std::fs::write(state.repo.shallow_file().unwrap(), &head).unwrap();
     state.publish().unwrap();
     assert_eq!(
         std::fs::read(root.path().join(".git/shallow")).unwrap(),
         head
     );
     let state = snapshot(root.path());
-    std::fs::remove_file(state.repo.shallow_file()).unwrap();
+    std::fs::remove_file(state.repo.shallow_file().unwrap()).unwrap();
     state.publish().unwrap();
     assert!(!root.path().join(".git/shallow").exists());
 }

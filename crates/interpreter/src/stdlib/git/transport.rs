@@ -171,31 +171,59 @@ fn redact_fetch_failure(error: wasmtime::Error) -> wasmtime::Error {
 /// The limit of Git's own that `error` comes from, if it does, as the program
 /// should see it: a size limit as a `QuotaExceededError`, the others plainly.
 fn own_limit(error: &wasmtime::Error) -> Option<wasmtime::Error> {
-    let root = error.root_cause();
-    let cause = root
-        .downcast_ref::<io::Error>()
-        .and_then(io::Error::get_ref)
-        .map_or(root, |error| error as &(dyn std::error::Error + 'static));
-    if cause.is::<crate::runtime::host::QuotaExceededError>() {
-        return Some(crate::runtime::host::quota_exceeded_error(
-            cause.to_string(),
-        ));
-    }
-    (cause.is::<super::storage::MemoryLimit>() || cause.is::<TransferLimit>())
-        .then(|| wasmtime::Error::msg(cause.to_string()))
+    find_cause(error, |cause| {
+        if cause.is::<crate::runtime::host::QuotaExceededError>() {
+            return Some(crate::runtime::host::quota_exceeded_error(
+                cause.to_string(),
+            ));
+        }
+        (cause.is::<super::storage::MemoryLimit>() || cause.is::<TransferLimit>())
+            .then(|| wasmtime::Error::msg(cause.to_string()))
+    })
 }
 
 fn http_setup_failure(error: &wasmtime::Error) -> Option<&str> {
-    let root = error.root_cause();
-    // io::Error::source skips its contained error; inspect the payload too.
-    let cause = root
-        .downcast_ref::<io::Error>()
-        .and_then(io::Error::get_ref)
-        .map_or(root, |error| error as &(dyn std::error::Error + 'static));
-    match cause.downcast_ref::<HttpError>() {
-        Some(HttpError::Internal(message)) => Some(message),
+    find_cause(error, |cause| match cause.downcast_ref::<HttpError>() {
+        Some(HttpError::Internal(message)) => Some(message.as_str()),
         _ => None,
+    })
+}
+
+/// Inspect `error` for a matching cause, walking `gix::Error` trees, `source`
+/// chains, and `io::Error` payloads (which `io::Error::source` skips).
+fn find_cause<'a, T>(
+    error: &'a wasmtime::Error,
+    mut inspect: impl FnMut(&'a (dyn std::error::Error + 'static)) -> Option<T>,
+) -> Option<T> {
+    const MAX_STEPS: usize = 64;
+    let mut pending: Vec<&'a (dyn std::error::Error + 'static)> = Vec::new();
+    if let Some(gix_error) = error.downcast_ref::<gix::Error>() {
+        pending.push(gix_error);
     }
+    if let Some(io_error) = error.downcast_ref::<io::Error>() {
+        pending.push(io_error);
+    }
+    pending.push(error.root_cause());
+    for _ in 0..MAX_STEPS {
+        let Some(cause) = pending.pop() else {
+            break;
+        };
+        if let Some(found) = inspect(cause) {
+            return Some(found);
+        }
+        if let Some(gix_error) = cause.downcast_ref::<gix::Error>() {
+            pending.extend(gix_error.iter_errors().take(MAX_STEPS));
+            continue;
+        }
+        if let Some(io_error) = cause.downcast_ref::<io::Error>() {
+            if let Some(inner) = io_error.get_ref() {
+                pending.push(inner);
+            }
+        } else if let Some(next) = cause.source() {
+            pending.push(next);
+        }
+    }
+    None
 }
 
 fn http_error(error: HttpError) -> io::Error {
@@ -692,9 +720,8 @@ impl http::Http for Client {
         url: &str,
         _base: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> std::result::Result<http::GetResponse<Self::Headers, Self::ResponseBody>, http::Error>
-    {
-        let pending = self.pending("GET", url, headers)?;
+    ) -> gix::Result<http::GetResponse<Self::Headers, Self::ResponseBody>> {
+        let pending = self.pending("GET", url, headers).map_err(gix::Exn::new)?;
         Ok(http::GetResponse {
             headers: ResponseReader {
                 pending: pending.clone(),
@@ -714,11 +741,8 @@ impl http::Http for Client {
         _base: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         _kind: http::PostBodyDataKind,
-    ) -> std::result::Result<
-        http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>,
-        http::Error,
-    > {
-        let pending = self.pending("POST", url, headers)?;
+    ) -> gix::Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
+        let pending = self.pending("POST", url, headers).map_err(gix::Exn::new)?;
         Ok(http::PostResponse {
             post_body: RequestWriter(pending.clone()),
             headers: ResponseReader {
@@ -733,10 +757,7 @@ impl http::Http for Client {
             },
         })
     }
-    fn configure(
-        &mut self,
-        _config: &dyn std::any::Any,
-    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn configure(&mut self, _config: &dyn std::any::Any) -> gix::Result<()> {
         Ok(())
     }
 }
@@ -760,13 +781,60 @@ mod tests {
     use crate::stdlib::http::transport::{DownloadMeta, HttpError};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+    fn wrap_prepare_fetch_error(io_err: io::Error) -> wasmtime::Error {
+        let client_err = gix::protocol::transport::client::Error::Io(io_err);
+        let gix_err: gix::Error = gix::Exn::new(client_err)
+            .raise(gix::error::message("Transport handshake failed"))
+            .into();
+        gix_err.into()
+    }
+
+    fn wrap_receive_error(io_err: io::Error) -> wasmtime::Error {
+        let client_err = gix::protocol::transport::client::Error::Io(io_err);
+        let outer = io::Error::other(client_err);
+        let gix_err: gix::Error = gix::Exn::new(outer)
+            .raise(gix::error::message("Failed to receive pack"))
+            .into();
+        gix_err.into()
+    }
+
+    fn wrap_multi_branch_error(io_err: io::Error) -> wasmtime::Error {
+        let client_err = gix::protocol::transport::client::Error::Io(io_err);
+        let gix_err: gix::Error = gix::Exn::new(gix::error::message("Transport handshake failed"))
+            .chain(gix::Exn::new(io_error("unrelated first child")))
+            .chain(gix::Exn::new(client_err))
+            .into();
+        gix_err.into()
+    }
+
     #[test]
     fn http_setup_errors_keep_the_fatal_host_marker() {
-        let error = http_error(HttpError::Internal("injected setup failure".into()));
-        let error = classify_fetch_failure(error.into());
+        for wrapped in [
+            wasmtime::Error::from(http_error(HttpError::Internal(
+                "injected setup failure".into(),
+            ))),
+            wrap_prepare_fetch_error(http_error(HttpError::Internal(
+                "injected setup failure".into(),
+            ))),
+            wrap_receive_error(http_error(HttpError::Internal(
+                "injected setup failure".into(),
+            ))),
+            wrap_multi_branch_error(http_error(HttpError::Internal(
+                "injected setup failure".into(),
+            ))),
+        ] {
+            let error = classify_fetch_failure(wrapped);
+            assert!(
+                format!("{error:?}").contains("internal host error"),
+                "{error:?}"
+            );
+        }
+        let redacted = redact_fetch_failure(wrap_multi_branch_error(http_error(
+            HttpError::Internal("injected setup failure".into()),
+        )));
         assert!(
-            format!("{error:?}").contains("internal host error"),
-            "{error:?}"
+            format!("{redacted:?}").contains("internal host error"),
+            "{redacted:?}"
         );
     }
 
@@ -998,26 +1066,38 @@ mod tests {
 
     #[test]
     fn redaction_keeps_git_limit_errors() {
-        let limit = |error: io::Error| redact_fetch_failure(error.into()).to_string();
-        assert!(limit(TransferLimit::io()).contains("transfer limit exceeded"));
-        assert!(
-            limit(crate::stdlib::git::storage::memory_limit_io(
-                "pack delta chain"
-            ))
-            .contains("raise max_execution_memory")
-        );
-        assert_eq!(
-            limit(io_error("a remote said something")),
-            "git: fetch failed while receiving repository data"
-        );
-        let full = Refusal::Quota("the size limit would be exceeded".into()).io();
-        let error = redact_fetch_failure(full.into());
-        assert!(
-            error
-                .downcast_ref::<crate::runtime::host::QuotaExceededError>()
-                .is_some(),
-            "{error}"
-        );
+        for wrap in [
+            wasmtime::Error::from as fn(io::Error) -> wasmtime::Error,
+            wrap_prepare_fetch_error,
+            wrap_receive_error,
+            wrap_multi_branch_error,
+        ] {
+            let limit = |error: io::Error| redact_fetch_failure(wrap(error)).to_string();
+            assert!(limit(TransferLimit::io()).contains("transfer limit exceeded"));
+            assert!(
+                limit(crate::stdlib::git::storage::memory_limit_io(
+                    "pack delta chain"
+                ))
+                .contains("raise max_execution_memory")
+            );
+            assert_eq!(
+                limit(io_error("a remote said something")),
+                "git: fetch failed while receiving repository data"
+            );
+            let full = Refusal::Quota("the size limit would be exceeded".into()).io();
+            let error = redact_fetch_failure(wrap(full));
+            assert!(
+                error
+                    .downcast_ref::<crate::runtime::host::QuotaExceededError>()
+                    .is_some(),
+                "{error}"
+            );
+            let classified = classify_fetch_failure(wrap(TransferLimit::io()));
+            assert!(
+                classified.to_string().contains("transfer limit exceeded"),
+                "{classified}"
+            );
+        }
     }
 
     #[test]
