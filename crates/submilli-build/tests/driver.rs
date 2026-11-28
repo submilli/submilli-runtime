@@ -400,6 +400,7 @@ fn class_members_provide_and_require_capabilities() {
             export function git(): void {
                 const repository = Repository.init("/repo");
                 repository.fetch("origin", "main");
+                repository.push("origin", "main");
                 Repository.clone("https://GitHub.com", "clone");
             }
         "#,
@@ -504,6 +505,7 @@ path = "types"
             ),
             ("git.fetch", Some("remoteName == \"origin\"")),
             ("git.init", Some("path == \"/repo\"")),
+            ("git.push", Some("remoteName == \"origin\"")),
             ("pied-piper.example/delete", Some("owner == \"via-super\"")),
             ("pied-piper.example/open", Some("host == \"example.com\"")),
             (

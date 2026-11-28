@@ -194,7 +194,7 @@ impl crate::runtime::SecurityCheck for RemotePrefix {
         context: &serde_json::Value,
     ) -> crate::runtime::security::CheckOutcome {
         use crate::runtime::security::CheckOutcome;
-        if matches!(capability, "git.clone" | "git.fetch")
+        if matches!(capability, "git.clone" | "git.fetch" | "git.push")
             && !context["remote"]
                 .as_str()
                 .is_some_and(|url| url.starts_with("https://example.com/allowed/"))
@@ -228,7 +228,7 @@ async fn remote_grants_check_canonical_paths_before_creation_or_network() {
         request.security = Arc::new(RemotePrefix);
         // Configuring a URL does not authorize contacting it.
         worker::run(&vfs, &request, configure, &[json!("origin"), json!(url)]).unwrap();
-        for op in ["fetch", "clone"] {
+        for op in ["fetch", "push", "clone"] {
             let mut request = job(&vfs, op);
             request.security = Arc::new(RemotePrefix);
             let args = if op == "clone" {
@@ -827,6 +827,7 @@ async fn mount_read_only_refuses_repository_changes_but_not_reads() {
     for (op, args) in [
         ("add", vec![json!(["other.txt"])]),
         ("commit", vec![json!("message")]),
+        ("push", vec![json!("origin"), json!("")]),
     ] {
         let error = worker::run(&vfs, &job_at(&vfs, op, "/memory"), op, &args)
             .err()

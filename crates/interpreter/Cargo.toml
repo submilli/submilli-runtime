@@ -63,7 +63,7 @@ getrandom = "0.2"
 # footprint small.
 sha2 = "0.10"
 hmac = "0.12"
-gix = { package = "submilli-gix", version = "0.1.0", default-features = false, features = ["sha1", "basic", "revision", "index", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
+gix = { package = "submilli-gix", version = "0.2.0", default-features = false, features = ["sha1", "basic", "revision", "index", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
 # The timestamp gix-index decodes an index with; already in the tree through gix.
 filetime = "0.2"
 # Warnings for the embedder's operator, such as a call refused because it needed an

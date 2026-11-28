@@ -1342,7 +1342,9 @@ fn repository_docs_expose_class_factories_and_capabilities() {
         "@capability git.init",
         "@capability git.clone",
         "@capability git.fetch",
+        "@capability git.push",
         "@capability git.commit",
+        "push(",
     ] {
         assert!(
             docs.declarations.contains(declaration),
@@ -1616,4 +1618,1039 @@ async fn failed_remote_conversion_can_exhaust_fuel_after_worker_settlement() {
         test_data(vfs),
     )
     .await;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PushAuthMode {
+    None,
+    Always,
+    PostOnly,
+}
+
+struct PushServer {
+    repo: std::path::PathBuf,
+    auth: PushAuthMode,
+    get_count: std::sync::atomic::AtomicUsize,
+    post_count: std::sync::atomic::AtomicUsize,
+    post_401_count: std::sync::atomic::AtomicUsize,
+}
+
+impl PushServer {
+    fn new(repo: std::path::PathBuf, auth: PushAuthMode) -> Self {
+        Self {
+            repo,
+            auth,
+            get_count: std::sync::atomic::AtomicUsize::new(0),
+            post_count: std::sync::atomic::AtomicUsize::new(0),
+            post_401_count: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl HttpClient for PushServer {
+    async fn send(
+        &self,
+        _: &crate::stdlib::http::transport::HttpRequest,
+    ) -> std::result::Result<
+        crate::stdlib::http::transport::HttpResponse,
+        crate::stdlib::http::transport::HttpError,
+    > {
+        panic!("Git must not use a redirect-following transport")
+    }
+
+    async fn send_without_redirects_to(
+        &self,
+        request: &crate::stdlib::http::transport::HttpRequest,
+        body_out: &mut (dyn std::io::Write + Send),
+    ) -> std::result::Result<
+        crate::stdlib::http::transport::HttpResponse,
+        crate::stdlib::http::transport::HttpError,
+    > {
+        use std::io::Write;
+        let is_post = request.method == "POST";
+        let needs_auth = match self.auth {
+            PushAuthMode::None => false,
+            PushAuthMode::Always => true,
+            PushAuthMode::PostOnly => is_post,
+        };
+        if needs_auth {
+            let auth = request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("Authorization"));
+            if let Some((_, value)) = auth {
+                assert_eq!(value, "Basic YWdlbnQ6aG9zdC1vbmx5LXRva2Vu");
+            } else {
+                if is_post {
+                    self.post_401_count.fetch_add(1, Ordering::SeqCst);
+                }
+                return Ok(crate::stdlib::http::transport::HttpResponse {
+                    status: 401,
+                    status_text: "Unauthorized".into(),
+                    headers: vec![("www-authenticate".into(), "Basic realm=git".into())],
+                    body: vec![],
+                    final_url: request.url.clone(),
+                });
+            }
+        }
+        let is_receive = request.url.contains("git-receive-pack");
+        let (service, subcmd, advertise_prefix) = if is_receive {
+            (
+                "git-receive-pack",
+                "receive-pack",
+                b"001f# service=git-receive-pack\n0000".as_slice(),
+            )
+        } else {
+            (
+                "git-upload-pack",
+                "upload-pack",
+                b"001e# service=git-upload-pack\n0000".as_slice(),
+            )
+        };
+        let (body, content_type) = if request.method == "GET" {
+            self.get_count.fetch_add(1, Ordering::SeqCst);
+            let mut body = advertise_prefix.to_vec();
+            body.extend(native(
+                &self.repo,
+                &[subcmd, "--stateless-rpc", "--advertise-refs", "."],
+            ));
+            (body, format!("application/x-{service}-advertisement"))
+        } else {
+            self.post_count.fetch_add(1, Ordering::SeqCst);
+            let mut child = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.repo)
+                .args([subcmd, "--stateless-rpc", "."])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&request.body)
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            (output.stdout, format!("application/x-{service}-result"))
+        };
+        body_out.write_all(&body).unwrap();
+        Ok(crate::stdlib::http::transport::HttpResponse {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![("content-type".into(), content_type)],
+            body: Vec::new(),
+            final_url: request.url.clone(),
+        })
+    }
+
+    async fn download(
+        &self,
+        _: &crate::stdlib::http::transport::HttpRequest,
+        _: &mut (dyn std::io::Write + Send),
+    ) -> std::result::Result<
+        crate::stdlib::http::transport::DownloadMeta,
+        crate::stdlib::http::transport::HttpError,
+    > {
+        unreachable!()
+    }
+}
+
+fn bare_upstream() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    native(dir.path(), &["init", "--bare", "-b", "main"]);
+    native(dir.path(), &["config", "http.receivepack", "true"]);
+    dir
+}
+
+#[tokio::test]
+async fn smart_http_push_create_fast_forward_up_to_date_and_explicit_branch() {
+    let upstream = bare_upstream();
+    let http = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            fs.writeText("/repo/a.txt", "one\n");
+            repo.add(["a.txt"]);
+            const c1 = repo.commit("first");
+
+            // 1. Create main on empty bare remote.
+            const r1 = repo.push();
+            assert(r1.branch === "main");
+            assert(r1.previous === undefined);
+            assert(r1.current === c1);
+            assert(r1.upToDate === false);
+
+            // 2. Push again: upToDate, no POST.
+            const r2 = repo.push();
+            assert(r2.branch === "main");
+            assert(r2.previous === c1);
+            assert(r2.current === c1);
+            assert(r2.upToDate === true);
+
+            // 3. Fast-forward update.
+            fs.writeText("/repo/b.txt", "two\n");
+            repo.add(["b.txt"]);
+            const c2 = repo.commit("second");
+            const r3 = repo.push("origin", "main");
+            assert(r3.branch === "main");
+            assert(r3.previous === c1);
+            assert(r3.current === c2);
+            assert(r3.upToDate === false);
+
+            // 4. Push an explicit non-current branch.
+            repo.createBranch("feature");
+            repo.switchBranch("feature");
+            fs.writeText("/repo/feat.txt", "feat\n");
+            repo.add(["feat.txt"]);
+            const c3 = repo.commit("feature commit");
+            repo.switchBranch("main");
+            const r4 = repo.push("origin", "feature");
+            assert(r4.branch === "feature");
+            assert(r4.previous === undefined);
+            assert(r4.current === c3);
+            assert(r4.upToDate === false);
+        }
+    "#,
+        data,
+    )
+    .await;
+
+    // 4 GETs (one per push), 3 POSTs (upToDate skipped POST).
+    assert_eq!(http.get_count.load(Ordering::SeqCst), 4);
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 3);
+
+    native(upstream.path(), &["fsck", "--full", "--strict"]);
+    let local_repo = vfs.root().join("repo");
+    let main_id =
+        String::from_utf8(native(&local_repo, &["rev-parse", "refs/heads/main"])).unwrap();
+    let feat_id =
+        String::from_utf8(native(&local_repo, &["rev-parse", "refs/heads/feature"])).unwrap();
+    assert_eq!(
+        String::from_utf8(native(upstream.path(), &["rev-parse", "refs/heads/main"])).unwrap(),
+        main_id
+    );
+    assert_eq!(
+        String::from_utf8(native(
+            upstream.path(),
+            &["rev-parse", "refs/heads/feature"]
+        ))
+        .unwrap(),
+        feat_id
+    );
+    // Remote-tracking refs updated locally.
+    assert_eq!(
+        String::from_utf8(native(
+            &local_repo,
+            &["rev-parse", "refs/remotes/origin/main"]
+        ))
+        .unwrap(),
+        main_id
+    );
+    assert_eq!(
+        String::from_utf8(native(
+            &local_repo,
+            &["rev-parse", "refs/remotes/origin/feature"]
+        ))
+        .unwrap(),
+        feat_id
+    );
+}
+
+#[tokio::test]
+async fn push_authorization_is_scoped_and_checked_before_network_or_secrets() {
+    struct ScopedPushGrant;
+    impl SecurityCheck for ScopedPushGrant {
+        fn check(&self, caller: &str, capability: &str, context: &Value) -> CheckOutcome {
+            assert_eq!(caller, "main");
+            if matches!(
+                capability,
+                "git.init"
+                    | "git.open"
+                    | "git.read"
+                    | "git.write"
+                    | "git.commit"
+                    | "git.fetch"
+                    | "fs.write"
+            ) {
+                return CheckOutcome::Allow { rule: None };
+            }
+            if capability == "git.push"
+                && context["path"] == "/repo"
+                && context["remoteName"] == "origin"
+                && context["remote"] == "https://example.com/repo.git"
+                && context["branch"] == "allowed"
+            {
+                return CheckOutcome::Allow { rule: None };
+            }
+            CheckOutcome::Deny {
+                rule: None,
+                reason: "branch push denied".into(),
+            }
+        }
+    }
+
+    let upstream = bare_upstream();
+    let http = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::Always,
+    ));
+    let secret = Arc::new(Token(std::sync::atomic::AtomicU64::new(0)));
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+    data.secret_provider = secret.clone();
+    data.security_check = Arc::new(ScopedPushGrant);
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            fs.writeText("/repo/f.txt", "hello\n");
+            repo.add(["f.txt"]);
+            repo.commit("init");
+            let denied = "";
+            try { repo.push(); }
+            catch (e: PermissionDeniedError) {
+                denied = e.capability + "|" + e.reason;
+            }
+            assert(denied === "git.push|branch push denied");
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http.get_count.load(Ordering::SeqCst), 0);
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 0);
+    assert_eq!(secret.0.load(Ordering::Relaxed), 0);
+
+    // Allowed branch succeeds.
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+    data.secret_provider = secret.clone();
+    data.security_check = Arc::new(ScopedPushGrant);
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            const repo = Repository.open("/repo");
+            repo.createBranch("allowed");
+            const res = repo.push("origin", "allowed");
+            assert(res.branch === "allowed");
+            assert(res.upToDate === false);
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http.get_count.load(Ordering::SeqCst), 1);
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 1);
+    // GET authenticated once on 401; POST sent auth on first attempt (no duplicate pack upload).
+    assert_eq!(http.post_401_count.load(Ordering::SeqCst), 0);
+    assert!(secret.0.load(Ordering::Relaxed) >= 1);
+}
+
+#[tokio::test]
+async fn push_handles_post_only_authentication_challenge() {
+    let upstream = bare_upstream();
+    let http = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::PostOnly,
+    ));
+    let secret = Arc::new(Token(std::sync::atomic::AtomicU64::new(0)));
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+    data.secret_provider = secret.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            fs.writeText("/repo/f.txt", "post-auth\n");
+            repo.add(["f.txt"]);
+            repo.commit("init");
+            const res = repo.push();
+            assert(res.branch === "main");
+            assert(res.upToDate === false);
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http.get_count.load(Ordering::SeqCst), 1);
+    assert_eq!(http.post_401_count.load(Ordering::SeqCst), 1);
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 1);
+    assert_eq!(secret.0.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn push_refuses_non_fast_forward_unborn_detached_symbolic_alias_and_hook_rejection() {
+    let upstream = bare_upstream();
+    // Seed upstream with an initial commit from a separate working tree.
+    let other = tempfile::tempdir().unwrap();
+    native(other.path(), &["init", "-b", "main"]);
+    native(other.path(), &["config", "user.name", "Other"]);
+    native(other.path(), &["config", "user.email", "other@example.com"]);
+    std::fs::write(other.path().join("base.txt"), "base\n").unwrap();
+    native(other.path(), &["add", "."]);
+    native(other.path(), &["commit", "-m", "base"]);
+    native(
+        other.path(),
+        &["remote", "add", "origin", upstream.path().to_str().unwrap()],
+    );
+    native(other.path(), &["push", "origin", "main"]);
+
+    // 1. Diverged local history: refused locally before POST.
+    let http = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            fs.writeText("/repo/local.txt", "diverged\n");
+            repo.add(["local.txt"]);
+            repo.commit("diverged");
+            let msg = "";
+            try { repo.push(); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("non-fast-forward"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http.get_count.load(Ordering::SeqCst), 1);
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 0);
+
+    // 2. Unborn branch: refused before any HTTP request.
+    let http_unborn = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(Vfs::tempdir().unwrap());
+    data.http_client = http_unborn.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            const repo = Repository.init("/empty");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            let failed = false;
+            try { repo.push(); } catch (e) { failed = true; }
+            assert(failed);
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http_unborn.get_count.load(Ordering::SeqCst), 0);
+    assert_eq!(http_unborn.post_count.load(Ordering::SeqCst), 0);
+
+    // 3. Detached HEAD: refused before any HTTP request.
+    let vfs_detached = Vfs::tempdir().unwrap();
+    let detached_dir = vfs_detached.root().join("repo");
+    std::fs::create_dir(&detached_dir).unwrap();
+    native(&detached_dir, &["init", "-b", "main"]);
+    native(&detached_dir, &["config", "user.name", "Detached"]);
+    native(
+        &detached_dir,
+        &["config", "user.email", "detached@example.com"],
+    );
+    native(
+        &detached_dir,
+        &["remote", "add", "origin", "https://example.com/repo.git"],
+    );
+    std::fs::write(detached_dir.join("a"), "a").unwrap();
+    native(&detached_dir, &["add", "."]);
+    native(&detached_dir, &["commit", "-m", "init"]);
+    let head = String::from_utf8(native(&detached_dir, &["rev-parse", "HEAD"])).unwrap();
+    native(&detached_dir, &["checkout", "--detach", head.trim()]);
+    let http_detached = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(vfs_detached);
+    data.http_client = http_detached.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            let msg = "";
+            try { Repository.open("/repo").push(); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("detached HEAD"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http_detached.get_count.load(Ordering::SeqCst), 0);
+
+    // 3b. Symbolic local branch alias: refused before any HTTP request.
+    let vfs_sym = Vfs::tempdir().unwrap();
+    let sym_dir = vfs_sym.root().join("repo");
+    std::fs::create_dir(&sym_dir).unwrap();
+    native(&sym_dir, &["init", "-b", "main"]);
+    native(&sym_dir, &["config", "user.name", "Sym"]);
+    native(&sym_dir, &["config", "user.email", "sym@example.com"]);
+    native(
+        &sym_dir,
+        &["remote", "add", "origin", "https://example.com/repo.git"],
+    );
+    std::fs::write(sym_dir.join("a"), "a").unwrap();
+    native(&sym_dir, &["add", "."]);
+    native(&sym_dir, &["commit", "-m", "init"]);
+    native(
+        &sym_dir,
+        &["symbolic-ref", "refs/heads/alias", "refs/heads/main"],
+    );
+    let http_sym = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(vfs_sym);
+    data.http_client = http_sym.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            let msg = "";
+            try { Repository.open("/repo").push("origin", "alias"); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("symbolic local branch aliases"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http_sym.get_count.load(Ordering::SeqCst), 0);
+
+    // 4. Server-side pre-receive hook rejection: returns error and leaves local tracking ref untouched.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let hook_upstream = bare_upstream();
+        let hook = hook_upstream.path().join("hooks/pre-receive");
+        std::fs::write(&hook, "#!/bin/sh\necho 'hook blocked' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let http_hook = Arc::new(PushServer::new(
+            hook_upstream.path().to_owned(),
+            PushAuthMode::None,
+        ));
+        let vfs_hook = Vfs::tempdir().unwrap();
+        let mut data = test_data(vfs_hook.clone());
+        data.http_client = http_hook;
+        run_source(
+            r#"
+            import { Repository } from "submilli:git";
+            import * as fs from "submilli:fs";
+            function main(): void {
+                const repo = Repository.init("/repo");
+                repo.addRemote("origin", "https://example.com/repo.git");
+                fs.writeText("/repo/x.txt", "x\n");
+                repo.add(["x.txt"]);
+                repo.commit("blocked");
+                let msg = "";
+                try { repo.push(); }
+                catch (e) { msg = String(e); }
+                assert(msg.includes("remote rejected"));
+            }
+        "#,
+            data,
+        )
+        .await;
+        assert!(
+            !vfs_hook
+                .root()
+                .join("repo/.git/refs/remotes/origin/main")
+                .exists(),
+            "rejected push must not create remote-tracking ref"
+        );
+    }
+}
+
+#[tokio::test]
+async fn push_fuel_exhaustion_aborts_before_post() {
+    let upstream = bare_upstream();
+    let vfs = Vfs::tempdir().unwrap();
+    let repo_dir = vfs.root().join("repo");
+    std::fs::create_dir(&repo_dir).unwrap();
+    native(&repo_dir, &["init", "-q", "-b", "main"]);
+    native(&repo_dir, &["config", "user.name", "Fuel"]);
+    native(&repo_dir, &["config", "user.email", "fuel@example.com"]);
+    native(
+        &repo_dir,
+        &["remote", "add", "origin", "https://example.com/repo.git"],
+    );
+    // Write a 1 MB payload so pack generation charges substantial fuel.
+    std::fs::write(repo_dir.join("big.bin"), vec![b'z'; 1_000_000]).unwrap();
+    native(&repo_dir, &["add", "."]);
+    native(&repo_dir, &["commit", "-q", "-m", "big"]);
+
+    let source = r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            Repository.open("/repo").push();
+        }
+    "#;
+
+    // Measure fuel on a disposable upstream.
+    let measure_upstream = bare_upstream();
+    let mut measure_data = test_data(vfs.clone());
+    measure_data.http_client = Arc::new(PushServer::new(
+        measure_upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let needed = host_fuel_of(source, measure_data).await;
+
+    // Run against fresh upstream with a quarter of the required fuel: must trap OutOfFuel before POST.
+    let http = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(vfs);
+    data.http_client = http.clone();
+    let (outcome, host_fuel) = run_program(source, data, needed / 4).await;
+    assert_eq!(
+        outcome.unwrap_err().downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::OutOfFuel)
+    );
+    assert!(host_fuel <= needed / 4, "{host_fuel} vs {}", needed / 4);
+    assert_eq!(
+        http.post_count.load(Ordering::SeqCst),
+        0,
+        "fuel exhaustion must abort before POST /git-receive-pack"
+    );
+}
+
+#[tokio::test]
+async fn push_slash_branches_and_tracking_ref_df_conflicts_are_caught_before_network() {
+    let upstream = bare_upstream();
+    let http = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+
+    // 1. Pushing a slash branch `feature/foo` succeeds.
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            fs.writeText("/repo/a.txt", "a\n");
+            repo.add(["a.txt"]);
+            repo.commit("init");
+            repo.createBranch("feature/foo");
+            const r = repo.push("origin", "feature/foo");
+            assert(r.branch === "feature/foo");
+            assert(r.previous === undefined);
+            assert(!r.upToDate);
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http.get_count.load(Ordering::SeqCst), 1);
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 1);
+
+    // 2. Pushing `feature` when loose `refs/remotes/origin/feature/foo` exists fails BEFORE network.
+    // Remove the local `feature/foo` branch so local `refs/heads/feature` can be created while
+    // `refs/remotes/origin/feature/foo` remains as a loose remote-tracking ref.
+    let local_repo = vfs.root().join("repo");
+    native(&local_repo, &["branch", "-D", "feature/foo"]);
+    let http_df_loose = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(vfs.clone());
+    data.http_client = http_df_loose.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            const repo = Repository.open("/repo");
+            repo.createBranch("feature");
+            let msg = "";
+            try { repo.push("origin", "feature"); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("cannot update remote-tracking branch"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http_df_loose.get_count.load(Ordering::SeqCst), 0);
+    assert_eq!(http_df_loose.post_count.load(Ordering::SeqCst), 0);
+
+    // 3. Pushing `topic/sub` when packed `refs/remotes/origin/topic` exists fails BEFORE network.
+    let head = String::from_utf8(native(&local_repo, &["rev-parse", "HEAD"])).unwrap();
+    native(
+        &local_repo,
+        &["update-ref", "refs/remotes/origin/topic", head.trim()],
+    );
+    native(&local_repo, &["pack-refs", "--all"]);
+    let http_df_packed = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(vfs.clone());
+    data.http_client = http_df_packed.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            const repo = Repository.open("/repo");
+            repo.createBranch("topic/sub");
+            let msg = "";
+            try { repo.push("origin", "topic/sub"); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("cannot update remote-tracking branch"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http_df_packed.get_count.load(Ordering::SeqCst), 0);
+    assert_eq!(http_df_packed.post_count.load(Ordering::SeqCst), 0);
+
+    // 4. Pushing `main` to a remote `other` when packed `refs/remotes/other` exists fails BEFORE network.
+    native(
+        &local_repo,
+        &["remote", "add", "other", "https://example.com/other.git"],
+    );
+    native(
+        &local_repo,
+        &["update-ref", "refs/remotes/other", head.trim()],
+    );
+    native(&local_repo, &["pack-refs", "--all"]);
+    let http_df_remote = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(vfs);
+    data.http_client = http_df_remote.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        function main(): void {
+            let msg = "";
+            try { Repository.open("/repo").push("other", "main"); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("cannot update remote-tracking branch"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http_df_remote.get_count.load(Ordering::SeqCst), 0);
+    assert_eq!(http_df_remote.post_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn push_refuses_remote_without_report_status_before_post() {
+    struct NoReportStatusServer {
+        post_count: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl HttpClient for NoReportStatusServer {
+        async fn send(
+            &self,
+            _: &crate::stdlib::http::transport::HttpRequest,
+        ) -> std::result::Result<
+            crate::stdlib::http::transport::HttpResponse,
+            crate::stdlib::http::transport::HttpError,
+        > {
+            unreachable!()
+        }
+        async fn send_without_redirects_to(
+            &self,
+            request: &crate::stdlib::http::transport::HttpRequest,
+            body_out: &mut (dyn std::io::Write + Send),
+        ) -> std::result::Result<
+            crate::stdlib::http::transport::HttpResponse,
+            crate::stdlib::http::transport::HttpError,
+        > {
+            if request.method == "POST" {
+                self.post_count.fetch_add(1, Ordering::SeqCst);
+                panic!("POST must not be sent when remote lacks report-status");
+            }
+            // Valid empty-repo receive-pack advertisement omitting `report-status`.
+            let line = b"0000000000000000000000000000000000000000 capabilities^{}\0side-band-64k\n";
+            let mut adv = b"001f# service=git-receive-pack\n0000".to_vec();
+            adv.extend_from_slice(format!("{:04x}", line.len() + 4).as_bytes());
+            adv.extend_from_slice(line);
+            adv.extend_from_slice(b"0000");
+            body_out.write_all(&adv).unwrap();
+            Ok(crate::stdlib::http::transport::HttpResponse {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![(
+                    "content-type".into(),
+                    "application/x-git-receive-pack-advertisement".into(),
+                )],
+                body: Vec::new(),
+                final_url: request.url.clone(),
+            })
+        }
+        async fn download(
+            &self,
+            _: &crate::stdlib::http::transport::HttpRequest,
+            _: &mut (dyn std::io::Write + Send),
+        ) -> std::result::Result<
+            crate::stdlib::http::transport::DownloadMeta,
+            crate::stdlib::http::transport::HttpError,
+        > {
+            unreachable!()
+        }
+    }
+
+    let http = Arc::new(NoReportStatusServer {
+        post_count: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs);
+    data.http_client = http.clone();
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            fs.writeText("/repo/a.txt", "a\n");
+            repo.add(["a.txt"]);
+            repo.commit("init");
+            let msg = "";
+            try { repo.push(); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("report-status"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn push_with_read_only_token_fails_cleanly_on_post_401_without_retrying() {
+    struct ReadOnlyTokenServer {
+        repo: std::path::PathBuf,
+        get_attempts: std::sync::atomic::AtomicUsize,
+        post_attempts: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl HttpClient for ReadOnlyTokenServer {
+        async fn send(
+            &self,
+            _: &crate::stdlib::http::transport::HttpRequest,
+        ) -> std::result::Result<
+            crate::stdlib::http::transport::HttpResponse,
+            crate::stdlib::http::transport::HttpError,
+        > {
+            unreachable!()
+        }
+        async fn send_without_redirects_to(
+            &self,
+            request: &crate::stdlib::http::transport::HttpRequest,
+            body_out: &mut (dyn std::io::Write + Send),
+        ) -> std::result::Result<
+            crate::stdlib::http::transport::HttpResponse,
+            crate::stdlib::http::transport::HttpError,
+        > {
+            let has_auth = request
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+            if request.method == "GET" {
+                self.get_attempts.fetch_add(1, Ordering::SeqCst);
+                if !has_auth {
+                    return Ok(crate::stdlib::http::transport::HttpResponse {
+                        status: 401,
+                        status_text: "Unauthorized".into(),
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                        final_url: request.url.clone(),
+                    });
+                }
+                let mut body = b"001f# service=git-receive-pack\n0000".to_vec();
+                body.extend(native(
+                    &self.repo,
+                    &["receive-pack", "--stateless-rpc", "--advertise-refs", "."],
+                ));
+                body_out.write_all(&body).unwrap();
+                return Ok(crate::stdlib::http::transport::HttpResponse {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![(
+                        "content-type".into(),
+                        "application/x-git-receive-pack-advertisement".into(),
+                    )],
+                    body: Vec::new(),
+                    final_url: request.url.clone(),
+                });
+            }
+            self.post_attempts.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                has_auth,
+                "POST should carry pre-authenticated header after GET 401 retry"
+            );
+            Ok(crate::stdlib::http::transport::HttpResponse {
+                status: 401,
+                status_text: "Unauthorized".into(),
+                headers: Vec::new(),
+                body: Vec::new(),
+                final_url: request.url.clone(),
+            })
+        }
+        async fn download(
+            &self,
+            _: &crate::stdlib::http::transport::HttpRequest,
+            _: &mut (dyn std::io::Write + Send),
+        ) -> std::result::Result<
+            crate::stdlib::http::transport::DownloadMeta,
+            crate::stdlib::http::transport::HttpError,
+        > {
+            unreachable!()
+        }
+    }
+
+    let upstream = bare_upstream();
+    let http = Arc::new(ReadOnlyTokenServer {
+        repo: upstream.path().to_owned(),
+        get_attempts: std::sync::atomic::AtomicUsize::new(0),
+        post_attempts: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let secret = Arc::new(Token(std::sync::atomic::AtomicU64::new(0)));
+    let vfs = Vfs::tempdir().unwrap();
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+    data.secret_provider = secret;
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            fs.writeText("/repo/a.txt", "a\n");
+            repo.add(["a.txt"]);
+            repo.commit("init");
+            let msg = "";
+            try { repo.push(); }
+            catch (e) { msg = String(e); }
+            assert(msg.includes("401"));
+            assert(!msg.includes("host-only-token"));
+        }
+    "#,
+        data,
+    )
+    .await;
+    assert_eq!(http.get_attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(http.post_attempts.load(Ordering::SeqCst), 1);
+    assert!(
+        !vfs.root()
+            .join("repo/.git/refs/remotes/origin/main")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn push_settles_result_when_fuel_runs_out_after_post() {
+    let upstream = bare_upstream();
+    let vfs = Vfs::tempdir().unwrap();
+    let repo_dir = vfs.root().join("repo");
+    std::fs::create_dir(&repo_dir).unwrap();
+    native(&repo_dir, &["init", "-q", "-b", "main"]);
+    native(&repo_dir, &["config", "user.name", "Fuel"]);
+    native(&repo_dir, &["config", "user.email", "fuel@example.com"]);
+    native(
+        &repo_dir,
+        &["remote", "add", "origin", "https://example.com/repo.git"],
+    );
+    std::fs::write(repo_dir.join("small.txt"), "hello\n").unwrap();
+    native(&repo_dir, &["add", "."]);
+    native(&repo_dir, &["commit", "-q", "-m", "small"]);
+
+    // Probe total fuel for `push()` on a fresh upstream, then give slightly less
+    // than total so pack build succeeds (before_effect runs) while publish/encoding
+    // drains the store to 0; the push must still succeed and return its value
+    // (or trap only at the next guest instruction after push() returns).
+    let source = r#"
+        import { Repository } from "submilli:git";
+        function main(): string {
+            const res = Repository.open("/repo").push();
+            return res.branch + ":" + String(res.upToDate);
+        }
+    "#;
+    let probe_upstream = bare_upstream();
+    let mut probe_data = test_data(vfs.clone());
+    probe_data.http_client = Arc::new(PushServer::new(
+        probe_upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let total = host_fuel_of(source, probe_data).await;
+
+    // Trim just enough fuel (~200 fuel) so `encode_json` hits 0 remaining fuel
+    // after `POST` + `publish` settle. `fuel::settle_result` lets `push()` finish
+    // marshalling without discarding the remote push; the run then traps on the
+    // following guest bytecode (`res.branch + ...`).
+    let http = Arc::new(PushServer::new(
+        upstream.path().to_owned(),
+        PushAuthMode::None,
+    ));
+    let mut data = test_data(vfs.clone());
+    data.http_client = http.clone();
+    let (outcome, _) = run_program(source, data, total.saturating_sub(200)).await;
+    assert_eq!(http.post_count.load(Ordering::SeqCst), 1);
+    assert!(
+        vfs.root()
+            .join("repo/.git/refs/remotes/origin/main")
+            .exists(),
+        "local tracking ref must be published once POST succeeded"
+    );
+    // Remote received the commit; run either returned cleanly or trapped only after push().
+    assert!(
+        outcome.is_ok()
+            || outcome
+                .as_ref()
+                .unwrap_err()
+                .downcast_ref::<wasmtime::Trap>()
+                == Some(&wasmtime::Trap::OutOfFuel)
+    );
 }

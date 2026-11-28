@@ -26,7 +26,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
 | `submilli:human` | `ask`: put one or more questions to a person and wait for text or choice answers | `human.ask` |
-| `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull | `git.open`, `git.read`, `git.write`, `git.init`, `git.clone`, `git.fetch`, `git.commit` |
+| `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull, push | `git.open`, `git.read`, `git.write`, `git.init`, `git.clone`, `git.fetch`, `git.push`, `git.commit` |
 | `submilli:code` | Numbered reads, search, glob, tree, anchored edits, and diffs over the program's files | `fs.read`, `fs.list`, `fs.stat`, `fs.write` |
 | `submilli:crypto` | SHA-256, SHA-512, HMAC-SHA-256, random bytes | Nothing |
 | `submilli:url` | URL and query-string parsing and building | Nothing |
@@ -110,6 +110,7 @@ Blueprint's `git` block sets the identity that authors every commit and the
 | `addRemote`, `setRemoteUrl` | `git.write` | HTTPS URLs only |
 | `fetch` | `git.fetch` | Defaults to `origin`. With no branch, fetches every remote branch and checks each. Does not require `git.write` |
 | `pull` | `git.fetch` | Fetches and fast-forwards the current branch. Refuses divergence and a dirty working tree |
+| `push` | `git.push` | Defaults to `origin` and the current branch. Fast-forward and new branches only; refuses detached `HEAD` and non-fast-forward updates |
 
 
 A revision is `HEAD`, a branch or tag name, a full ref, or a full commit ID.
@@ -552,6 +553,7 @@ A repository under the VFS root.
 | `log(options?: { limit?: number; offset?: number; path?: string; ref?: string }): { commits: { authorEmail: string; authorName: string; id: string; message: string }[]; nextOffset?: number }` | `git.read { path: string }` | Read history, default 50 commits from HEAD; limit 1..1000, nonnegative integer offset; path keeps commits that changed that file and ref starts at that commit. |
 | `ls(ref: string, path?: string): { kind: string; path: string }[]` | `git.read { path: string }` | List files and directories in a repository-relative directory at a commit. |
 | `pull(remote?: string, branch?: string): { current: string; previous: string }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch and fast-forward the current branch under git.fetch. |
+| `push(remote?: string, branch?: string): { branch: string; current: string; previous?: string; upToDate: boolean }` | `git.push { path: string, remoteName: $remote, remote: string, branch: string }` | Push a local branch to an HTTPS remote under git.push. |
 | `remotes(): { name: string; url: string }[]` | `git.read { path: string }` | List named remotes without credentials. |
 | `setRemoteUrl(name: string, url: string): void` | `git.write { path: string }` | Update an existing remote's HTTPS URL. |
 | `show(ref: string, path: string): Uint8Array` | `git.read { path: string }` | Read file bytes from a commit. |

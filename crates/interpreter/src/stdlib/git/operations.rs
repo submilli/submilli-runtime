@@ -275,7 +275,7 @@ pub(super) fn status(snapshot: &Snapshot) -> Result<Value> {
 }
 
 /// A `null` member is an absent one: the guest reads the field as `undefined`.
-fn without_absent(mut value: Value) -> Value {
+pub(super) fn without_absent(mut value: Value) -> Value {
     if let Value::Object(fields) = &mut value {
         fields.retain(|_, field| !field.is_null());
     }

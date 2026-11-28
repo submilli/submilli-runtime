@@ -576,6 +576,7 @@ mod tests {
         "git.init",
         "git.clone",
         "git.fetch",
+        "git.push",
         "git.commit",
         "secrets.get",
         "variables.get",

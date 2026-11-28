@@ -239,9 +239,9 @@ so there such a call throws `PermissionDeniedError` at once.";
 
 const GIT_GUIDANCE: &str = "Git is available as `submilli:git`. Read its package docs before use. \
     Opening a repository requires `git.open`, inspection requires `git.read`, and staging, \
-    branching, and remote configuration require `git.write`. init, clone, fetch/pull, and commit \
+    branching, and remote configuration require `git.write`. init, clone, fetch/pull, push, and commit \
     require their respective Git capabilities. A repository handle does not carry those grants. \
-    Push is not available.";
+    Force push is not supported.";
 
 const LLM_GUIDANCE: &str = r#"Model calls (`submilli:llm`): `text(model, prompt)` returns a
 `Completion<string>` — `{ ok: true, value }` or `{ ok: false, reason, message }`
@@ -805,8 +805,8 @@ mod tests {
                 for text in [
                     "submilli:git",
                     "Git is available",
-                    "init, clone, fetch/pull",
-                    "Push is not available",
+                    "init, clone, fetch/pull, push",
+                    "Force push is not supported",
                 ] {
                     assert_eq!(
                         prompt.contains(text),

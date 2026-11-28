@@ -291,6 +291,13 @@ const GIT: &[Capability] = &[
         example_filter: "path == \"/repo\" and remote == \"https://github.com/pied-piper/project.git\"",
     },
     Capability {
+        name: "git.push",
+        main_denial: None,
+        summary: "Push a local branch to an HTTPS remote (fast-forward and new branches only)",
+        filter_fields: &[PATH, REMOTE_NAME, REMOTE, BRANCH],
+        example_filter: "path == \"/repo\" and remote == \"https://github.com/pied-piper/project.git\" and branch == \"main\"",
+    },
+    Capability {
         name: "git.commit",
         main_denial: None,
         summary: "Commit staged changes with Blueprint identity",
@@ -753,7 +760,7 @@ pub fn vfs_path_fields(capability: &str) -> &'static [&'static str] {
         "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
         "fs.copy" | "fs.move" => &["from", "to"],
         "git.open" | "git.read" | "git.write" | "git.init" | "git.clone" | "git.fetch"
-        | "git.commit" => &["path"],
+        | "git.push" | "git.commit" => &["path"],
         "http.download" => &["vfs_path"],
         _ => &[],
     }

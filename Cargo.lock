@@ -5646,9 +5646,9 @@ dependencies = [
 
 [[package]]
 name = "submilli-gix"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22d1c57e2a37d4f55ec806638764410fc828e11d7cd30c6bb3ba068d26ac4ae"
+checksum = "00be57f049e47efa874e4a8cc8562660f5e4e4a7bcb59ec669667d1318d45950"
 dependencies = [
  "gix-actor",
  "gix-attributes",
@@ -5703,9 +5703,9 @@ dependencies = [
 
 [[package]]
 name = "submilli-gix-protocol"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caa3359196fcafd3f561c6b279247bab990d608f11d9246ca36853eb17933698"
+checksum = "3c38c3481cec513adfb8c946a6bdd0d1767fbfe2fc4213c62698ee1cde4470d1"
 dependencies = [
  "bstr",
  "gix-credentials",
@@ -5729,9 +5729,9 @@ dependencies = [
 
 [[package]]
 name = "submilli-gix-transport"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06a3a8834699ba4a368beac9c57294ba90d2743f8810c3ca6236772ce961c0c9"
+checksum = "d8c7c42aae5af18934f8f7c37f7b8f76b5b70aca8d8a92ea4db8cdd12f238163"
 dependencies = [
  "base64 0.23.1",
  "bstr",

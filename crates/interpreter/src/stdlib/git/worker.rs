@@ -319,6 +319,15 @@ pub(super) fn run(vfs: &crate::runtime::Vfs, job: &Job, op: &str, args: &[Value]
             },
         )
         .map(|_| ()),
+        "push" => super::push(
+            vfs,
+            job,
+            super::PushArguments {
+                remote: text(0)?,
+                branch: text(1)?,
+            },
+        )
+        .map(|_| ()),
         _ => panic!("unknown test operation {op}"),
     }
 }

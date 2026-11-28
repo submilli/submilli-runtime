@@ -428,6 +428,37 @@ fn install_repository_writes(
             })
         },
     )?;
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::extend(&repository, "push"),
+        FuncType::new(
+            engine,
+            [receiver.clone(), argument.clone(), argument.clone()],
+            [object.clone()],
+        ),
+        |caller, params| {
+            Box::pin(async move {
+                let call = GitCall::new(caller, "push")?;
+                let arguments = super::PushArguments {
+                    remote: read_argument(
+                        caller,
+                        abi_arg(params, 1)?,
+                        Some(String::from("origin")),
+                        &call,
+                    )
+                    .await?,
+                    branch: read_argument(caller, abi_arg(params, 2)?, Some(String::new()), &call)
+                        .await?,
+                };
+                let path = repository_path(caller, abi_arg(params, 0)?)?;
+                let result = call.execute(caller, path, arguments, super::push).await?;
+                fuel::settle_result(caller, |caller| {
+                    encode_json(caller, &result, call.max_bytes)
+                })
+            })
+        },
+    )?;
     Ok(())
 }
 
